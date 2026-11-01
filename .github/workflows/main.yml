@@ -23,6 +23,9 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
+      - name: Android SDK Kur ve Yapilandir
+        uses: android-actions/setup-android@v3
+
       - name: Flutter SDK Kur ve Ayarla
         uses: subosito/flutter-action@v2
         with:
