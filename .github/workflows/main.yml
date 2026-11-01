@@ -1,0 +1,41 @@
+name: Android APK Olustur (Flet)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-apk:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Repo Kodlarini Cek
+        uses: actions/checkout@v4
+
+      - name: Python 3.11 Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Java JDK 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Flutter SDK Kur
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Flet Kur ve APK Derle
+        run: |
+          pip install --upgrade pip
+          pip install "flet[all]>=0.24.0"
+          flet build apk --verbose
+
+      - name: Olusan APK Dosyasini Yukle (Indirilebilir Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Alfa-Trade-Bot-Android-APK
+          path: build/apk/*.apk
