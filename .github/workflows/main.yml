@@ -360,7 +360,12 @@ jobs:
           with open("main.py", "w", encoding="utf-8") as f: f.write(c)
           '
 
-- name: Flet Build APK Komutunu Calistir
+      - name: Flet Build APK Komutunu Calistir
+        run: |
+          python -m pip install --upgrade pip
+          pip install "flet[all]==0.24.1" requests
+
+      - name: Flet Build APK Komutunu Calistir
         run: |
           rm -rf /tmp/flet-template
           git clone --depth 1 --branch 0.24.1 https://github.com/flet-dev/flet-build-template.git /tmp/flet-template
@@ -392,3 +397,5 @@ jobs:
             --org "com.alfatrade" \
             --template "/tmp/flet-template" \
             -vv --no-rich-output
+
+      
