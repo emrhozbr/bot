@@ -1,0 +1,2 @@
+# bot
+Alfa_Trade_Bot_Android_APK_Projesi
