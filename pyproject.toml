@@ -1,0 +1,28 @@
+[project]
+name = "alfa-trade-bot"
+version = "4.0.2"
+description = "Alfa Trade Club - Mahşerin 4 Atlısı & YT Part 1-13 Kripto Botu"
+readme = "README.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Alfa Trade Club" }
+]
+dependencies = [
+    "flet>=0.24.0",
+    "ccxt",
+    "pandas",
+    "numpy",
+    "requests"
+]
+
+[tool.flet]
+org = "com.alfatrade"
+product = "Alfa Trade Bot"
+company = "Alfa Trade Club"
+copyright = "Copyright (C) 2026 by Alfa Trade Club"
+
+[tool.flet.android]
+permission."android.permission.INTERNET" = true
+permission."android.permission.ACCESS_NETWORK_STATE" = true
+permission."android.permission.WAKE_LOCK" = true
+permission."android.permission.FOREGROUND_SERVICE" = true
