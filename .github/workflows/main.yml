@@ -7,7 +7,7 @@ on:
 
 jobs:
   build-apk:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - name: Repo Kodlarini Cek
         uses: actions/checkout@v4
@@ -15,7 +15,7 @@ jobs:
       - name: Linux Paketlerini Kur
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev mesa-utils zip unzip clang cmake ninja-build pkg-config
+          sudo apt-get install -y libgtk-3-dev mesa-utils zip unzip clang cmake ninja-build pkg-config libncurses5
 
       - name: Python 3.11 Kur
         uses: actions/setup-python@v5
@@ -41,7 +41,7 @@ jobs:
           python3 -c 'print("y\n" * 40)' | "$SDKMANAGER" --licenses || true
           python3 -c 'print("y\n" * 40)' | flutter doctor --android-licenses || true
 
-      - name: Requirements Dosyasini Android ARM64 Uyumlu Yap
+      - name: Requirements Dosyasini Hazirla
         run: |
           rm -f pyproject.toml
           printf "requests\nnumpy\n" > requirements.txt
@@ -51,7 +51,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install "flet[all]==0.24.1" requests numpy
 
-      - name: Flet Build APK Komutunu Calistir (Tam Hata Logu Ile)
+      - name: Flet Build APK Komutunu Calistir
         run: |
           flet build apk --project "Alfa Trade Bot" --org "com.alfatrade" -vv --no-rich-output
 
