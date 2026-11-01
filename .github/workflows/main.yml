@@ -23,18 +23,16 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Flutter SDK Kur
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-
-      - name: Flet Kur ve APK Derle
+      - name: Gerekli Paketleri Yukle
         run: |
-          pip install --upgrade pip
-          pip install "flet[all]>=0.24.0"
+          python -m pip install --upgrade pip
+          pip install "flet[all]>=0.24.0" ccxt pandas numpy requests
+
+      - name: Flet Build APK Komutunu Calistir
+        run: |
           flet build apk --verbose
 
-      - name: Olusan APK Dosyasini Yukle (Indirilebilir Artifact)
+      - name: Olusan APK Dosyasini Yukle (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: Alfa-Trade-Bot-Android-APK
