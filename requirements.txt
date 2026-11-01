@@ -1,4 +1,4 @@
-flet>=0.24.0
+
 ccxt
 pandas
 numpy
