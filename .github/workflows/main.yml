@@ -12,7 +12,7 @@ jobs:
       - name: Repo Kodlarini Cek
         uses: actions/checkout@v4
 
-      - name: Sistem Paketlerini Kur
+      - name: Linux Paketlerini Kur
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev mesa-utils zip unzip clang cmake ninja-build pkg-config libncurses5
@@ -35,13 +35,13 @@ jobs:
           flutter-version: '3.24.3'
           cache: true
 
-      - name: Android SDK Lisanslarini Onayla
+      - name: Android Lisanslarini Onayla
         run: |
           SDKMANAGER=$(find /usr/local/lib/android/sdk -name "sdkmanager" | head -n 1)
           python3 -c 'print("y\n" * 40)' | "$SDKMANAGER" --licenses || true
           python3 -c 'print("y\n" * 40)' | flutter doctor --android-licenses || true
 
-      - name: Mobil Uyumluluk Katmanini (Shim) Hazirla
+      - name: C Derleme Hatasi Veren Paketleri Saf Python Adaptoru Ile Degistir
         run: |
           rm -f pyproject.toml
           printf "requests\n" > requirements.txt
@@ -352,7 +352,6 @@ jobs:
           pd = _PDModule()
           ccxt = _CCXTModule()
           EOF
-
           python3 -c '
           with open("main.py", "r", encoding="utf-8") as f: c = f.read()
           with open("mobile_shim.py", "r", encoding="utf-8") as f: s = f.read()
@@ -361,12 +360,7 @@ jobs:
           with open("main.py", "w", encoding="utf-8") as f: f.write(c)
           '
 
-      - name: Flet 0.24.1 Kur
-        run: |
-          python -m pip install --upgrade pip
-          pip install "flet==0.24.1" requests
-
-      - name: Flet Build APK Komutunu Calistir
+- name: Flet Build APK Komutunu Calistir
         run: |
           rm -rf /tmp/flet-template
           git clone --depth 1 --branch 0.24.1 https://github.com/flet-dev/flet-build-template.git /tmp/flet-template
@@ -398,9 +392,3 @@ jobs:
             --org "com.alfatrade" \
             --template "/tmp/flet-template" \
             -vv --no-rich-output
-
-      - name: Olusan APK Dosyasini Yukle (Artifact)
-        uses: actions/upload-artifact@v4
-        with:
-          name: Alfa-Trade-Bot-Android-APK
-          path: build/apk/*.apk
