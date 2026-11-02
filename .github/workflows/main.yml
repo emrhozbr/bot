@@ -14,10 +14,7 @@ jobs:
 
       - name: Requirements ve Config Icinden Numpy-Pandas Temizle
         run: |
-          # Flet'in otomatik okudugu requirements.txt dosyasini sadece saf Python paketleriyle sifirla
           echo "flet==0.24.1" > requirements.txt
-          echo "requests" >> requirements.txt
-          # Eger pyproject.toml varsa ve icinde numpy/pandas geciyorsa temizle
           if [ -f "pyproject.toml" ]; then
             sed -i '/numpy/d' pyproject.toml
             sed -i '/pandas/d' pyproject.toml
@@ -67,24 +64,29 @@ jobs:
 
       - name: Flet 0.24.1 Flutter Sablonunu Hazirla ve Paket Surumlerini Sabitle
         run: |
+          rm -rf /tmp/flet-template
           git clone --depth 1 --branch 0.24.1 https://github.com/flet-dev/flet-build-template.git /tmp/flet-template
-          cat << 'EOF' > "/tmp/flet-template/{{cookiecutter.out_dir}}/pubspec_overrides.yaml"
+          cat << 'EOF' >> "/tmp/flet-template/{{cookiecutter.out_dir}}/pubspec.yaml"
+
           dependency_overrides:
             wakelock_plus: 1.2.8
             package_info_plus: 8.0.2
             file_picker: 8.0.6
             flutter_plugin_android_lifecycle: 2.0.22
+            http: 1.2.2
           EOF
 
       - name: Build APK with Flet
         run: |
-          flet build apk --project "Alfa Trade Bot" --org "com.alfatrade" --template /tmp/flet-template --exclude .git --exclude build --exclude __pycache__ -vv
+          flet build apk --project "Alfa Trade Bot" --org "com.alfatrade" --template /tmp/flet-template --exclude .git --exclude build --exclude __pycache__ -vv --no-rich-output
+
+          mkdir -p apk_cikti
+          find . -name "*.apk" -exec cp {} apk_cikti/ \;
+          ls -la apk_cikti/
 
       - name: Olusan APK Dosyasini Yukle (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: Alfa-Trade-Bot-Android-APK
-          path: |
-            build/apk/*.apk
-            build/app/outputs/flutter-apk/*.apk
-            **/*.apk
+          path: apk_cikti/*.apk
+          if-no-files-found: error
