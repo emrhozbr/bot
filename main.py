@@ -20,6 +20,10 @@ try:
 except Exception:
     ANDROID_VERI_DIZINI = os.path.abspath(".")
 
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
+# ==============================================================================
 def _f(d,c,i=-2):
  try:
   m=d.__dict__.get('_np_c')
@@ -33,7 +37,7 @@ def _f(d,c,i=-2):
  except X:return 0.0
 def _r(r,*cs):
  return tuple((F(r[c])for c in cs))
-PIYASA_MODU='her_ikisi';TESTNET_AKTIF=True;KALDIRAC=5;MARJIN_TIPI='ISOLATED';cQ=True;ae=0;bH=150000.0;bs=1000.0;dd=0.01;ISLEM_BASI_RISK_USDT=10.0;dL=2.0;RISK_ODUL_ORANI=3.0;NIHAI_TP_RR=4.0;KISMI_KAR_AL_AKTIF=True;TOPLAM_KAR_KAPAT_USDT=None;MAKS_MARJIN_USDT=100.0;aW=0.0018;a4=6;MIN_CONFLUENCE_SKORU=70;dM=5.5;bI=True;dj=14;eC=1.5;MTF_SABLONLARI={'4h / 1h / 15m (Swing)':('4h','1h','15m'),'4h / 1h / 5m (Alfa Pine MTF)':('4h','1h','5m'),'4h / 30m / 3m (Sniper)':('4h','30m','3m'),'1d / 2h / 15m (Pozisyon)':('1d','2h','15m'),'1d / 1h / 5m (Günlük MTF)':('1d','1h','5m'),'1M / 2h / 15m (Aylık Macro)':('1M','2h','15m'),'1d / 4h / 1h (Pozisyon)':('1d','4h','1h'),'2h / 30m / 5m (Gün İçi)':('2h','30m','5m'),'1h / 15m / 5m (Intraday)':('1h','15m','5m'),'15m / 5m / 1m (Scalp)':('15m','5m','1m')};AKTIF_MTF_SABLONU='4h / 1h / 15m (Swing)';HTF_ZAMAN_DILIMLERI=['4h','1d','1M'];MTF_ZAMAN_DILIMLERI=['2h','1h','30m'];LTF_ZAMAN_DILIMLERI=['15m','5m','3m'];TUM_ZAMAN_DILIMLERI=['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1M'];HTF_PERIYOT='4h';MTF_PERIYOT='1h';LTF_PERIYOT='15m';SWING_PENCERE=5;RISK_SEVIYESI_SECENEKLERI={'Düşük Risk (Skor 80+ | 0.75x)':(80,0.75),'Orta Risk (Skor 70+ | 1.0x)':(70,1.0),'Yüksek Risk (Skor 60+ | 1.35x)':(60,1.35),'Agresif Risk (Skor 50+ | 1.75x)':(50,1.75),'Özel (Manuel Skor & Risk)':(MIN_CONFLUENCE_SKORU,1.0)};AKTIF_RISK_SEVIYESI='Orta Risk (Skor 70+ | 1.0x)';RISK_CARPANI=1.0;ISLEM_TARZI_MODU='DayTrade';
+PIYASA_MODU='her_ikisi';TESTNET_AKTIF=True;KALDIRAC=5;MARJIN_TIPI='ISOLATED';cQ=True;ae=0;bH=150000.0;bs=1000.0;dd=0.01;ISLEM_BASI_RISK_USDT=10.0;dL=2.0;RISK_ODUL_ORANI=3.0;NIHAI_TP_RR=4.0;KISMI_KAR_AL_AKTIF=True;TOPLAM_KAR_KAPAT_USDT=None;MAKS_MARJIN_USDT=100.0;aW=0.0018;a4=6;MIN_CONFLUENCE_SKORU=70;dM=5.5;bI=True;dj=14;eC=1.5;MTF_SABLONLARI={'4h / 1h / 15m (Swing)':('4h','1h','15m'),'4h / 1h / 5m (Alfa Pine MTF)':('4h','1h','5m'),'4h / 30m / 3m (Sniper)':('4h','30m','3m'),'1d / 2h / 15m (Pozisyon)':('1d','2h','15m'),'1d / 1h / 5m (Günlük MTF)':('1d','1h','5m'),'1M / 2h / 15m (Aylık Macro)':('1M','2h','15m'),'1d / 4h / 1h (Pozisyon)':('1d','4h','1h'),'2h / 30m / 5m (Gün İçi)':('2h','30m','5m'),'1h / 15m / 5m (Intraday)':('1h','15m','5m'),'15m / 5m / 1m (Scalp)':('15m','5m','1m')};AKTIF_MTF_SABLONU='4h / 1h / 15m (Swing)';HTF_ZAMAN_DILIMLERI=['4h','1d','1M'];MTF_ZAMAN_DILIMLERI=['2h','1h','30m'];LTF_ZAMAN_DILIMLERI=['15m','5m','3m'];TUM_ZAMAN_DILIMLERI=['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1M'];HTF_PERIYOT='4h';MTF_PERIYOT='1h';LTF_PERIYOT='15m';SWING_PENCERE=5;RISK_SEVIYESI_SECENEKLERI={'Düşük Risk (Skor 80+ | 0.75x)':(80,0.75),'Orta Risk (Skor 70+ | 1.0x)':(70,1.0),'Yüksek Risk (Skor 60+ | 1.35x)':(60,1.35),'Agresif Risk (Skor 50+ | 1.75x)':(50,1.75),'Özel (Manuel Skor & Risk)':(MIN_CONFLUENCE_SKORU,1.0)};AKTIF_RISK_SEVIYESI='Orta Risk (Skor 70+ | 1.0x)';RISK_CARPANI=1.0;ISLEM_TARZI_MODU='DayTrade';STOP_BELIRLEME_SECENEKLERI=['HTF Yapıya Göre (Dip/Tepe & OB)','LTF Yapıya Göre (Kırılım/Mum & POI)','Otomatik (Duruma Göre HTF/LTF)'];STOP_BELIRLEME_MODU='HTF Yapıya Göre (Dip/Tepe & OB)';
 def mtf_sablonu_uygula(aA):
  global AKTIF_MTF_SABLONU,HTF_PERIYOT,MTF_PERIYOT,LTF_PERIYOT,ISLEM_TARZI_MODU,RISK_ODUL_ORANI,NIHAI_TP_RR,a4
  if aA in MTF_SABLONLARI:AKTIF_MTF_SABLONU=aA;HTF_PERIYOT,MTF_PERIYOT,LTF_PERIYOT=MTF_SABLONLARI[aA]
@@ -60,15 +64,17 @@ def borsa_kur(b6=PIYASA_MODU,hj=TESTNET_AKTIF):
  cm=aC if b6=='spot'else aw;return(aG,ao)
 def borsa_baglantisi_olustur(dk='future'):
  borsa_kur(dk,TESTNET_AKTIF);return cm
-bd=os.path.join(ANDROID_VERI_DIZINI,'binance_api_config.json');ap=os.path.join(ANDROID_VERI_DIZINI,'islem_gecmisi.json');aN=os.path.join(ANDROID_VERI_DIZINI,'acik_islemler_durum.json');ah=[];
 def _api_yukle():
- global API_KEY,API_SECRET,TESTNET_AKTIF,TELEGRAM_TOKEN,TELEGRAM_CHAT_ID
+ global API_KEY,API_SECRET,TESTNET_AKTIF,TELEGRAM_TOKEN,TELEGRAM_CHAT_ID,GITHUB_REPO_ADRESI,GITHUB_TOKEN,STOP_BELIRLEME_MODU
  try:
   if os.path.exists(bd):
    with open(bd,'r',encoding='utf-8')as f:d=json.load(f)
    API_KEY=str(d.get('api_key',API_KEY)).strip();API_SECRET=str(d.get('api_secret',API_SECRET)).strip()
    if'testnet'in d:TESTNET_AKTIF=bool(d['testnet'])
    TELEGRAM_TOKEN=str(d.get('telegram_token',TELEGRAM_TOKEN)).strip();TELEGRAM_CHAT_ID=str(d.get('telegram_chat_id',TELEGRAM_CHAT_ID)).strip()
+   if'github_repo'in d:GITHUB_REPO_ADRESI=str(d.get('github_repo',GITHUB_REPO_ADRESI)).strip()
+   if'github_token'in d:GITHUB_TOKEN=str(d.get('github_token',GITHUB_TOKEN)).strip()
+   if'stop_modu'in d:STOP_BELIRLEME_MODU=str(d.get('stop_modu',STOP_BELIRLEME_MODU)).strip()
  except X:pass
 def _ig_yukle():
  global ah
@@ -82,6 +88,8 @@ def _ak_kaydet():
  try:
   nQ={k:v for k,v in acik_islemler.items()if I(v,dict)}
   with open(aN,'w',encoding='utf-8')as f:json.dump({'acik_islemler':nQ,'demo_vadeli_bakiye':S,'gerceklesen_pnl':W},f,ensure_ascii=False)
+  if 'bulut_durum_gonder' in globals() and GITHUB_TOKEN:
+   threading.Thread(target=bulut_durum_gonder, daemon=True).start()
  except X:pass
 def _ak_yukle():
  global acik_islemler,S,W
@@ -99,7 +107,6 @@ def _ig_kaydet(J,jD,bt,lH,lI,Y,fq,eE,dl,lJ=''):
   with open(ap,'w',encoding='utf-8')as f:json.dump(ah[:500],f,ensure_ascii=False)
  except X:pass
  return k
-_api_yukle();_ig_yukle();_ak_yukle();borsa_kur(PIYASA_MODU,TESTNET_AKTIF);
 def veri_ist(D):
  return aC if D=='spot'else aw
 def emir_ist(D):
@@ -1326,6 +1333,69 @@ def konum_ve_karar_bolgesi_filtresi(bS,bw,aY,aP,Q,aj,f4h,f6,q8,hN,q7,ra,kk,B='BU
   aciklama=f"[HTF SAFE BÖLGE: {adim['htf_bolge_sayisi']}/8 ({bolge_str}) -> {adim['htf_safe_derecesi']}] LTF Onay: {'+'.join(adim['aktif_ltf_tetikler'])or'Reversal Kırılım / Mum Bekleniyor'}"
  adim.update({'konum_onay':konum_onay,'konum_durumu':durum,'karar_senaryosu':senaryo,'htf_poi_aktif':adim['htf_arz_talep_bolgesinde']or adim['htf_ob_bolgesinde'],'mtf_poi_aktif':L(f6)>0 or L(q7)>0,'fibo_konum_uygun':adim['htf_ote_bolgesinde'],'flip_devam_mi':flip_var,'ters_bolge_engeli':not konum_onay,'tuzak_choch_mu':bool(adim['ltf_choch_var']and not konum_onay),'aciklama':aciklama})
  return adim
+def stop_noktasi_belirle(bS,bw,aY,aP,Q,aj,kFlt,P,B='BULLISH',sl4h=None,f7=None,q9=None,al_ltf=None,mod=None):
+ sec_mod=str(mod or STOP_BELIRLEME_MODU)
+ g=(B=='BULLISH')
+ E_htf=M(_f(bS,'atr',-2)if bS is not None and'atr'in bS.columns else P*0.003,P*0.0015)
+ E_ltf=M(_f(aY,'atr',-2)if aY is not None and'atr'in aY.columns else P*0.0015,P*0.0008)
+ # 1) HTF YAPIYA GÖRE STOP (HTF Trend Değiştiren Dip/Tepe, Strong Origin, Swing Min/Max, HTF OB/POI + ATR Kalkanı)
+ htf_td=F(kFlt.get('htf_trend_degistiren_nokta')or 0.0)if I(kFlt,dict)else 0.0
+ htf_sp=F(aP.get('strong_point')or 0.0)if I(aP,dict)else 0.0
+ htf_sw=F((aP.get('swing_min')if g else aP.get('swing_max'))or 0.0)if I(aP,dict)else 0.0
+ htf_poi_sl=F(sl4h or 0.0)if I(sl4h,(int,F))else 0.0
+ if g:
+  htf_adaylar=[x for x in(htf_td,htf_sp,htf_sw,htf_poi_sl)if 0<x<P]
+  htf_baz=N(htf_adaylar)if htf_adaylar else(htf_td if htf_td>0 and htf_td<P else P*0.988)
+  al_htf=R(N(htf_baz-E_htf*0.15,P*(1.0-aW)),6)
+ else:
+  htf_adaylar=[x for x in(htf_td,htf_sp,htf_sw,htf_poi_sl)if x>P]
+  htf_baz=M(htf_adaylar)if htf_adaylar else(htf_td if htf_td>P else P*1.012)
+  al_htf=R(M(htf_baz+E_htf*0.15,P*(1.0+aW)),6)
+ # 2) LTF YAPIYA GÖRE STOP (PDF 28-35, 41, 44, 45 & YT-Part10-13: LTF CHoCH/MSB Origin, InsideBar DarSL, Fakey İğnesi, Pinbar/Engulf/MeraMera/Bobin/MW & LTF POI + ATR Kalkanı)
+ v10=aj.get('v10_meta',{})if I(aj,dict)else{}
+ v12=aj.get('v12_meta',{})if I(aj,dict)else{}
+ v13=aj.get('v13_meta',{})if I(aj,dict)else{}
+ ltf_ist=aj.get('uc_istasyon',{})if I(aj,dict)else{}
+ ltf_sp=F(aj.get('strong_point')or 0.0)if I(aj,dict)else 0.0
+ ltf_itz=F(ltf_ist.get('ITZ')or 0.0)
+ ltf_poi_sl=F(q9 or 0.0)if I(q9,(int,F))else 0.0
+ ltf_pa_sl=F(al_ltf or 0.0)if I(al_ltf,(int,F))else 0.0
+ ib_sl=0.0
+ if v12.get('dar_sl_4r')and I(v12.get('ib_low'if g else'ib_high'),(int,F)):
+  ib_sl=F(v12['ib_low'])-E_ltf*0.12 if g else F(v12['ib_high'])+E_ltf*0.12
+ elif I(v12.get('mb_low'if g else'mb_high'),(int,F))and v12.get('inside_bar_durumu','YOK')!='YOK':
+  ib_sl=F(v12['mb_low'])-E_ltf*0.15 if g else F(v12['mb_high'])+E_ltf*0.15
+ bobin_sl=0.0
+ if I(v10.get('bobin_alt'if g else'bobin_ust'),(int,F)):
+  bobin_sl=F(v10['bobin_alt'])-E_ltf*0.18 if g else F(v10['bobin_ust'])+E_ltf*0.18
+ ltf_sw_son=0.0
+ if I(aj,dict):
+  sw_l=aj.get('lows'if g else'highs',[])
+  if sw_l:ltf_sw_son=F(sw_l[-1][1])
+ ltf_mum_uc=0.0
+ if aY is not None and L(aY)>=6:
+  ltf_mum_uc=F(aY['low'].iloc[-6:].min())-E_ltf*0.22 if g else F(aY['high'].iloc[-6:].max())+E_ltf*0.22
+ min_ltf_mes=M(E_ltf*0.55,P*aW)
+ max_ltf_mes=M(E_ltf*3.2,P*(0.008 if ISLEM_TARZI_MODU=='Scalp'else 0.022))
+ if g:
+  ltf_ham_adaylar=[x for x in(ib_sl,ltf_poi_sl,ltf_itz-E_ltf*0.25 if ltf_itz>0 else 0.0,bobin_sl,ltf_sp-E_ltf*0.2 if ltf_sp>0 else 0.0,ltf_sw_son-E_ltf*0.2 if ltf_sw_son>0 else 0.0,ltf_mum_uc,ltf_pa_sl)if 0<x<P]
+  ltf_sec=M(ltf_ham_adaylar)if v12.get('dar_sl_4r')and ib_sl>0 and ib_sl<P else(ltf_poi_sl if 0<ltf_poi_sl<P else(ltf_mum_uc if 0<ltf_mum_uc<P else(N(ltf_ham_adaylar)if ltf_ham_adaylar else P-min_ltf_mes)))
+  mes_ltf=M(min_ltf_mes,N(max_ltf_mes,P-ltf_sec))
+  al_ltf_son=R(P-mes_ltf,6)
+ else:
+  ltf_ham_adaylar=[x for x in(ib_sl,ltf_poi_sl,ltf_itz+E_ltf*0.25 if ltf_itz>0 else 0.0,bobin_sl,ltf_sp+E_ltf*0.2 if ltf_sp>0 else 0.0,ltf_sw_son+E_ltf*0.2 if ltf_sw_son>0 else 0.0,ltf_mum_uc,ltf_pa_sl)if x>P]
+  ltf_sec=N(ltf_ham_adaylar)if v12.get('dar_sl_4r')and ib_sl>P else(ltf_poi_sl if ltf_poi_sl>P else(ltf_mum_uc if ltf_mum_uc>P else(M(ltf_ham_adaylar)if ltf_ham_adaylar else P+min_ltf_mes)))
+  mes_ltf=M(min_ltf_mes,N(max_ltf_mes,ltf_sec-P))
+  al_ltf_son=R(P+mes_ltf,6)
+ # Kullanıcının arayüzdeki seçimine göre Stop noktasını döndür
+ if'LTF'in sec_mod and'Otomatik'not in sec_mod:
+  return(al_ltf_son,f'LTF Yapısal Stop ({LTF_PERIYOT} Kırılım/Mum/POI + ATR Kalkanı)')
+ if'Otomatik'in sec_mod:
+  ltf_onay_aktif=bool((I(kFlt,dict)and(kFlt.get('ltf_reversal_kirilim_onay')or kFlt.get('ltf_reversal_mum_onay')))or v12.get('dar_sl_4r')or v13.get('aktif_entry_modeli','Beklemede')!='Beklemede'or ISLEM_TARZI_MODU=='Scalp')
+  if ltf_onay_aktif:
+   return(al_ltf_son,f'Otomatik -> LTF Yapısal Stop ({LTF_PERIYOT} Onaylı Kırılım/Mum)')
+  return(al_htf,f'Otomatik -> HTF Yapısal Stop ({HTF_PERIYOT.upper()} Dip/Tepe & OB)')
+ return(al_htf,f'HTF Yapısal Stop ({HTF_PERIYOT.upper()} Dip/Tepe & OB)')
 def tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,B='BULLISH'):
  fj=[];bT=[];b2=0;aP['sembol'],Q['sembol'],aj['sembol']=(J,J,J)
  f4h,sl4h,em4h,hN,e4h=poi_ve_bolge_analizi(bS,aP,HTF_PERIYOT.upper(),B);f6,f7,em,q7,e0=poi_ve_bolge_analizi(bw,Q,MTF_PERIYOT.upper(),B);q8,q9,dD,ra,en=poi_ve_bolge_analizi(aY,aj,LTF_PERIYOT,B);b8=f4h+f6+q8;oZ=M(e4h,e0,en)
@@ -1339,26 +1409,8 @@ def tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,B='BULLISH'):
  P=F(P)if I(P,(int,F))and F(P)>0 else F(son_kapanis_ltf)
  al_ltf=F(al_ltf)if I(al_ltf,(int,F))and F(al_ltf)>0 else R(P*(0.992 if B=='BULLISH'else 1.008),6)
  kFlt=konum_ve_karar_bolgesi_filtresi(bS,bw,aY,aP,Q,aj,f4h,f6,q8,hN,q7,ra,kk,B);Q['konum_meta'],aj['konum_meta']=(kFlt,kFlt)
- # STOP-LOSS: DayTrade modunda HTF trend değiştiren nokta altına/üstüne; Scalp modunda dar LTF swing/OB altına/üstüne koy
- E_htf=M(_f(bS,'atr',-2)if'atr'in bS.columns else P*0.003,P*0.0015)
- E_ltf_sl=M(_f(aY,'atr',-2)if'atr'in aY.columns else P*0.0015,P*0.0008)
- htf_td_nokta=F(kFlt.get('htf_trend_degistiren_nokta')or aP.get('strong_point')or(aP.get('swing_min')if B=='BULLISH'else aP.get('swing_max'))or sl4h or al_ltf or P*(0.99 if B=='BULLISH'else 1.01))
- if ISLEM_TARZI_MODU=='Scalp':
-  min_sl_mesafe=M(E_ltf_sl*0.75,P*0.002)
-  max_sl_mesafe=M(E_ltf_sl*1.85,P*0.0055)
-  if B=='BULLISH':
-   ltf_dip=F(aY['low'].iloc[-5:].min())if L(aY)>=5 else P-min_sl_mesafe
-   ham_mesafe=M(min_sl_mesafe,N(max_sl_mesafe,(P-ltf_dip)+E_ltf_sl*0.2))
-   al=R(P-ham_mesafe,6)
-  else:
-   ltf_tepe=F(aY['high'].iloc[-5:].max())if L(aY)>=5 else P+min_sl_mesafe
-   ham_mesafe=M(min_sl_mesafe,N(max_sl_mesafe,(ltf_tepe-P)+E_ltf_sl*0.2))
-   al=R(P+ham_mesafe,6)
- else:
-  if B=='BULLISH':
-   al=R(N(htf_td_nokta-E_htf*0.15,P*0.995),6)if htf_td_nokta>0 else al_ltf
-  else:
-   al=R(M(htf_td_nokta+E_htf*0.15,P*1.005),6)if htf_td_nokta>0 else al_ltf
+ al,stop_kaynak_bilgi=stop_noktasi_belirle(bS,bw,aY,aP,Q,aj,kFlt,P,B,sl4h,f7,q9,al_ltf,STOP_BELIRLEME_MODU)
+ kFlt['stop_kaynak_bilgi']=stop_kaynak_bilgi
  chk=kFlt.get('checklist',{})
  # 1. ATLI (0-25 Puan): 1. YÖN BELİRLEMEK (HTF Ana Yön + MTF Uyum + OTE Konumu)
  if kFlt['htf_yon_ok']:
@@ -1468,15 +1520,10 @@ def puana_gore_risk_hesapla(mN=0):
  # Stopta alınan risk her zaman arayüzde yazılan 'İşlem Başı Risk($)' tutarı kadardır
  return R(M(0.1,F(ISLEM_BASI_RISK_USDT)),2)
 def dinamik_miktar_hesapla(J,P,al,D=None,mN=0):
- jR=D if D else'spot'if PIYASA_MODU=='spot'else'future';cv=veri_ist(jR);yon_short=(al>P);nP=A(P-al);cW=nP/M(P,1e-09)
- if cW<aW:
-  nP=P*aW
-  al=P*(1.0+aW)if yon_short else P*(1.0-aW)
- o7=KALDIRAC if jR=='future'else 1;aktif_risk=puana_gore_risk_hesapla(mN);lW=aktif_risk/M(nP,1e-09);dZ=lW*P;fk=dZ/M(o7,1)
- if fk>MAKS_MARJIN_USDT:
-  fk=MAKS_MARJIN_USDT;dZ=fk*o7;lW=dZ/M(P,1e-09)
+ jR=D if D else'spot'if PIYASA_MODU=='spot'else'future';cv=veri_ist(jR);nP=M(A(P-al),P*1e-05)
+ o7=KALDIRAC if jR=='future'else 1;aktif_risk=puana_gore_risk_hesapla(mN);lW=aktif_risk/nP;dZ=lW*P;fk=dZ/M(o7,1)
  if dZ<6.0:
-  dZ=M(6.0,aktif_risk);fk=dZ/M(o7,1);lW=dZ/M(P,1e-09)
+  dZ=6.0;fk=dZ/M(o7,1);lW=dZ/M(P,1e-09)
  try:Y=F(cv.amount_to_precision(J,lW))
  except X:Y=R(lW,6)
  if Y<=0 and lW>0:Y=M(R(lW,6),1e-06)
@@ -2113,14 +2160,14 @@ textarea {{ width:100%; flex:1; min-height:175px; background:#090d16; color:#38b
 </div>
 <div class="layerbar">
   <div class="chk-group">
-    <span style="color:#38bdf8;font-weight:bold;">🎨 Çizim Şablonları:</span>
-    <label class="chk-lbl"><input type="checkbox" id="chk_zz" checked onchange="katmanlariSimdiGuncelle()">Swing / BOS</label>
-    <label class="chk-lbl"><input type="checkbox" id="chk_arztalep" checked onchange="katmanlariSimdiGuncelle()">Arz / Talep Bölgeleri</label>
-    <label class="chk-lbl"><input type="checkbox" id="chk_kutu" checked onchange="katmanlariSimdiGuncelle()">Imbalance & FVG</label>
-    <label class="chk-lbl"><input type="checkbox" id="chk_ist" checked onchange="katmanlariSimdiGuncelle()">İstasyonlar / Magic Line</label>
-    <label class="chk-lbl"><input type="checkbox" id="chk_fibo" checked onchange="katmanlariSimdiGuncelle()">Sihirli Fibo / OTE</label>
-    <label class="chk-lbl"><input type="checkbox" id="chk_liq" checked onchange="katmanlariSimdiGuncelle()">Likidite / SFP</label>
-    <label class="chk-lbl"><input type="checkbox" id="chk_rr" checked onchange="katmanlariSimdiGuncelle()">İşlem & R:R</label>
+    <span style="color:#38bdf8;font-weight:bold;">🎨 Çizim Şablonları (İsteğe Göre Ekle):</span>
+    <label class="chk-lbl"><input type="checkbox" id="chk_zz" onchange="katmanlariSimdiGuncelle()">Swing / BOS & QML</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_arztalep" onchange="katmanlariSimdiGuncelle()">Arz / Talep Bölgeleri</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_kutu" onchange="katmanlariSimdiGuncelle()">Imbalance & FVG</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_ist" onchange="katmanlariSimdiGuncelle()">İstasyonlar / Magic Line</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_fibo" onchange="katmanlariSimdiGuncelle()">Sihirli Fibo / OTE</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_liq" onchange="katmanlariSimdiGuncelle()">Likidite / SFP</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_rr" onchange="katmanlariSimdiGuncelle()">İşlem & R:R</label>
     <label class="chk-lbl"><input type="checkbox" id="chk_rsi" onchange="rsiPanelToggle()">RSI(14)</label>
   </div>
   <div style="font-size:11px;color:#94a3b8;" id="durum_cubugu">🟢 Canlı Binance Akışı Aktif</div>
@@ -2128,13 +2175,13 @@ textarea {{ width:100%; flex:1; min-height:175px; background:#090d16; color:#38b
 <div class="main">
   <div class="tv-left-bar" id="tv_left_bar">
     <div class="tv-tool-icon active" title="Artı İşareti (Crosshair)">✜</div>
-    <div class="tv-tool-icon active" id="ico_zz" title="Swing / BOS" onclick="katmanToggle('zz')">📐</div>
-    <div class="tv-tool-icon active" id="ico_arztalep" title="Arz / Talep Bölgeleri (OB / RBR / DBD / Flip)" onclick="katmanToggle('arztalep')">🧱</div>
-    <div class="tv-tool-icon active" id="ico_kutu" title="Imbalance & FVG (BISI / SIBI / IFVG / VIB)" onclick="katmanToggle('kutu')">▭</div>
-    <div class="tv-tool-icon active" id="ico_ist" title="İstasyonlar / Magic Line" onclick="katmanToggle('ist')">🏛</div>
-    <div class="tv-tool-icon active" id="ico_fibo" title="Sihirli Fibo / OTE" onclick="katmanToggle('fibo')">☰</div>
-    <div class="tv-tool-icon active" id="ico_liq" title="Likidite / SFP" onclick="katmanToggle('liq')">💧</div>
-    <div class="tv-tool-icon active" id="ico_rr" title="İşlem & R:R" onclick="katmanToggle('rr')">🎯</div>
+    <div class="tv-tool-icon" id="ico_zz" title="Swing / BOS" onclick="katmanToggle('zz')">📐</div>
+    <div class="tv-tool-icon" id="ico_arztalep" title="Arz / Talep Bölgeleri (OB / RBR / DBD / Flip)" onclick="katmanToggle('arztalep')">🧱</div>
+    <div class="tv-tool-icon" id="ico_kutu" title="Imbalance & FVG (BISI / SIBI / IFVG / VIB)" onclick="katmanToggle('kutu')">▭</div>
+    <div class="tv-tool-icon" id="ico_ist" title="İstasyonlar / Magic Line" onclick="katmanToggle('ist')">🏛</div>
+    <div class="tv-tool-icon" id="ico_fibo" title="Sihirli Fibo / OTE" onclick="katmanToggle('fibo')">☰</div>
+    <div class="tv-tool-icon" id="ico_liq" title="Likidite / SFP" onclick="katmanToggle('liq')">💧</div>
+    <div class="tv-tool-icon" id="ico_rr" title="İşlem & R:R" onclick="katmanToggle('rr')">🎯</div>
   </div>
   <div class="chart-area">
     <div class="chart-stage" id="chart_stage">
@@ -2308,9 +2355,9 @@ function seriKatmanlariniGuncelle() {{
   if (!candleSeries) return;
   const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
   const isHTF = (aktifTf === '4h');
-  const gosterZz  = isHTF && document.getElementById('chk_zz').checked;
-  const gosterIst = isHTF && document.getElementById('chk_ist').checked;
-  const gosterFibo = isHTF && document.getElementById('chk_fibo').checked;
+  const gosterZz  = document.getElementById('chk_zz').checked;
+  const gosterIst = document.getElementById('chk_ist').checked;
+  const gosterFibo = document.getElementById('chk_fibo').checked;
   const gosterRr  = document.getElementById('chk_rr').checked;
   const gosterLiq = document.getElementById('chk_liq').checked;
 
@@ -2389,7 +2436,7 @@ function seriKatmanlariniGuncelle() {{
     seviyeEkle(parseEdilenPine.magic, 'Magic/FL', '#ec4899', LightweightCharts.LineStyle.Dashed, 1);
     seviyeEkle(parseEdilenPine.itz, 'ITZ', '#06b6d4', LightweightCharts.LineStyle.Dotted, 1);
   }}
-  if (isHTF && (gosterZz || gosterIst)) {{
+  if (gosterZz || gosterIst) {{
     const qmlPl = (veri.qml && veri.qml > 0) ? veri.qml : (parseEdilenPine.qml || 0);
     seviyeEkle(qmlPl, 'QML', '#c084fc', LightweightCharts.LineStyle.Dashed, 1);
   }}
@@ -2410,12 +2457,12 @@ function cizPineGostergeKatmani() {{
   ctx.clearRect(0, 0, rect.width, rect.height);
 
   const isHTF = (aktifTf === '4h');
-  const gosterArzTalep = isHTF && (document.getElementById('chk_arztalep') ? document.getElementById('chk_arztalep').checked : true);
-  const gosterKutu = isHTF && document.getElementById('chk_kutu').checked;
-  const gosterFibo = isHTF && document.getElementById('chk_fibo').checked;
-  const gosterIst  = isHTF && document.getElementById('chk_ist').checked;
+  const gosterArzTalep = document.getElementById('chk_arztalep') ? document.getElementById('chk_arztalep').checked : false;
+  const gosterKutu = document.getElementById('chk_kutu').checked;
+  const gosterFibo = document.getElementById('chk_fibo').checked;
+  const gosterIst  = document.getElementById('chk_ist').checked;
   const gosterRr   = document.getElementById('chk_rr').checked;
-  const gosterZz   = isHTF && document.getElementById('chk_zz').checked;
+  const gosterZz   = document.getElementById('chk_zz').checked;
   const gosterLiq  = document.getElementById('chk_liq').checked;
 
   const sonIdx = aktifMumlar.length - 1;
@@ -3542,7 +3589,7 @@ periyotDegistir(aktifTf);
 </script>
 </body>
 </html>"""
- dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(':','_').replace('/','_')}_{tf_secim}.html")
+ dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(':','_').replace('/','_')}_{tf_secim}.html")
  with open(dosya_yolu,'w',encoding='utf-8')as f:f.write(html_icerik)
  try:
   if os.name=='nt':os.startfile(dosya_yolu)
@@ -3551,6 +3598,818 @@ periyotDegistir(aktifTf);
   try:webbrowser.open(Path(dosya_yolu).as_uri())
   except X:webbrowser.open('file://'+dosya_yolu)
  return(dosya_yolu,pine_kodu)
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+
+GITHUB_REPO_ADRESI = "emrhozbr/bot"
+GITHUB_TOKEN = ""
+BULUT_SENK_AKTIF = True
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+
+def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
+    """botv4.0.2.py (CustomTkinter) dosyasindan masaustu GUI kismini otomatik kesip saf strateji motorunu cikarir."""
+    satirlar = kaynak_kod.splitlines()
+    cikti = []
+    for s in satirlar:
+        st = s.strip()
+        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
+            break
+            continue
+        # Dosya yollarini koru
+            continue
+            continue
+        cikti.append(s)
+    metin = "\n".join(cikti)
+    if "ANDROID_VERI_DIZINI" in globals():
+        metin = metin.replace(
+            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
+            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
+        )
+    return metin
+
+def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
+    """GitHub'daki botv4.0.2.py veya main.py dosyasini cekip masaustu kodunu otomatik mobil stratejiye donusturur ve aninda canliya alir."""
+    global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
+    hdr = {"Accept": "application/vnd.github.v3+json", "User-Agent": "AlfaTradeBot-OTA"}
+    if hedef_token:
+        hdr["Authorization"] = f"token {hedef_token}"
+    kaynak_kod = None
+    kaynak_adi = ""
+    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
+        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
+            kaynak_kod = f.read()
+        kaynak_adi = os.path.basename(yerel_dosya_yolu)
+    else:
+        # Once botv4.0.2.py dosyasini, yoksa main.py dosyasini dene
+        for dosya in ("botv4.0.3.py", "botv4.0.2.py", "main.py"):
+            try:
+                api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya}"
+                r = _HTTP_SES.get(api_url, headers=hdr, timeout=10)
+                if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                    kaynak_kod = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    kaynak_adi = f"{hedef_repo}/{dosya} (API)"
+                    break
+                raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya}"
+                r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=10)
+                if r2.status_code == 200 and len(r2.text) > 1000:
+                    kaynak_kod = r2.text
+                    kaynak_adi = f"{hedef_repo}/{dosya} (Raw)"
+                    break
+            except Exception:
+                pass
+    if not kaynak_kod or len(kaynak_kod) < 500:
+        return (False, "⚠️ GitHub üzerinden botv4.0.2.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan GitHub Token girin.")
+    try:
+        # Mevcut canli durumu (acik islemler, bakiye, API) yedekle
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU)
+        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
+        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+            f.write(cekirdek_kod)
+        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+        # Canli durumu geri yukle
+        acik_islemler.clear()
+        acik_islemler.update(yedek_acik)
+        globals()["S"] = yedek_s
+        globals()["W"] = yedek_w
+        globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"], globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"] = yedek_api
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        return (True, f"✅ OTA Güncelleme Başarılı! ({kaynak_adi}) -> Masaüstü strateji kodları otomatik dönüştürüldü ve yeniden başlatmaya gerek kalmadan canlıya alındı!")
+    except Exception as ex:
+        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
+
+def _kayitli_ota_varsa_yukle():
+    try:
+        if os.path.exists(_OTA_YEREL_CEKIRDEK):
+            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
+                kod = f.read()
+            if len(kod) > 500:
+                yedek_acik = dict(acik_islemler)
+                yedek_s, yedek_w = F(S), F(W)
+                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+                acik_islemler.update(yedek_acik)
+                globals()["S"], globals()["W"] = yedek_s, yedek_w
+    except Exception:
+        pass
+
+def bulut_durum_gonder(zorla=False):
+    """Acik islemleri, bakiyeyi ve islem gecmisini GitHub uzerindeki senkron_durum.json dosyasina yazar."""
+    global _SON_BULUT_YAZMA_HASH
+    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        return False
+    try:
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        veri = {
+            "guncelleme_ts": time.time(),
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "ANDROID_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "acik_islemler": nQ,
+            "demo_vadeli_bakiye": F(S),
+            "gerceklesen_pnl": F(W),
+            "islem_gecmisi": ah[:150]
+        }
+        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
+        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
+            return True
+        _SON_BULUT_YAZMA_HASH = ozet_str
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        mevcut_sha = None
+        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+            mevcut_sha = r_get.json().get("sha")
+        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"Sync: {veri['guncelleyen_cihaz']} ({datetime.now().strftime('%H:%M:%S')})",
+            "content": icerik_b64
+        }
+        if mevcut_sha:
+            payload["sha"] = mevcut_sha
+        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
+        return r_put.status_code in (200, 201)
+    except Exception:
+        return False
+
+def bulut_durum_cek(zorla=False):
+    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder."""
+    global _SON_BULUT_OKUMA_TS, S, W, ah
+    simdi = time.time()
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+        return False
+    _SON_BULUT_OKUMA_TS = simdi
+    degisti = False
+    # 1. GitHub Bulut Senkronizasyonu (Hem Demo/Testnet hem Mainnet icin tum strateji detaylarini esitler)
+    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
+        try:
+            hdr = {"Accept": "application/vnd.github.v3+json"}
+            if GITHUB_TOKEN:
+                hdr["Authorization"] = f"token {GITHUB_TOKEN.strip()}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
+                if I(d, dict):
+                    uzak_acik = d.get("acik_islemler")
+                    if I(uzak_acik, dict):
+                        # Uzak cihazda acilan yeni islemleri ekle veya kapananlari senkronize et
+                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
+                        if mevcut_anahtarlar != uzak_anahtarlar:
+                            acik_islemler.clear()
+                            acik_islemler.update(uzak_acik)
+                            degisti = True
+                        else:
+                            for k_u, v_u in uzak_acik.items():
+                                if I(v_u, dict) and I(acik_islemler.get(k_u), dict):
+                                    if v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                        acik_islemler[k_u].update(v_u)
+                                        degisti = True
+                    if "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01:
+                        S = F(d["demo_vadeli_bakiye"])
+                        degisti = True
+                    if "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01:
+                        W = F(d["gerceklesen_pnl"])
+                        degisti = True
+                    uzak_ig = d.get("islem_gecmisi")
+                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
+                        ah = uzak_ig
+                        degisti = True
+        except Exception:
+            pass
+    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu (API uzerinden acik vadeli islemleri otomatik tanima)
+    if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
+        try:
+            if hasattr(ao, "_signed_req"):
+                acc = ao._signed_req("GET", "/fapi/v2/account")
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            elif hasattr(ao, "fapiPrivateV2GetAccount"):
+                acc = ao.fapiPrivateV2GetAccount()
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            else:
+                positions = []
+            for p in positions:
+                amt = F(p.get("positionAmt") or 0.0)
+                if A(amt) > 0:
+                    raw_sym = str(p.get("symbol", ""))
+                    if raw_sym.endswith("USDT"):
+                        sem = f"{raw_sym[:-4]}/USDT"
+                        O_key = f"FUT:{sem}"
+                        if not I(acik_islemler.get(O_key), dict):
+                            ep = F(p.get("entryPrice") or 0.0)
+                            lev = int(F(p.get("leverage") or KALDIRAC))
+                            yon_p = "LONG" if amt > 0 else "SHORT"
+                            mO = -1.0 if yon_p == "SHORT" else 1.0
+                            sl_p = R(ep * (1.0 - mO * 0.01), 6)
+                            tp_p = R(ep * (1.0 + mO * 0.01 * RISK_ODUL_ORANI), 6)
+                            acik_islemler[O_key] = {
+                                "sembol": sem, "yon": yon_p, "piyasa": "future", "simule": False,
+                                "kaldirac": lev, "giris": ep, "anlik": ep,
+                                "pnl_usdt": F(p.get("unrealizedProfit") or 0.0), "pnl_yuzde": 0.0,
+                                "marjin_usdt": R((A(amt) * ep) / M(lev, 1), 2),
+                                "sl": sl_p, "ilk_sl": sl_p, "tp": tp_p, "tp_nihai": tp_p,
+                                "miktar": A(amt), "risk_usdt": ISLEM_BASI_RISK_USDT,
+                                "kismi_tp_alindi": False, "ozet": "[Diğer Cihazdan / Borsadan Senkronize]"
+                            }
+                            degisti = True
+        except Exception:
+            pass
+    return degisti
+
+
+
+
+def masaustunden_yerel_main_py_uret(log_fn=None):
+    """Bilgisayardaki mevcut botv4.0.3.py dosyasindaki tum yeni strateji degisikliklerini alip ayni klasor icindeki main.py (Mobil Flet) dosyasina otomatik aktarir."""
+    try:
+        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4.0.3.py'
+        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
+            pc_kaynak = f.read()
+        cekirdek = masaustu_kodunu_mobil_cekirdege_ayikla(pc_kaynak)
+        main_yolu = os.path.join(os.path.dirname(mevcut_dosya), 'main.py')
+        if os.path.exists(main_yolu):
+            with open(main_yolu, 'r', encoding='utf-8') as f:
+                mevcut_main = f.read()
+            if 'def _f(d,c,i=-2):' in mevcut_main and '# BULUT SENKRONİZASYON' in mevcut_main:
+                ust_baslik = mevcut_main[:mevcut_main.index('def _f(d,c,i=-2):')]
+                alt_mobil_arayuz = mevcut_main[mevcut_main.index('# ==============================================================================\n# BULUT SENKRONİZASYON'):]
+                yeni_main = ust_baslik + cekirdek + '\n\n' + alt_mobil_arayuz
+                with open(main_yolu, 'w', encoding='utf-8') as f:
+                    f.write(yeni_main)
+                if log_fn:
+                    log_fn(f"✅ [OTOMATİK DÖNÜŞTÜRÜLDÜ] {os.path.basename(mevcut_dosya)} içindeki yeni stratejiler otomatik olarak 'main.py' dosyasına aktarıldı!")
+                return True
+        # Eger main.py yoksa veya farkliysa cekirdegi ota_cekirdek_motor.py olarak da kaydet
+        with open('ota_cekirdek_motor.py', 'w', encoding='utf-8') as f:
+            f.write(cekirdek)
+        if log_fn:
+            log_fn("✅ Strateji çekirdeği ayıklandı (ota_cekirdek_motor.py).")
+        return True
+    except Exception as ex:
+        if log_fn:
+            log_fn(f"⚠️ main.py dönüştürme uyarısı: {ex}")
+        return False
+
+def pc_kodunu_githuba_ve_mobile_aktar(log_fn=None):
+    """1) Bilgisayardaki botv4.0.3.py kodunu otomatik main.py'ye cevirir. 2) GitHub'a yukler ve acik islemleri telefonla senkronize eder."""
+    masaustunden_yerel_main_py_uret(log_fn)
+    if not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        if log_fn:
+            log_fn("ℹ️ Yerel 'main.py' güncellendi! (Bulut OTA & Canlı Telefon Senkronizasyonu için '🔑 API Ayar' penceresinden GitHub Token girebilirsiniz.)")
+        return False
+    try:
+        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4.0.3.py'
+        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
+            kod_icerik = f.read()
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        for hedef_ad in ("botv4.0.3.py", "botv4.0.2.py"):
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{hedef_ad}"
+            mevcut_sha = None
+            r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=8)
+            if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+                mevcut_sha = r_get.json().get("sha")
+            payload = {
+                "message": f"PC Strategy OTA Update: {hedef_ad} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
+                "content": _b64.b64encode(kod_icerik.encode("utf-8")).decode("utf-8")
+            }
+            if mevcut_sha:
+                payload["sha"] = mevcut_sha
+            _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=15)
+        bulut_durum_gonder(zorla=True)
+        if log_fn:
+            log_fn("🚀 [PC -> MOBİL OTA & SENKRON TAMAMLANDI] Yeni stratejiniz (botv4.0.3.py) ve açık işlemleriniz buluta aktarıldı! Telefondan '⚡ OTA Güncelle' tuşuna basmanız yeterlidir.")
+        return True
+    except Exception as ex:
+        if log_fn:
+            log_fn(f"⚠️ PC->Mobil bulut aktarım hatası: {ex}")
+        return False
+
+
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+
+GITHUB_REPO_ADRESI = "emrhozbr/bot"
+GITHUB_TOKEN = ""
+BULUT_SENK_AKTIF = True
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+
+def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
+    """botv4.0.2.py (CustomTkinter) dosyasindan masaustu GUI kismini otomatik kesip saf strateji motorunu cikarir."""
+    satirlar = kaynak_kod.splitlines()
+    cikti = []
+    for s in satirlar:
+        st = s.strip()
+        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
+            break
+            continue
+        # Dosya yollarini koru
+            continue
+            continue
+        cikti.append(s)
+    metin = "\n".join(cikti)
+    if "ANDROID_VERI_DIZINI" in globals():
+        metin = metin.replace(
+            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
+            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
+        )
+    return metin
+
+def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
+    """GitHub'daki botv4.0.2.py veya main.py dosyasini cekip masaustu kodunu otomatik mobil stratejiye donusturur ve aninda canliya alir."""
+    global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
+    hdr = {"Accept": "application/vnd.github.v3+json", "User-Agent": "AlfaTradeBot-OTA"}
+    if hedef_token:
+        hdr["Authorization"] = f"token {hedef_token}"
+    kaynak_kod = None
+    kaynak_adi = ""
+    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
+        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
+            kaynak_kod = f.read()
+        kaynak_adi = os.path.basename(yerel_dosya_yolu)
+    else:
+        # Once botv4.0.2.py dosyasini, yoksa main.py dosyasini dene
+        for dosya in ("botv4.0.3.py", "botv4.0.2.py", "main.py"):
+            try:
+                api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya}"
+                r = _HTTP_SES.get(api_url, headers=hdr, timeout=10)
+                if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                    kaynak_kod = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    kaynak_adi = f"{hedef_repo}/{dosya} (API)"
+                    break
+                raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya}"
+                r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=10)
+                if r2.status_code == 200 and len(r2.text) > 1000:
+                    kaynak_kod = r2.text
+                    kaynak_adi = f"{hedef_repo}/{dosya} (Raw)"
+                    break
+            except Exception:
+                pass
+    if not kaynak_kod or len(kaynak_kod) < 500:
+        return (False, "⚠️ GitHub üzerinden botv4.0.2.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan GitHub Token girin.")
+    try:
+        # Mevcut canli durumu (acik islemler, bakiye, API) yedekle
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU)
+        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
+        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+            f.write(cekirdek_kod)
+        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+        # Canli durumu geri yukle
+        acik_islemler.clear()
+        acik_islemler.update(yedek_acik)
+        globals()["S"] = yedek_s
+        globals()["W"] = yedek_w
+        globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"], globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"] = yedek_api
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        return (True, f"✅ OTA Güncelleme Başarılı! ({kaynak_adi}) -> Masaüstü strateji kodları otomatik dönüştürüldü ve yeniden başlatmaya gerek kalmadan canlıya alındı!")
+    except Exception as ex:
+        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
+
+def _kayitli_ota_varsa_yukle():
+    try:
+        if os.path.exists(_OTA_YEREL_CEKIRDEK):
+            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
+                kod = f.read()
+            if len(kod) > 500:
+                yedek_acik = dict(acik_islemler)
+                yedek_s, yedek_w = F(S), F(W)
+                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+                acik_islemler.update(yedek_acik)
+                globals()["S"], globals()["W"] = yedek_s, yedek_w
+    except Exception:
+        pass
+
+def bulut_durum_gonder(zorla=False):
+    """Acik islemleri, bakiyeyi ve islem gecmisini GitHub uzerindeki senkron_durum.json dosyasina yazar."""
+    global _SON_BULUT_YAZMA_HASH
+    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        return False
+    try:
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        veri = {
+            "guncelleme_ts": time.time(),
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "ANDROID_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "acik_islemler": nQ,
+            "demo_vadeli_bakiye": F(S),
+            "gerceklesen_pnl": F(W),
+            "islem_gecmisi": ah[:150]
+        }
+        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
+        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
+            return True
+        _SON_BULUT_YAZMA_HASH = ozet_str
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        mevcut_sha = None
+        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+            mevcut_sha = r_get.json().get("sha")
+        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"Sync: {veri['guncelleyen_cihaz']} ({datetime.now().strftime('%H:%M:%S')})",
+            "content": icerik_b64
+        }
+        if mevcut_sha:
+            payload["sha"] = mevcut_sha
+        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
+        return r_put.status_code in (200, 201)
+    except Exception:
+        return False
+
+def bulut_durum_cek(zorla=False):
+    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder."""
+    global _SON_BULUT_OKUMA_TS, S, W, ah
+    simdi = time.time()
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+        return False
+    _SON_BULUT_OKUMA_TS = simdi
+    degisti = False
+    # 1. GitHub Bulut Senkronizasyonu (Hem Demo/Testnet hem Mainnet icin tum strateji detaylarini esitler)
+    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
+        try:
+            hdr = {"Accept": "application/vnd.github.v3+json"}
+            if GITHUB_TOKEN:
+                hdr["Authorization"] = f"token {GITHUB_TOKEN.strip()}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
+                if I(d, dict):
+                    uzak_acik = d.get("acik_islemler")
+                    if I(uzak_acik, dict):
+                        # Uzak cihazda acilan yeni islemleri ekle veya kapananlari senkronize et
+                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
+                        if mevcut_anahtarlar != uzak_anahtarlar:
+                            acik_islemler.clear()
+                            acik_islemler.update(uzak_acik)
+                            degisti = True
+                        else:
+                            for k_u, v_u in uzak_acik.items():
+                                if I(v_u, dict) and I(acik_islemler.get(k_u), dict):
+                                    if v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                        acik_islemler[k_u].update(v_u)
+                                        degisti = True
+                    if "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01:
+                        S = F(d["demo_vadeli_bakiye"])
+                        degisti = True
+                    if "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01:
+                        W = F(d["gerceklesen_pnl"])
+                        degisti = True
+                    uzak_ig = d.get("islem_gecmisi")
+                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
+                        ah = uzak_ig
+                        degisti = True
+        except Exception:
+            pass
+    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu (API uzerinden acik vadeli islemleri otomatik tanima)
+    if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
+        try:
+            if hasattr(ao, "_signed_req"):
+                acc = ao._signed_req("GET", "/fapi/v2/account")
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            elif hasattr(ao, "fapiPrivateV2GetAccount"):
+                acc = ao.fapiPrivateV2GetAccount()
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            else:
+                positions = []
+            for p in positions:
+                amt = F(p.get("positionAmt") or 0.0)
+                if A(amt) > 0:
+                    raw_sym = str(p.get("symbol", ""))
+                    if raw_sym.endswith("USDT"):
+                        sem = f"{raw_sym[:-4]}/USDT"
+                        O_key = f"FUT:{sem}"
+                        if not I(acik_islemler.get(O_key), dict):
+                            ep = F(p.get("entryPrice") or 0.0)
+                            lev = int(F(p.get("leverage") or KALDIRAC))
+                            yon_p = "LONG" if amt > 0 else "SHORT"
+                            mO = -1.0 if yon_p == "SHORT" else 1.0
+                            sl_p = R(ep * (1.0 - mO * 0.01), 6)
+                            tp_p = R(ep * (1.0 + mO * 0.01 * RISK_ODUL_ORANI), 6)
+                            acik_islemler[O_key] = {
+                                "sembol": sem, "yon": yon_p, "piyasa": "future", "simule": False,
+                                "kaldirac": lev, "giris": ep, "anlik": ep,
+                                "pnl_usdt": F(p.get("unrealizedProfit") or 0.0), "pnl_yuzde": 0.0,
+                                "marjin_usdt": R((A(amt) * ep) / M(lev, 1), 2),
+                                "sl": sl_p, "ilk_sl": sl_p, "tp": tp_p, "tp_nihai": tp_p,
+                                "miktar": A(amt), "risk_usdt": ISLEM_BASI_RISK_USDT,
+                                "kismi_tp_alindi": False, "ozet": "[Diğer Cihazdan / Borsadan Senkronize]"
+                            }
+                            degisti = True
+        except Exception:
+            pass
+    return degisti
+
+
+
+
+def masaustunden_yerel_main_py_uret(log_fn=None):
+    """Bilgisayardaki mevcut botv4.0.3.py dosyasindaki tum yeni strateji degisikliklerini alip ayni klasor icindeki main.py (Mobil Flet) dosyasina otomatik aktarir."""
+    try:
+        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4.0.3.py'
+        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
+            pc_kaynak = f.read()
+        cekirdek = masaustu_kodunu_mobil_cekirdege_ayikla(pc_kaynak)
+        main_yolu = os.path.join(os.path.dirname(mevcut_dosya), 'main.py')
+        if os.path.exists(main_yolu):
+            with open(main_yolu, 'r', encoding='utf-8') as f:
+                mevcut_main = f.read()
+            if 'def _f(d,c,i=-2):' in mevcut_main and '# BULUT SENKRONİZASYON' in mevcut_main:
+                ust_baslik = mevcut_main[:mevcut_main.index('def _f(d,c,i=-2):')]
+                alt_mobil_arayuz = mevcut_main[mevcut_main.index('# ==============================================================================\n# BULUT SENKRONİZASYON'):]
+                yeni_main = ust_baslik + cekirdek + '\n\n' + alt_mobil_arayuz
+                with open(main_yolu, 'w', encoding='utf-8') as f:
+                    f.write(yeni_main)
+                if log_fn:
+                    log_fn(f"✅ [OTOMATİK DÖNÜŞTÜRÜLDÜ] {os.path.basename(mevcut_dosya)} içindeki yeni stratejiler otomatik olarak 'main.py' dosyasına aktarıldı!")
+                return True
+        # Eger main.py yoksa veya farkliysa cekirdegi ota_cekirdek_motor.py olarak da kaydet
+        with open('ota_cekirdek_motor.py', 'w', encoding='utf-8') as f:
+            f.write(cekirdek)
+        if log_fn:
+            log_fn("✅ Strateji çekirdeği ayıklandı (ota_cekirdek_motor.py).")
+        return True
+    except Exception as ex:
+        if log_fn:
+            log_fn(f"⚠️ main.py dönüştürme uyarısı: {ex}")
+        return False
+
+def pc_kodunu_githuba_ve_mobile_aktar(log_fn=None):
+    """1) Bilgisayardaki botv4.0.3.py kodunu otomatik main.py'ye cevirir. 2) GitHub'a yukler ve acik islemleri telefonla senkronize eder."""
+    masaustunden_yerel_main_py_uret(log_fn)
+    if not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        if log_fn:
+            log_fn("ℹ️ Yerel 'main.py' güncellendi! (Bulut OTA & Canlı Telefon Senkronizasyonu için '🔑 API Ayar' penceresinden GitHub Token girebilirsiniz.)")
+        return False
+    try:
+        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4.0.3.py'
+        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
+            kod_icerik = f.read()
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        for hedef_ad in ("botv4.0.3.py", "botv4.0.2.py"):
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{hedef_ad}"
+            mevcut_sha = None
+            r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=8)
+            if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+                mevcut_sha = r_get.json().get("sha")
+            payload = {
+                "message": f"PC Strategy OTA Update: {hedef_ad} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
+                "content": _b64.b64encode(kod_icerik.encode("utf-8")).decode("utf-8")
+            }
+            if mevcut_sha:
+                payload["sha"] = mevcut_sha
+            _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=15)
+        bulut_durum_gonder(zorla=True)
+        if log_fn:
+            log_fn("🚀 [PC -> MOBİL OTA & SENKRON TAMAMLANDI] Yeni stratejiniz (botv4.0.3.py) ve açık işlemleriniz buluta aktarıldı! Telefondan '⚡ OTA Güncelle' tuşuna basmanız yeterlidir.")
+        return True
+    except Exception as ex:
+        if log_fn:
+            log_fn(f"⚠️ PC->Mobil bulut aktarım hatası: {ex}")
+        return False
+
+
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+
+GITHUB_REPO_ADRESI = "emrhozbr/bot"
+GITHUB_TOKEN = ""
+BULUT_SENK_AKTIF = True
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+
+def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
+    """botv4.0.2.py (CustomTkinter) dosyasindan masaustu GUI kismini otomatik kesip saf strateji motorunu cikarir."""
+    satirlar = kaynak_kod.splitlines()
+    cikti = []
+    for s in satirlar:
+        st = s.strip()
+        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
+            break
+        if any(yasak in s for yasak in ("import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk", "FigureCanvasTkAgg")):
+            continue
+        # Dosya yollarini koru
+        if "bd='binance_api_config.json'" in s:
+            continue
+        if "_api_yukle();_ig_yukle();_ak_yukle();" in s:
+            continue
+        cikti.append(s)
+    metin = "\n".join(cikti)
+    if "ANDROID_VERI_DIZINI" in globals():
+        metin = metin.replace(
+            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
+            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
+        )
+    return metin
+
+def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
+    """GitHub'daki botv4.0.2.py veya main.py dosyasini cekip masaustu kodunu otomatik mobil stratejiye donusturur ve aninda canliya alir."""
+    global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
+    hdr = {"Accept": "application/vnd.github.v3+json", "User-Agent": "AlfaTradeBot-OTA"}
+    if hedef_token:
+        hdr["Authorization"] = f"token {hedef_token}"
+    kaynak_kod = None
+    kaynak_adi = ""
+    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
+        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
+            kaynak_kod = f.read()
+        kaynak_adi = os.path.basename(yerel_dosya_yolu)
+    else:
+        # Once botv4.0.2.py dosyasini, yoksa main.py dosyasini dene
+        for dosya in ("botv4.0.3.py", "botv4.0.2.py", "main.py"):
+            try:
+                api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya}"
+                r = _HTTP_SES.get(api_url, headers=hdr, timeout=10)
+                if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                    kaynak_kod = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    kaynak_adi = f"{hedef_repo}/{dosya} (API)"
+                    break
+                raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya}"
+                r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=10)
+                if r2.status_code == 200 and len(r2.text) > 1000:
+                    kaynak_kod = r2.text
+                    kaynak_adi = f"{hedef_repo}/{dosya} (Raw)"
+                    break
+            except Exception:
+                pass
+    if not kaynak_kod or len(kaynak_kod) < 500:
+        return (False, "⚠️ GitHub üzerinden botv4.0.2.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan GitHub Token girin.")
+    try:
+        # Mevcut canli durumu (acik islemler, bakiye, API) yedekle
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU)
+        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
+        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+            f.write(cekirdek_kod)
+        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+        # Canli durumu geri yukle
+        acik_islemler.clear()
+        acik_islemler.update(yedek_acik)
+        globals()["S"] = yedek_s
+        globals()["W"] = yedek_w
+        globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"], globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"] = yedek_api
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        return (True, f"✅ OTA Güncelleme Başarılı! ({kaynak_adi}) -> Masaüstü strateji kodları otomatik dönüştürüldü ve yeniden başlatmaya gerek kalmadan canlıya alındı!")
+    except Exception as ex:
+        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
+
+def _kayitli_ota_varsa_yukle():
+    try:
+        if os.path.exists(_OTA_YEREL_CEKIRDEK):
+            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
+                kod = f.read()
+            if len(kod) > 500:
+                yedek_acik = dict(acik_islemler)
+                yedek_s, yedek_w = F(S), F(W)
+                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+                acik_islemler.update(yedek_acik)
+                globals()["S"], globals()["W"] = yedek_s, yedek_w
+    except Exception:
+        pass
+
+def bulut_durum_gonder(zorla=False):
+    """Acik islemleri, bakiyeyi ve islem gecmisini GitHub uzerindeki senkron_durum.json dosyasina yazar."""
+    global _SON_BULUT_YAZMA_HASH
+    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        return False
+    try:
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        veri = {
+            "guncelleme_ts": time.time(),
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "ANDROID_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "acik_islemler": nQ,
+            "demo_vadeli_bakiye": F(S),
+            "gerceklesen_pnl": F(W),
+            "islem_gecmisi": ah[:150]
+        }
+        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
+        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
+            return True
+        _SON_BULUT_YAZMA_HASH = ozet_str
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        mevcut_sha = None
+        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+            mevcut_sha = r_get.json().get("sha")
+        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"Sync: {veri['guncelleyen_cihaz']} ({datetime.now().strftime('%H:%M:%S')})",
+            "content": icerik_b64
+        }
+        if mevcut_sha:
+            payload["sha"] = mevcut_sha
+        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
+        return r_put.status_code in (200, 201)
+    except Exception:
+        return False
+
+def bulut_durum_cek(zorla=False):
+    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder."""
+    global _SON_BULUT_OKUMA_TS, S, W, ah
+    simdi = time.time()
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+        return False
+    _SON_BULUT_OKUMA_TS = simdi
+    degisti = False
+    # 1. GitHub Bulut Senkronizasyonu (Hem Demo/Testnet hem Mainnet icin tum strateji detaylarini esitler)
+    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
+        try:
+            hdr = {"Accept": "application/vnd.github.v3+json"}
+            if GITHUB_TOKEN:
+                hdr["Authorization"] = f"token {GITHUB_TOKEN.strip()}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
+                if I(d, dict):
+                    uzak_acik = d.get("acik_islemler")
+                    if I(uzak_acik, dict):
+                        # Uzak cihazda acilan yeni islemleri ekle veya kapananlari senkronize et
+                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
+                        if mevcut_anahtarlar != uzak_anahtarlar:
+                            acik_islemler.clear()
+                            acik_islemler.update(uzak_acik)
+                            degisti = True
+                        else:
+                            for k_u, v_u in uzak_acik.items():
+                                if I(v_u, dict) and I(acik_islemler.get(k_u), dict):
+                                    if v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                        acik_islemler[k_u].update(v_u)
+                                        degisti = True
+                    if "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01:
+                        S = F(d["demo_vadeli_bakiye"])
+                        degisti = True
+                    if "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01:
+                        W = F(d["gerceklesen_pnl"])
+                        degisti = True
+                    uzak_ig = d.get("islem_gecmisi")
+                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
+                        ah = uzak_ig
+                        degisti = True
+        except Exception:
+            pass
+    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu (API uzerinden acik vadeli islemleri otomatik tanima)
+    if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
+        try:
+            if hasattr(ao, "_signed_req"):
+                acc = ao._signed_req("GET", "/fapi/v2/account")
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            elif hasattr(ao, "fapiPrivateV2GetAccount"):
+                acc = ao.fapiPrivateV2GetAccount()
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            else:
+                positions = []
+            for p in positions:
+                amt = F(p.get("positionAmt") or 0.0)
+                if A(amt) > 0:
+                    raw_sym = str(p.get("symbol", ""))
+                    if raw_sym.endswith("USDT"):
+                        sem = f"{raw_sym[:-4]}/USDT"
+                        O_key = f"FUT:{sem}"
+                        if not I(acik_islemler.get(O_key), dict):
+                            ep = F(p.get("entryPrice") or 0.0)
+                            lev = int(F(p.get("leverage") or KALDIRAC))
+                            yon_p = "LONG" if amt > 0 else "SHORT"
+                            mO = -1.0 if yon_p == "SHORT" else 1.0
+                            sl_p = R(ep * (1.0 - mO * 0.01), 6)
+                            tp_p = R(ep * (1.0 + mO * 0.01 * RISK_ODUL_ORANI), 6)
+                            acik_islemler[O_key] = {
+                                "sembol": sem, "yon": yon_p, "piyasa": "future", "simule": False,
+                                "kaldirac": lev, "giris": ep, "anlik": ep,
+                                "pnl_usdt": F(p.get("unrealizedProfit") or 0.0), "pnl_yuzde": 0.0,
+                                "marjin_usdt": R((A(amt) * ep) / M(lev, 1), 2),
+                                "sl": sl_p, "ilk_sl": sl_p, "tp": tp_p, "tp_nihai": tp_p,
+                                "miktar": A(amt), "risk_usdt": ISLEM_BASI_RISK_USDT,
+                                "kismi_tp_alindi": False, "ozet": "[Diğer Cihazdan / Borsadan Senkronize]"
+                            }
+                            degisti = True
+        except Exception:
+            pass
+    return degisti
 
 
 # ==============================================================================
@@ -3724,6 +4583,10 @@ class AlfaMobileBotEngine:
             return
         self._senk_calisiyor = True
         try:
+            try:
+                bulut_durum_cek(zorla=False)
+            except Exception:
+                pass
             for O, bq in list(acik_islemler.items()):
                 if not I(bq, dict):
                     continue
@@ -3822,15 +4685,14 @@ class AlfaMobileBotEngine:
         if not Y or Y <= 0:
             return
         mO = -1.0 if aU == "SHORT" else 1.0
-        iU = M(A(P - al), kF / M(Y, 1e-09))
-        if aU == "LONG" and iU >= P * 0.95:
-            iU = A(P - al)
-        al_hedef = M(1e-06, P - mO * iU)
         try:
-            f2 = F(ja.price_to_precision(J, al_hedef))
+            f2 = F(ja.price_to_precision(J, al))
         except Exception:
-            f2 = R(al_hedef, 6)
-        iU_gercek = M(A(P - f2), iU)
+            f2 = R(al, 6)
+        iU_gercek = M(A(P - f2), P * aW)
+        Y, fk, kF = dinamik_miktar_hesapla(J, P, f2, hd, mN)
+        if not Y or Y <= 0:
+            return
         pK = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
         try:
             eo = F(ja.price_to_precision(J, M(1e-06, P + mO * iU_gercek * RISK_ODUL_ORANI)))
@@ -4102,11 +4964,30 @@ def main(page: ft.Page):
         expand=True,
         on_click=lambda e: _bot_durdur_tik()
     )
+    def _tek_tus_ota_tik(e):
+        lbl_durum_bar.value = "⏳ OTA Güncelleniyor..."
+        lbl_durum_bar.color = "#fde047"
+        page.update()
+        def _ota_bg():
+            ok, msg = ota_strateji_guncelle(tf_gh_repo.value, tf_gh_tok.value)
+            motor.log_yaz(msg)
+            motor.durum_guncelle("OTA Güncellendi ✅" if ok else "OTA Uyarı ⚠️", "#4ade80" if ok else "#f87171")
+            lbl_ayar_durum.value = msg
+            lbl_ayar_durum.color = "#4ade80" if ok else "#f87171"
+            _ekrani_yenile("force")
+        threading.Thread(target=_ota_bg, daemon=True).start()
+
     btn_senk = ft.ElevatedButton(
-        "🔄 Yenile",
+        "☁️ Eşitle",
         bgcolor="#3b82f6",
         color="#ffffff",
-        on_click=lambda e: threading.Thread(target=motor.pozisyonlari_senkronize_et, daemon=True).start()
+        on_click=lambda e: threading.Thread(target=lambda: (bulut_durum_cek(True), bulut_durum_gonder(True), motor.pozisyonlari_senkronize_et()), daemon=True).start()
+    )
+    btn_ota = ft.ElevatedButton(
+        "⚡ OTA Güncelle",
+        bgcolor="#8b5cf6",
+        color="#ffffff",
+        on_click=_tek_tus_ota_tik
     )
 
     ust_panel = ft.Container(
@@ -4116,7 +4997,7 @@ def main(page: ft.Page):
                 lbl_durum_bar
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ust_kartlar_row,
-            ft.Row([btn_baslat, btn_durdur, btn_senk], spacing=6)
+            ft.Row([btn_baslat, btn_durdur, btn_senk, btn_ota], spacing=5)
         ], spacing=6),
         bgcolor="#181825",
         padding=10,
@@ -4273,6 +5154,12 @@ def main(page: ft.Page):
         value=AKTIF_RISK_SEVIYESI,
         bgcolor="#1e293b"
     )
+    dd_stop_modu = ft.Dropdown(
+        label="🛡️ Stop Noktası Belirleme Modu (v4.0.3)",
+        options=[ft.dropdown.Option(k) for k in STOP_BELIRLEME_SECENEKLERI],
+        value=STOP_BELIRLEME_MODU,
+        bgcolor="#1e293b"
+    )
     dd_marjin_tipi = ft.Dropdown(
         label="Vadeli Marjin Tipi",
         options=[ft.dropdown.Option("ISOLATED"), ft.dropdown.Option("CROSSED")],
@@ -4290,6 +5177,8 @@ def main(page: ft.Page):
     tf_api_sec = ft.TextField(label="Binance Secret Key", value=API_SECRET, password=True, can_reveal_password=True, bgcolor="#1e293b")
     tf_tg_tok = ft.TextField(label="Telegram Bot Token", value=TELEGRAM_TOKEN, bgcolor="#1e293b")
     tf_tg_id = ft.TextField(label="Telegram Chat ID", value=TELEGRAM_CHAT_ID, bgcolor="#1e293b")
+    tf_gh_repo = ft.TextField(label="GitHub Repo (OTA & Bulut Senk: kullanici/repo)", value=GITHUB_REPO_ADRESI, bgcolor="#1e293b")
+    tf_gh_tok = ft.TextField(label="GitHub Token (Cihazlar Arası Senk & Private Repo İçin)", value=GITHUB_TOKEN, password=True, can_reveal_password=True, bgcolor="#1e293b")
     lbl_ayar_durum = ft.Text("Ayarlar hazır.", size=12, color="#4ade80")
 
     def _risk_secim_degisti(e):
@@ -4309,7 +5198,9 @@ def main(page: ft.Page):
             PIYASA_MODU = dd_piyasa.value or "her_ikisi"
             TESTNET_AKTIF = (dd_ag.value == "testnet")
             MARJIN_TIPI = dd_marjin_tipi.value or "ISOLATED"
+            global STOP_BELIRLEME_MODU
             AKTIF_RISK_SEVIYESI = dd_risk_seviye.value or AKTIF_RISK_SEVIYESI
+            STOP_BELIRLEME_MODU = dd_stop_modu.value or STOP_BELIRLEME_MODU
             if dd_mtf_sablon.value in MTF_SABLONLARI:
                 mtf_sablonu_uygula(dd_mtf_sablon.value)
             MAKS_MARJIN_USDT = M(5.0, F(tf_marjin.value))
@@ -4319,16 +5210,21 @@ def main(page: ft.Page):
             NIHAI_TP_RR = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
             MIN_CONFLUENCE_SKORU = M(10, N(100, int(F(tf_min_skor.value))))
             ae = M(0, int(F(tf_limit.value)))
+            global GITHUB_REPO_ADRESI, GITHUB_TOKEN
             API_KEY = tf_api_key.value.strip()
             API_SECRET = tf_api_sec.value.strip()
             TELEGRAM_TOKEN = tf_tg_tok.value.strip()
             TELEGRAM_CHAT_ID = tf_tg_id.value.strip()
+            GITHUB_REPO_ADRESI = tf_gh_repo.value.strip() or "emrhozbr/bot"
+            GITHUB_TOKEN = tf_gh_tok.value.strip()
             try:
                 with open(bd, "w", encoding="utf-8") as f:
                     json.dump({
                         "api_key": API_KEY, "api_secret": API_SECRET,
                         "testnet": TESTNET_AKTIF,
-                        "telegram_token": TELEGRAM_TOKEN, "telegram_chat_id": TELEGRAM_CHAT_ID
+                        "telegram_token": TELEGRAM_TOKEN, "telegram_chat_id": TELEGRAM_CHAT_ID,
+                        "github_repo": GITHUB_REPO_ADRESI, "github_token": GITHUB_TOKEN,
+                        "stop_modu": STOP_BELIRLEME_MODU
                     }, f, ensure_ascii=False)
             except Exception:
                 pass
@@ -4352,6 +5248,7 @@ def main(page: ft.Page):
             dd_ag,
             dd_mtf_sablon,
             dd_risk_seviye,
+            dd_stop_modu,
             dd_marjin_tipi,
             ft.Row([tf_marjin, tf_kaldirac], spacing=8),
             ft.Row([tf_risk, tf_rr], spacing=8),
@@ -4362,6 +5259,14 @@ def main(page: ft.Page):
             tf_api_sec,
             tf_tg_tok,
             tf_tg_id,
+            ft.Divider(color="#334155"),
+            ft.Text("☁️ TEK TUŞLA OTA & ÇOKLU CİHAZ SENKRONİZASYONU (PC <-> TELEFON)", size=13, weight=ft.FontWeight.BOLD, color="#c084fc"),
+            tf_gh_repo,
+            tf_gh_tok,
+            ft.Row([
+                ft.ElevatedButton("⚡ GitHub'dan OTA Güncelle (botv4.0.2.py)", bgcolor="#8b5cf6", color="#ffffff", expand=True, on_click=_tek_tus_ota_tik),
+                ft.ElevatedButton("☁️ Cihazları Eşitle", bgcolor="#0ea5e9", color="#ffffff", expand=True, on_click=lambda e: threading.Thread(target=lambda: (bulut_durum_cek(True), bulut_durum_gonder(True), _ekrani_yenile("force")), daemon=True).start()),
+            ], spacing=8),
             ft.ElevatedButton("💾 Tüm Ayarları Kaydet ve Uygula", bgcolor="#10b981", color="#ffffff", height=42, on_click=_ayarlari_kaydet_tik),
             lbl_ayar_durum
         ], scroll=ft.ScrollMode.AUTO, spacing=10),
@@ -4599,6 +5504,9 @@ def main(page: ft.Page):
     def _ilk_yukleme():
         global V, T
         try:
+            _api_yukle()
+            _kayitli_ota_varsa_yukle()
+            bulut_durum_cek(zorla=True)
             V, T = bakiye_getir()
             nQ = sum(1 for v in acik_islemler.values() if I(v, dict))
             if nQ > 0:
