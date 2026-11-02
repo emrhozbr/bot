@@ -12,7 +12,7 @@ jobs:
       - name: Repo Kodlarini Cek
         uses: actions/checkout@v4
 
-      - name: Linux Paketlerini Kur
+      - name: Sistem Paketlerini Kur
         run: |
           sudo apt-get update
           sudo apt-get install -y libgtk-3-dev mesa-utils zip unzip clang cmake ninja-build pkg-config libncurses5 libglu1-mesa
@@ -35,16 +35,17 @@ jobs:
           flutter-version: '3.24.3'
           cache: true
 
-      - name: Android Lisanslarini Onayla
+      - name: Android SDK Lisanslarini Onayla
         run: |
           SDKMANAGER=$(find /usr/local/lib/android/sdk -name "sdkmanager" | head -n 1)
           python3 -c 'print("y\n" * 40)' | "$SDKMANAGER" --licenses || true
           python3 -c 'print("y\n" * 40)' | flutter doctor --android-licenses || true
 
-      - name: C Derleme Hatasi Veren Paketleri Saf Python Adaptoru Ile Degistir
+      - name: main.py Mobil Uyumluluk Katmani (Shim) ve Eksik Degiskenleri Yamala
         run: |
           rm -f pyproject.toml
           printf "requests\n" > requirements.txt
+
           cat << 'EOF' > mobile_shim.py
           import math, time, hmac, hashlib, urllib.parse, requests
           from datetime import datetime, timezone
@@ -352,28 +353,75 @@ jobs:
           pd = _PDModule()
           ccxt = _CCXTModule()
           EOF
+
           python3 -c '
           with open("main.py", "r", encoding="utf-8") as f: c = f.read()
           with open("mobile_shim.py", "r", encoding="utf-8") as f: s = f.read()
+
           c = c.replace("import os, sys, gc, json, ccxt, webbrowser, time, threading, socket", "import os, sys, gc, json, webbrowser, time, threading, socket\n" + s)
           c = c.replace("import pandas as pd\n", "").replace("import numpy as np\n", "")
+
+          eksik_tanimlar = """
+          bd = os.path.join(ANDROID_VERI_DIZINI, "binance_api_config.json")
+          ap = os.path.join(ANDROID_VERI_DIZINI, "islem_gecmisi.json")
+          aN = os.path.join(ANDROID_VERI_DIZINI, "acik_islemler.json")
+          ah = []
+          """
+          if "bd = os.path.join" not in c:
+              c = c.replace("def _f(d,c,i=-2):", eksik_tanimlar.strip() + "\ndef _f(d,c,i=-2):")
+
+          if "borsa_kur(PIYASA_MODU, TESTNET_AKTIF)" not in c.split("def _api_yukle():")[0]:
+              c = c.replace("def _api_yukle():", "borsa_kur(PIYASA_MODU, TESTNET_AKTIF)\ndef _api_yukle():")
+
           with open("main.py", "w", encoding="utf-8") as f: f.write(c)
           '
 
-      - name: Flet Yukle
-        run: |
           python -m pip install --upgrade pip
-          pip install "flet[all]==0.24.1" requests
+          pip install "flet==0.24.1" requests
 
       - name: Flet Build APK Komutunu Calistir
         run: |
-          flet build apk --include-packages requests --project "Alfa Trade Bot" --org "com.alfatrade" -vv --no-rich-output
+          rm -rf /tmp/flet-template
+          git clone --depth 1 --branch 0.24.1 https://github.com/flet-dev/flet-build-template.git /tmp/flet-template
+
+          cat << 'EOF' >> "/tmp/flet-template/{{cookiecutter.out_dir}}/pubspec.yaml"
+
+          dependency_overrides:
+            image: 4.3.0
+            archive: 3.6.1
+            flutter_native_splash: 2.4.4
+            flutter_launcher_icons: 0.13.1
+            package_info_plus: 8.0.2
+            package_info_plus_platform_interface: 3.0.1
+            shared_preferences: 2.2.3
+            shared_preferences_android: 2.2.2
+            file_picker: 8.0.6
+            url_launcher: 6.2.6
+            url_launcher_android: 6.3.1
+            wakelock_plus: 1.2.5
+            wakelock_plus_platform_interface: 1.2.1
+            sensors_plus: 4.0.2
+            sensors_plus_platform_interface: 1.2.0
+            flutter_plugin_android_lifecycle: 2.0.19
+            path_provider: 2.1.3
+            path_provider_android: 2.2.4
+            http: 1.2.2
+            web: 0.5.1
+          EOF
+
+          flet build apk \
+            --project "Alfa Trade Bot" \
+            --org "com.alfatrade" \
+            --template "/tmp/flet-template" \
+            -vv --no-rich-output
+
+          mkdir -p apk_cikti
+          find . -name "*.apk" -exec cp {} apk_cikti/ \;
+          ls -la apk_cikti/
 
       - name: Olusan APK Dosyasini Bul ve Yukle (Artifact)
         uses: actions/upload-artifact@v4
         with:
           name: Alfa-Trade-Bot-Android-APK
-          path: |
-            build/apk/*.apk
-            build/app/outputs/flutter-apk/*.apk
-            **/*.apk
+          path: apk_cikti/*.apk
+          if-no-files-found: error
