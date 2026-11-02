@@ -3,7 +3,7 @@
 # ==============================================================================
 import os, sys, gc, json, ccxt, webbrowser, time, threading, socket
 import pandas as pd
-import numpy as np
+# import numpy as np
 import requests
 from datetime import datetime
 from pathlib import Path
@@ -20,6 +20,8 @@ try:
 except Exception:
     ANDROID_VERI_DIZINI = os.path.abspath(".")
 
+# ==============================================================================
+# ==============================================================================
 # ==============================================================================
 # ==============================================================================
 # ==============================================================================
@@ -3598,6 +3600,299 @@ periyotDegistir(aktifTf);
   try:webbrowser.open(Path(dosya_yolu).as_uri())
   except X:webbrowser.open('file://'+dosya_yolu)
  return(dosya_yolu,pine_kodu)
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+
+GITHUB_REPO_ADRESI = "emrhozbr/bot"
+GITHUB_TOKEN = ""
+BULUT_SENK_AKTIF = True
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+
+def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
+    """botv4.0.2.py (CustomTkinter) dosyasindan masaustu GUI kismini otomatik kesip saf strateji motorunu cikarir."""
+    satirlar = kaynak_kod.splitlines()
+    cikti = []
+    for s in satirlar:
+        st = s.strip()
+        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
+            break
+            continue
+        # Dosya yollarini koru
+            continue
+            continue
+        cikti.append(s)
+    metin = "\n".join(cikti)
+    if "ANDROID_VERI_DIZINI" in globals():
+        metin = metin.replace(
+            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
+            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
+        )
+    return metin
+
+def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
+    """GitHub'daki botv4.0.2.py veya main.py dosyasini cekip masaustu kodunu otomatik mobil stratejiye donusturur ve aninda canliya alir."""
+    global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
+    hdr = {"Accept": "application/vnd.github.v3+json", "User-Agent": "AlfaTradeBot-OTA"}
+    if hedef_token:
+        hdr["Authorization"] = f"token {hedef_token}"
+    kaynak_kod = None
+    kaynak_adi = ""
+    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
+        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
+            kaynak_kod = f.read()
+        kaynak_adi = os.path.basename(yerel_dosya_yolu)
+    else:
+        # Once botv4.0.2.py dosyasini, yoksa main.py dosyasini dene
+        for dosya in ("botv4.0.3.py", "botv4.0.2.py", "main.py"):
+            try:
+                api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya}"
+                r = _HTTP_SES.get(api_url, headers=hdr, timeout=10)
+                if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                    kaynak_kod = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    kaynak_adi = f"{hedef_repo}/{dosya} (API)"
+                    break
+                raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya}"
+                r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=10)
+                if r2.status_code == 200 and len(r2.text) > 1000:
+                    kaynak_kod = r2.text
+                    kaynak_adi = f"{hedef_repo}/{dosya} (Raw)"
+                    break
+            except Exception:
+                pass
+    if not kaynak_kod or len(kaynak_kod) < 500:
+        return (False, "⚠️ GitHub üzerinden botv4.0.2.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan GitHub Token girin.")
+    try:
+        # Mevcut canli durumu (acik islemler, bakiye, API) yedekle
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU)
+        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
+        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+            f.write(cekirdek_kod)
+        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+        # Canli durumu geri yukle
+        acik_islemler.clear()
+        acik_islemler.update(yedek_acik)
+        globals()["S"] = yedek_s
+        globals()["W"] = yedek_w
+        globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"], globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"] = yedek_api
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        return (True, f"✅ OTA Güncelleme Başarılı! ({kaynak_adi}) -> Masaüstü strateji kodları otomatik dönüştürüldü ve yeniden başlatmaya gerek kalmadan canlıya alındı!")
+    except Exception as ex:
+        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
+
+def _kayitli_ota_varsa_yukle():
+    try:
+        if os.path.exists(_OTA_YEREL_CEKIRDEK):
+            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
+                kod = f.read()
+            if len(kod) > 500:
+                yedek_acik = dict(acik_islemler)
+                yedek_s, yedek_w = F(S), F(W)
+                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+                acik_islemler.update(yedek_acik)
+                globals()["S"], globals()["W"] = yedek_s, yedek_w
+    except Exception:
+        pass
+
+def bulut_durum_gonder(zorla=False):
+    """Acik islemleri, bakiyeyi ve islem gecmisini GitHub uzerindeki senkron_durum.json dosyasina yazar."""
+    global _SON_BULUT_YAZMA_HASH
+    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        return False
+    try:
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        veri = {
+            "guncelleme_ts": time.time(),
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "ANDROID_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "acik_islemler": nQ,
+            "demo_vadeli_bakiye": F(S),
+            "gerceklesen_pnl": F(W),
+            "islem_gecmisi": ah[:150]
+        }
+        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
+        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
+            return True
+        _SON_BULUT_YAZMA_HASH = ozet_str
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        mevcut_sha = None
+        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+            mevcut_sha = r_get.json().get("sha")
+        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"Sync: {veri['guncelleyen_cihaz']} ({datetime.now().strftime('%H:%M:%S')})",
+            "content": icerik_b64
+        }
+        if mevcut_sha:
+            payload["sha"] = mevcut_sha
+        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
+        return r_put.status_code in (200, 201)
+    except Exception:
+        return False
+
+def bulut_durum_cek(zorla=False):
+    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder."""
+    global _SON_BULUT_OKUMA_TS, S, W, ah
+    simdi = time.time()
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+        return False
+    _SON_BULUT_OKUMA_TS = simdi
+    degisti = False
+    # 1. GitHub Bulut Senkronizasyonu (Hem Demo/Testnet hem Mainnet icin tum strateji detaylarini esitler)
+    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
+        try:
+            hdr = {"Accept": "application/vnd.github.v3+json"}
+            if GITHUB_TOKEN:
+                hdr["Authorization"] = f"token {GITHUB_TOKEN.strip()}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
+                if I(d, dict):
+                    uzak_acik = d.get("acik_islemler")
+                    if I(uzak_acik, dict):
+                        # Uzak cihazda acilan yeni islemleri ekle veya kapananlari senkronize et
+                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
+                        if mevcut_anahtarlar != uzak_anahtarlar:
+                            acik_islemler.clear()
+                            acik_islemler.update(uzak_acik)
+                            degisti = True
+                        else:
+                            for k_u, v_u in uzak_acik.items():
+                                if I(v_u, dict) and I(acik_islemler.get(k_u), dict):
+                                    if v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                        acik_islemler[k_u].update(v_u)
+                                        degisti = True
+                    if "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01:
+                        S = F(d["demo_vadeli_bakiye"])
+                        degisti = True
+                    if "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01:
+                        W = F(d["gerceklesen_pnl"])
+                        degisti = True
+                    uzak_ig = d.get("islem_gecmisi")
+                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
+                        ah = uzak_ig
+                        degisti = True
+        except Exception:
+            pass
+    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu (API uzerinden acik vadeli islemleri otomatik tanima)
+    if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
+        try:
+            if hasattr(ao, "_signed_req"):
+                acc = ao._signed_req("GET", "/fapi/v2/account")
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            elif hasattr(ao, "fapiPrivateV2GetAccount"):
+                acc = ao.fapiPrivateV2GetAccount()
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            else:
+                positions = []
+            for p in positions:
+                amt = F(p.get("positionAmt") or 0.0)
+                if A(amt) > 0:
+                    raw_sym = str(p.get("symbol", ""))
+                    if raw_sym.endswith("USDT"):
+                        sem = f"{raw_sym[:-4]}/USDT"
+                        O_key = f"FUT:{sem}"
+                        if not I(acik_islemler.get(O_key), dict):
+                            ep = F(p.get("entryPrice") or 0.0)
+                            lev = int(F(p.get("leverage") or KALDIRAC))
+                            yon_p = "LONG" if amt > 0 else "SHORT"
+                            mO = -1.0 if yon_p == "SHORT" else 1.0
+                            sl_p = R(ep * (1.0 - mO * 0.01), 6)
+                            tp_p = R(ep * (1.0 + mO * 0.01 * RISK_ODUL_ORANI), 6)
+                            acik_islemler[O_key] = {
+                                "sembol": sem, "yon": yon_p, "piyasa": "future", "simule": False,
+                                "kaldirac": lev, "giris": ep, "anlik": ep,
+                                "pnl_usdt": F(p.get("unrealizedProfit") or 0.0), "pnl_yuzde": 0.0,
+                                "marjin_usdt": R((A(amt) * ep) / M(lev, 1), 2),
+                                "sl": sl_p, "ilk_sl": sl_p, "tp": tp_p, "tp_nihai": tp_p,
+                                "miktar": A(amt), "risk_usdt": ISLEM_BASI_RISK_USDT,
+                                "kismi_tp_alindi": False, "ozet": "[Diğer Cihazdan / Borsadan Senkronize]"
+                            }
+                            degisti = True
+        except Exception:
+            pass
+    return degisti
+
+
+
+
+def masaustunden_yerel_main_py_uret(log_fn=None):
+    """Bilgisayardaki mevcut botv4.0.3.py dosyasindaki tum yeni strateji degisikliklerini alip ayni klasor icindeki main.py (Mobil Flet) dosyasina otomatik aktarir."""
+    try:
+        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4.0.3.py'
+        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
+            pc_kaynak = f.read()
+        cekirdek = masaustu_kodunu_mobil_cekirdege_ayikla(pc_kaynak)
+        main_yolu = os.path.join(os.path.dirname(mevcut_dosya), 'main.py')
+        if os.path.exists(main_yolu):
+            with open(main_yolu, 'r', encoding='utf-8') as f:
+                mevcut_main = f.read()
+            if 'def _f(d,c,i=-2):' in mevcut_main and '# BULUT SENKRONİZASYON' in mevcut_main:
+                ust_baslik = mevcut_main[:mevcut_main.index('def _f(d,c,i=-2):')]
+                alt_mobil_arayuz = mevcut_main[mevcut_main.index('# ==============================================================================\n# BULUT SENKRONİZASYON'):]
+                yeni_main = ust_baslik + cekirdek + '\n\n' + alt_mobil_arayuz
+                with open(main_yolu, 'w', encoding='utf-8') as f:
+                    f.write(yeni_main)
+                if log_fn:
+                    log_fn(f"✅ [OTOMATİK DÖNÜŞTÜRÜLDÜ] {os.path.basename(mevcut_dosya)} içindeki yeni stratejiler otomatik olarak 'main.py' dosyasına aktarıldı!")
+                return True
+        # Eger main.py yoksa veya farkliysa cekirdegi ota_cekirdek_motor.py olarak da kaydet
+        with open('ota_cekirdek_motor.py', 'w', encoding='utf-8') as f:
+            f.write(cekirdek)
+        if log_fn:
+            log_fn("✅ Strateji çekirdeği ayıklandı (ota_cekirdek_motor.py).")
+        return True
+    except Exception as ex:
+        if log_fn:
+            log_fn(f"⚠️ main.py dönüştürme uyarısı: {ex}")
+        return False
+
+def pc_kodunu_githuba_ve_mobile_aktar(log_fn=None):
+    """1) Bilgisayardaki botv4.0.3.py kodunu otomatik main.py'ye cevirir. 2) GitHub'a yukler ve acik islemleri telefonla senkronize eder."""
+    masaustunden_yerel_main_py_uret(log_fn)
+    if not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        if log_fn:
+            log_fn("ℹ️ Yerel 'main.py' güncellendi! (Bulut OTA & Canlı Telefon Senkronizasyonu için '🔑 API Ayar' penceresinden GitHub Token girebilirsiniz.)")
+        return False
+    try:
+        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4.0.3.py'
+        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
+            kod_icerik = f.read()
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        for hedef_ad in ("botv4.0.3.py", "botv4.0.2.py"):
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{hedef_ad}"
+            mevcut_sha = None
+            r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=8)
+            if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+                mevcut_sha = r_get.json().get("sha")
+            payload = {
+                "message": f"PC Strategy OTA Update: {hedef_ad} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
+                "content": _b64.b64encode(kod_icerik.encode("utf-8")).decode("utf-8")
+            }
+            if mevcut_sha:
+                payload["sha"] = mevcut_sha
+            _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=15)
+        bulut_durum_gonder(zorla=True)
+        if log_fn:
+            log_fn("🚀 [PC -> MOBİL OTA & SENKRON TAMAMLANDI] Yeni stratejiniz (botv4.0.3.py) ve açık işlemleriniz buluta aktarıldı! Telefondan '⚡ OTA Güncelle' tuşuna basmanız yeterlidir.")
+        return True
+    except Exception as ex:
+        if log_fn:
+            log_fn(f"⚠️ PC->Mobil bulut aktarım hatası: {ex}")
+        return False
+
+
 # ==============================================================================
 # BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
 # ==============================================================================
