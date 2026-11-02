@@ -12,6 +12,19 @@ jobs:
       - name: Repo Kodlarini Cek
         uses: actions/checkout@v4
 
+      - name: Requirements ve Config Icinden Numpy-Pandas Temizle
+        run: |
+          # Flet'in otomatik okudugu requirements.txt dosyasini sadece saf Python paketleriyle sifirla
+          echo "flet==0.24.1" > requirements.txt
+          echo "requests" >> requirements.txt
+          # Eger pyproject.toml varsa ve icinde numpy/pandas geciyorsa temizle
+          if [ -f "pyproject.toml" ]; then
+            sed -i '/numpy/d' pyproject.toml
+            sed -i '/pandas/d' pyproject.toml
+            sed -i '/matplotlib/d' pyproject.toml
+            sed -i '/customtkinter/d' pyproject.toml
+          fi
+
       - name: Linux Paketlerini Kur
         run: |
           sudo apt-get update
