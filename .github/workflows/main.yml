@@ -65,9 +65,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install "flet==0.24.1" requests
 
-      - name: Flet Build APK Komutunu Calistir
+      - name: Build APK with Flet
         run: |
-          flet build apk --project "Alfa Trade Bot" --org "com.alfatrade" -vv --no-rich-output
+          flet build apk --project "Alfa Trade Bot" --org "com.alfatrade" --exclude .git --exclude build --exclude __pycache__ -vv
 
       - name: Olusan APK Dosyasini Yukle (Artifact)
         uses: actions/upload-artifact@v4
