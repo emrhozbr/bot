@@ -1,217 +1,4938 @@
 # ==============================================================================
 # ALFA TRADE CLUB (MAHŞERİN 4 ATLISI + YT PART 1-13) — NATIVE ANDROID APK (FLET)
 # ==============================================================================
-import os, sys, gc, json, webbrowser, time, threading, socket, math, hmac, hashlib
-from urllib.parse import urlencode
+import os, sys, gc, json, ccxt, webbrowser, time, threading, socket
+import pandas as pd
+import numpy as np
+import requests
 from datetime import datetime
 from pathlib import Path
-import requests
 import flet as ft
-
-# --- ANDROID APK ICIN SAF PYTHON NUMPY, PANDAS VE CCXT EMULATORU ---
-class _NumpyMock:
-    nan = float('nan')
-    integer = int
-    def array(self, x, *a, **kw): return list(x) if not isinstance(x, list) else x
-np = _NumpyMock()
-
-class _MiniSeries:
-    def __init__(self, data):
-        self._d = [float(x) if x is not None and x == x else float('nan') for x in data]
-    def __len__(self): return len(self._d)
-    def __iter__(self): return iter(self._d)
-    @property
-    def empty(self): return len(self._d) == 0
-    @property
-    def values(self): return self._d
-    @property
-    def iloc(self): return self
-    def __getitem__(self, idx):
-        if isinstance(idx, slice): return _MiniSeries(self._d[idx])
-        if isinstance(idx, _MiniSeries): return _MiniSeries([v for v, b in zip(self._d, idx._d) if b])
-        return self._d[idx]
-    def to_numpy(self, dtype=float, copy=False): return self._d
-    def _op(self, o, fn):
-        if isinstance(o, _MiniSeries): return _MiniSeries([fn(a, b) for a, b in zip(self._d, o._d)])
-        return _MiniSeries([fn(a, float(o)) for a in self._d])
-    def __sub__(self, o): return self._op(o, lambda a, b: a - b)
-    def __add__(self, o): return self._op(o, lambda a, b: a + b)
-    def __mul__(self, o): return self._op(o, lambda a, b: a * b)
-    def __truediv__(self, o): return self._op(o, lambda a, b: a / b if b != 0 else float('nan'))
-    def __rtruediv__(self, o): return _MiniSeries([float(o) / a if a != 0 else float('nan') for a in self._d])
-    def __neg__(self): return _MiniSeries([-a for a in self._d])
-    def __gt__(self, o): return self._op(o, lambda a, b: a > b)
-    def __lt__(self, o): return self._op(o, lambda a, b: a < b)
-    def __ge__(self, o): return self._op(o, lambda a, b: a >= b)
-    def __le__(self, o): return self._op(o, lambda a, b: a <= b)
-    def abs(self): return _MiniSeries([abs(a) for a in self._d])
-    def diff(self): return _MiniSeries([float('nan')] + [self._d[i] - self._d[i-1] for i in range(1, len(self._d))])
-    def shift(self, n=1): return _MiniSeries([float('nan')]*n + self._d[:-n] if n > 0 else self._d)
-    def where(self, cond, other=0.0): return _MiniSeries([a if c else float(other) for a, c in zip(self._d, cond._d)])
-    def replace(self, old, new): return _MiniSeries([new if a == old else a for a in self._d])
-    def fillna(self, val): return _MiniSeries([float(val) if (a != a or a is None) else a for a in self._d])
-    def bfill(self):
-        out = list(self._d); last = 0.0
-        for i in range(len(out)-1, -1, -1):
-            if out[i] == out[i]: last = out[i]
-            else: out[i] = last
-        return _MiniSeries(out)
-    def rolling(self, w):
-        d = self._d
-        class _Roll:
-            def mean(s_self):
-                out = []
-                for i in range(len(d)):
-                     seg = [x for x in d[max(0, i-w+1):i+1] if x == x]
-                     out.append(sum(seg)/len(seg) if seg else float('nan'))
-                return _MiniSeries(out)
-        return _Roll()
-    def cumsum(self):
-        out, s = [], 0.0
-        for a in self._d:
-            if a == a: s += a
-            out.append(s)
-        return _MiniSeries(out)
-    def min(self):
-        v = [a for a in self._d if a == a]
-        return min(v) if v else 0.0
-    def max(self):
-        v = [a for a in self._d if a == a]
-        return max(v) if v else 0.0
-    def mean(self):
-        v = [a for a in self._d if a == a]
-        return sum(v)/len(v) if v else 0.0
-    def idxmin(self):
-        v = [(a, i) for i, a in enumerate(self._d) if a == a]
-        return min(v)[1] if v else 0
-    def idxmax(self):
-        v = [(a, i) for i, a in enumerate(self._d) if a == a]
-        return max(v)[1] if v else 0
-
-class _MiniDF:
-    def __init__(self, rows=None, columns=None):
-        self.columns = list(columns or ['timestamp','open','high','low','close','volume'])
-        self._data = {c: [] for c in self.columns}
-        if isinstance(rows, dict):
-            for c in self.columns: self._data[c] = list(rows.get(c, []))
-        elif isinstance(rows, list):
-            for r in rows:
-                for i, c in enumerate(self.columns):
-                    self._data[c].append(float(r[i]) if i < len(r) else 0.0)
-    def copy(self):
-        df = _MiniDF(columns=self.columns)
-        for c in self.columns: df._data[c] = list(self._data[c])
-        return df
-    def __len__(self): return len(self._data[self.columns[0]]) if self.columns else 0
-    @property
-    def empty(self): return len(self) == 0
-    def __getitem__(self, key):
-        if isinstance(key, str): return _MiniSeries(self._data[key])
-        if isinstance(key, list):
-            df = _MiniDF(columns=key)
-            for c in key: df._data[c] = list(self._data[c])
-            return df
-        if isinstance(key, _MiniSeries):
-            idxs = [i for i, b in enumerate(key._d) if b]
-            df = _MiniDF(columns=self.columns)
-            for c in self.columns: df._data[c] = [self._data[c][i] for i in idxs]
-            return df
-        return None
-    def __setitem__(self, key, val):
-        if key not in self.columns: self.columns.append(key)
-        self._data[key] = list(val._d if isinstance(val, _MiniSeries) else val)
-        if '_np_c' in self.__dict__: self.__dict__['_np_c'].pop(key, None)
-    @property
-    def iloc(self):
-        parent = self
-        class _Iloc:
-            def __getitem__(s_self, idx):
-                if isinstance(idx, int):
-                    i = idx if idx >= 0 else len(parent) + idx
-                    return {c: parent._data[c][i] for c in parent.columns}
-                if isinstance(idx, slice):
-                    df = _MiniDF(columns=parent.columns)
-                    for c in parent.columns: df._data[c] = parent._data[c][idx]
-                    return df
-        return _Iloc()
-    def reset_index(self, drop=True): return self.copy()
-    def iterrows(self):
-        for i in range(len(self)):
-            yield i, {c: self._data[c][i] for c in self.columns}
-    def max(self, axis=1):
-        n = len(self)
-        return _MiniSeries([max(self._data[c][i] for c in self.columns) for i in range(n)])
-    def min(self, axis=1):
-        n = len(self)
-        return _MiniSeries([min(self._data[c][i] for c in self.columns) for i in range(n)])
-
-class _PandasMock:
-    DataFrame = _MiniDF
-    def concat(self, objs, axis=1):
-        df = _MiniDF(columns=[str(i) for i in range(len(objs))])
-        for i, s in enumerate(objs): df[str(i)] = s
-        return df
-    def to_datetime(self, s, unit='ms', utc=True): raise Exception("skip_dt")
-pd = _PandasMock()
-
-class _BinanceLite:
-    def __init__(self, cfg=None):
-        cfg = cfg or {}
-        self.apiKey = cfg.get('apiKey', '')
-        self.secret = cfg.get('secret', '')
-        self.defaultType = cfg.get('options', {}).get('defaultType', 'future')
-        self.sandbox = False
-    def set_sandbox_mode(self, v): self.sandbox = bool(v)
-    def enable_demo_trading(self, v): self.sandbox = bool(v)
-    def _base(self):
-        if self.defaultType == 'future':
-            return 'https://testnet.binancefuture.com' if self.sandbox else 'https://fapi.binance.com'
-        return 'https://testnet.binance.vision' if self.sandbox else 'https://api.binance.com'
-    def load_markets(self, reload=False):
-        url = f"{self._base()}/{'fapi/v1/exchangeInfo' if self.defaultType=='future' else 'api/v3/exchangeInfo'}"
-        r = requests.get(url, timeout=10).json()
-        out = {}
-        for s in r.get('symbols', []):
-            if s.get('quoteAsset') != 'USDT': continue
-            sym = f"{s['baseAsset']}/USDT"
-            out[sym] = {'id': s['symbol'], 'base': s['baseAsset'], 'quote': 'USDT', 'active': s.get('status')=='TRADING', 'spot': self.defaultType!='future', 'future': self.defaultType=='future', 'swap': self.defaultType=='future', 'linear': True}
-        return out
-    def fetch_tickers(self):
-        url = f"{self._base()}/{'fapi/v1/ticker/24hr' if self.defaultType=='future' else 'api/v3/ticker/24hr'}"
-        r = requests.get(url, timeout=10).json()
-        out = {}
-        if isinstance(r, list):
-            for t in r:
-                s = t.get('symbol', '')
-                if s.endswith('USDT'):
-                    sym = f"{s[:-4]}/USDT"
-                    out[sym] = {'quoteVolume': float(t.get('quoteVolume') or 0.0), 'last': float(t.get('lastPrice') or 0.0)}
-        return out
-    def fetch_ticker(self, symbol):
-        raw = symbol.split(':')[0].replace('/', '')
-        url = f"{self._base()}/{'fapi/v1/ticker/price' if self.defaultType=='future' else 'api/v3/ticker/price'}?symbol={raw}"
-        r = requests.get(url, timeout=5).json()
-        p = float(r.get('price') or 0.0)
-        return {'last': p, 'close': p, 'info': r}
-    def fetch_ohlcv(self, symbol, timeframe='15m', limit=300):
-        raw = symbol.split(':')[0].replace('/', '')
-        url = f"{self._base()}/{'fapi/v1/klines' if self.defaultType=='future' else 'api/v3/klines'}?symbol={raw}&interval={timeframe}&limit={limit}"
-        r = requests.get(url, timeout=10).json()
-        return [[float(x[0]), float(x[1]), float(x[2]), float(x[3]), float(x[4]), float(x[5])] for x in r]
-    def amount_to_precision(self, symbol, amount): return round(float(amount), 5)
-    def price_to_precision(self, symbol, price): return round(float(price), 6)
-    def fetch_balance(self): return {'USDT': {'free': 0.0, 'total': 0.0}}
-    def set_leverage(self, lev, symbol): pass
-    def set_margin_mode(self, mode, symbol): pass
-    def cancel_all_orders(self, symbol): pass
-    def create_market_buy_order(self, symbol, amount, params=None): pass
-    def create_market_sell_order(self, symbol, amount, params=None): pass
-    def create_order(self, symbol, type, side, amount, price=None, params=None): pass
-
-class _CCXTMock:
-    binance = _BinanceLite
-ccxt = _CCXTMock()
 
 _HTTP_SES = requests.Session()
 F, I, R, X, M, N, L, A, G = (float, isinstance, round, Exception, max, min, len, abs, range)
 jC, aR, cR, eD = (('Segoe UI', 10, 'bold'), ('Segoe UI', 11, 'bold'), ('Segoe UI', 12, 'bold'), ('Segoe UI', 13, 'bold'))
+
+# Android Kalıcı Depolama Dizini Ayarı
+ANDROID_VERI_DIZINI = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.abspath(".")
+try:
+    os.makedirs(ANDROID_VERI_DIZINI, exist_ok=True)
+except Exception:
+    ANDROID_VERI_DIZINI = os.path.abspath(".")
+
+def _f(d,c,i=-2):
+ try:
+  m=d.__dict__.get('_np_c')
+  if m is None:m={};d.__dict__['_np_c']=m
+  a=m.get(c)
+  if a is None:
+   if c not in d.columns:return 0.0
+   a=d[c].to_numpy(dtype=F,copy=False);m[c]=a
+  v=F(a[i])
+  return 0.0 if v!=v else v
+ except X:return 0.0
+def _r(r,*cs):
+ return tuple((F(r[c])for c in cs))
+PIYASA_MODU='her_ikisi';TESTNET_AKTIF=True;KALDIRAC=5;MARJIN_TIPI='ISOLATED';cQ=True;ae=0;bH=150000.0;bs=1000.0;dd=0.01;ISLEM_BASI_RISK_USDT=10.0;dL=2.0;RISK_ODUL_ORANI=3.0;NIHAI_TP_RR=4.0;KISMI_KAR_AL_AKTIF=True;TOPLAM_KAR_KAPAT_USDT=None;MAKS_MARJIN_USDT=100.0;aW=0.0018;a4=6;MIN_CONFLUENCE_SKORU=70;dM=5.5;bI=True;dj=14;eC=1.5;MTF_SABLONLARI={'4h / 1h / 15m (Swing)':('4h','1h','15m'),'4h / 1h / 5m (Alfa Pine MTF)':('4h','1h','5m'),'4h / 30m / 3m (Sniper)':('4h','30m','3m'),'1d / 2h / 15m (Pozisyon)':('1d','2h','15m'),'1d / 1h / 5m (Günlük MTF)':('1d','1h','5m'),'1M / 2h / 15m (Aylık Macro)':('1M','2h','15m'),'1d / 4h / 1h (Pozisyon)':('1d','4h','1h'),'2h / 30m / 5m (Gün İçi)':('2h','30m','5m'),'1h / 15m / 5m (Intraday)':('1h','15m','5m'),'15m / 5m / 1m (Scalp)':('15m','5m','1m')};AKTIF_MTF_SABLONU='4h / 1h / 15m (Swing)';HTF_ZAMAN_DILIMLERI=['4h','1d','1M'];MTF_ZAMAN_DILIMLERI=['2h','1h','30m'];LTF_ZAMAN_DILIMLERI=['15m','5m','3m'];TUM_ZAMAN_DILIMLERI=['1m','3m','5m','15m','30m','1h','2h','4h','6h','12h','1d','1M'];HTF_PERIYOT='4h';MTF_PERIYOT='1h';LTF_PERIYOT='15m';SWING_PENCERE=5;RISK_SEVIYESI_SECENEKLERI={'Düşük Risk (Skor 80+ | 0.75x)':(80,0.75),'Orta Risk (Skor 70+ | 1.0x)':(70,1.0),'Yüksek Risk (Skor 60+ | 1.35x)':(60,1.35),'Agresif Risk (Skor 50+ | 1.75x)':(50,1.75),'Özel (Manuel Skor & Risk)':(MIN_CONFLUENCE_SKORU,1.0)};AKTIF_RISK_SEVIYESI='Orta Risk (Skor 70+ | 1.0x)';RISK_CARPANI=1.0;ISLEM_TARZI_MODU='DayTrade';STOP_BELIRLEME_SECENEKLERI=['HTF Yapıya Göre (Dip/Tepe & OB)','LTF Yapıya Göre (Kırılım/Mum & POI)','Otomatik (Duruma Göre HTF/LTF)'];STOP_BELIRLEME_MODU='HTF Yapıya Göre (Dip/Tepe & OB)';
+def mtf_sablonu_uygula(aA):
+ global AKTIF_MTF_SABLONU,HTF_PERIYOT,MTF_PERIYOT,LTF_PERIYOT,ISLEM_TARZI_MODU,RISK_ODUL_ORANI,NIHAI_TP_RR,a4
+ if aA in MTF_SABLONLARI:AKTIF_MTF_SABLONU=aA;HTF_PERIYOT,MTF_PERIYOT,LTF_PERIYOT=MTF_SABLONLARI[aA]
+ elif'/'in str(aA):
+  of=[p.strip().split()[0]for p in str(aA).split('/')]
+  if L(of)==3:AKTIF_MTF_SABLONU=str(aA);HTF_PERIYOT,MTF_PERIYOT,LTF_PERIYOT=(of[0],of[1],of[2])
+ if'Scalp'in str(AKTIF_MTF_SABLONU)or LTF_PERIYOT in('1m','3m')or HTF_PERIYOT in('15m','30m'):
+  ISLEM_TARZI_MODU='Scalp';RISK_ODUL_ORANI=1.5;NIHAI_TP_RR=2.5;a4=10
+ else:
+  ISLEM_TARZI_MODU='DayTrade';RISK_ODUL_ORANI=3.0;NIHAI_TP_RR=4.0;a4=6
+ return(HTF_PERIYOT,MTF_PERIYOT,LTF_PERIYOT)
+am=['BTC/USDT','ETH/USDT','SOL/USDT','BNB/USDT','AVAX/USDT','ARB/USDT','LINK/USDT','ADA/USDT','XRP/USDT','DOGE/USDT','SUI/USDT','OP/USDT'];bo={'USDC','FDUSD','TUSD','BUSD','DAI','USDP','EUR','AEUR','USDT','UST','USTC','PAXG','WBTC','BTCST','USD1','RLUSD','USDE','PYUSD','USDD','FRAX','LUSD','GUSD','XAU'};API_KEY='jerhczXTaGA2GJ41NZfcEv8CZ7plOhtri7wE8SvkL5uKGEvdA2zLxyo5RmtrCiY2';API_SECRET='FyIdXFGMinl6AyzyDEtlG6Et007ih5lHHNtNRHiPJpHfzf8VmJQEiAmpxkuYQ6XV';TELEGRAM_AKTIF=True;TELEGRAM_TOKEN='8547267304:AAGgiawKO7z9qLIrkgUFPnyklEDslJk_KsQ';TELEGRAM_CHAT_ID='485280043';ab=[];bk=list(am);acik_islemler={};a1={};analiz_hafizasi={};an={'1h':{},'15m':{}};S=bs;aQ=0.0;T=0.0;V=0.0;ay=0.0;aq=0.0;W=0.0;lG=0.0;bot_calisiyor=False;bE=0;au=0;aC=None;aw=None;aG=None;ao=None;cm=None;
+def borsa_kur(b6=PIYASA_MODU,hj=TESTNET_AKTIF):
+ global aC,aw,aG,ao,cm,PIYASA_MODU,TESTNET_AKTIF;PIYASA_MODU,TESTNET_AKTIF=(b6,hj)
+ def _mk(t,o8=False):
+  qX={'enableRateLimit':True,'timeout':10000,'options':{'defaultType':t,'fetchCurrencies':False,'adjustForTimeDifference':True}}
+  if o8:qX.update({'apiKey':API_KEY,'secret':API_SECRET})
+  return ccxt.binance(qX)
+ aC,aw,aG,ao=(_mk('spot'),_mk('future'),_mk('spot',True),_mk('future',True))
+ if TESTNET_AKTIF:
+  for fn in[lambda:aG.set_sandbox_mode(True),lambda:ao.enable_demo_trading(True)if hasattr(ao,'enable_demo_trading')else None]:
+   try:fn()
+   except X:pass
+ cm=aC if b6=='spot'else aw;return(aG,ao)
+def borsa_baglantisi_olustur(dk='future'):
+ borsa_kur(dk,TESTNET_AKTIF);return cm
+bd=os.path.join(ANDROID_VERI_DIZINI,'binance_api_config.json');ap=os.path.join(ANDROID_VERI_DIZINI,'islem_gecmisi.json');aN=os.path.join(ANDROID_VERI_DIZINI,'acik_islemler_durum.json');ah=[];
+def _api_yukle():
+ global API_KEY,API_SECRET,TESTNET_AKTIF,TELEGRAM_TOKEN,TELEGRAM_CHAT_ID,GITHUB_REPO_ADRESI,GITHUB_TOKEN,STOP_BELIRLEME_MODU
+ try:
+  if os.path.exists(bd):
+   with open(bd,'r',encoding='utf-8')as f:d=json.load(f)
+   API_KEY=str(d.get('api_key',API_KEY)).strip();API_SECRET=str(d.get('api_secret',API_SECRET)).strip()
+   if'testnet'in d:TESTNET_AKTIF=bool(d['testnet'])
+   TELEGRAM_TOKEN=str(d.get('telegram_token',TELEGRAM_TOKEN)).strip();TELEGRAM_CHAT_ID=str(d.get('telegram_chat_id',TELEGRAM_CHAT_ID)).strip()
+   if'github_repo'in d:GITHUB_REPO_ADRESI=str(d.get('github_repo',GITHUB_REPO_ADRESI)).strip()
+   if'github_token'in d:GITHUB_TOKEN=str(d.get('github_token',GITHUB_TOKEN)).strip()
+   if'stop_modu'in d:STOP_BELIRLEME_MODU=str(d.get('stop_modu',STOP_BELIRLEME_MODU)).strip()
+ except X:pass
+def _ig_yukle():
+ global ah
+ try:
+  if os.path.exists(ap):
+   with open(ap,'r',encoding='utf-8')as f:
+    d=json.load(f)
+    if I(d,list):ah=d
+ except X:pass
+def _ak_kaydet():
+ try:
+  nQ={k:v for k,v in acik_islemler.items()if I(v,dict)}
+  with open(aN,'w',encoding='utf-8')as f:json.dump({'acik_islemler':nQ,'demo_vadeli_bakiye':S,'gerceklesen_pnl':W},f,ensure_ascii=False)
+  if 'bulut_durum_gonder' in globals() and GITHUB_TOKEN:
+   threading.Thread(target=bulut_durum_gonder, daemon=True).start()
+ except X:pass
+def _ak_yukle():
+ global acik_islemler,S,W
+ try:
+  if os.path.exists(aN):
+   with open(aN,'r',encoding='utf-8')as f:d=json.load(f)
+   if I(d,dict):
+    if I(d.get('acik_islemler'),dict):acik_islemler.update(d['acik_islemler'])
+    if'demo_vadeli_bakiye'in d:S=F(d['demo_vadeli_bakiye'])
+    if'gerceklesen_pnl'in d:W=F(d['gerceklesen_pnl'])
+ except X:pass
+def _ig_kaydet(J,jD,bt,lH,lI,Y,fq,eE,dl,lJ=''):
+ global ah;k={'tarih':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'sembol':f"{('FUT' if jD=='future' else 'SPOT')}:{J.split(':')[0]}",'yon':bt,'giris':R(F(lH),6),'cikis':R(F(lI),6),'miktar':R(F(Y),6),'pnl_usdt':R(F(fq),2),'pnl_yuzde':R(F(eE),2),'neden':dl,'model':str(lJ)[:80]};ah.insert(0,k)
+ try:
+  with open(ap,'w',encoding='utf-8')as f:json.dump(ah[:500],f,ensure_ascii=False)
+ except X:pass
+ return k
+_api_yukle();_ig_yukle();_ak_yukle();borsa_kur(PIYASA_MODU,TESTNET_AKTIF);
+def veri_ist(D):
+ return aC if D=='spot'else aw
+def emir_ist(D):
+ return aG if D=='spot'else ao
+def anahtar_yap(J,D):
+ return f"{('FUT' if D=='future' else 'SPOT')}:{J.split(':')[0]}"
+def tek_borsa_paritelerini_cek(D):
+ a9=veri_ist(D);hk=a9.load_markets(True)
+ try:o9=a9.fetch_tickers()
+ except X:o9={}
+ nI=[]
+ for qY,m in hk.items():
+  mR,mS=(m.get('base',''),m.get('quote',''))
+  if not m.get('active',True)or mS!='USDT'or mR in bo or any((mR.endswith(ek)for ek in('UP','DOWN','BULL','BEAR'))):continue
+  if D=='future'and(not(m.get('linear',True)and(m.get('swap',False)or m.get('future',False)))or'_'in m.get('id','')):continue
+  elif D!='future'and not m.get('spot',True):continue
+  iz=F(o9.get(qY,{}).get('quoteVolume')or 0.0)
+  if o9 and 0<iz<bH:continue
+  nI.append((qY,D,iz))
+ nI.sort(key=lambda x:x[2],reverse=True);return nI[:ae]if ae>0 else nI
+def pariteleri_yukle(ba=None):
+ global ab,bk,au;nJ,qZ,fE=([],0,0)
+ for pa,pb in[('future','Vadeli (Futures)'),('spot','Spot')]:
+  if PIYASA_MODU in(pa,'her_ikisi'):
+   try:
+    ad=tek_borsa_paritelerini_cek(pa);nJ.extend(ad)
+    if pa=='future':qZ=L(ad)
+    else:fE=L(ad)
+   except X as e:
+    if ba:ba(f'⚠️ {pb} parite listesi çekilirken uyarı: {e}')
+ if nJ:
+  nJ.sort(key=lambda x:x[2],reverse=True);ab=[(s,p)for s,p,_ in nJ];bk=[s for s,_ in ab];au=L(ab)
+  if ba:ba(f'🌐 Otomatik Borsa Taraması Hazır -> Vadeli: {qZ} parite | Spot: {fE} parite | Toplam: {au} aktif USDT paritesi taranacak!')
+  return bk
+ ab=[(s,'future')for s in am]+[(s,'spot')for s in am]if PIYASA_MODU=='her_ikisi'else[(s,'spot'if PIYASA_MODU=='spot'else'future')for s in am];bk=[s for s,_ in ab];au=L(ab);return bk
+def tg_bildir(fs):
+ if TELEGRAM_AKTIF and TELEGRAM_TOKEN:
+  try:requests.post(f'https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage',json={'chat_id':TELEGRAM_CHAT_ID,'text':fs,'parse_mode':'HTML'},timeout=5)
+  except X as e:print(f'Telegram Hatası: {e}')
+def bakiye_oku(a9):
+ try:
+  b=a9.fetch_balance();rf,og=(F(b.get('USDT',{}).get('free',0.0)or 0.0),F(b.get('USDT',{}).get('total',0.0)or 0.0))
+  if og==0.0 and'info'in b:og=F(b.get('info',{}).get('totalWalletBalance',0.0)or 0.0);rf=F(b.get('info',{}).get('availableBalance',0.0)or og)
+  return(rf,og)
+ except X:return(0.0,0.0)
+def bakiye_getir():
+ global ay,aq
+ if TESTNET_AKTIF:
+  r_fut=sum((F(d.get('miktar')or 0.0)*F(d.get('giris')or 0.0)/M(F(d.get('kaldirac')or KALDIRAC),1.0)for d in acik_islemler.values()if I(d,dict)and d.get('piyasa','future')=='future'))
+  r_spot=sum((F(d.get('miktar')or 0.0)*F(d.get('giris')or 0.0)for d in acik_islemler.values()if I(d,dict)and d.get('piyasa')=='spot'))
+  toplam_sim=M(0.0,F(S))
+  serbest_sim=M(0.0,toplam_sim-r_fut-r_spot)
+  ay=0.0 if PIYASA_MODU=='future'else serbest_sim*0.5
+  aq=serbest_sim if PIYASA_MODU=='future'else serbest_sim*0.5
+  return(serbest_sim,toplam_sim)
+ simdi_b=time.time()
+ if simdi_b-getattr(bakiye_getir,'_son_ts',0.0)<10.0 and(V>0 or T>0):return(V,T)
+ jS,rV=bakiye_oku(aG)if PIYASA_MODU in('spot','her_ikisi')else(0.0,0.0)
+ nR,pc=bakiye_oku(ao)if PIYASA_MODU in('future','her_ikisi')else(0.0,0.0)
+ bakiye_getir._son_ts=simdi_b
+ ay,aq=(jS,nR);return(jS+nR,rV+pc)
+def veri_cek(J,bN,limit=300,D=None):
+ oP=veri_ist(D if D else'spot'if PIYASA_MODU=='spot'else'future').fetch_ohlcv(J,timeframe=bN,limit=limit);df=indiktorleri_ekle(pd.DataFrame(oP,columns=['timestamp','open','high','low','close','volume']));eF=J.split(':')[0]
+ if eF in('BTC/USDT','ETH/USDT','SOL/USDT'):an.setdefault(bN,{})[eF]=df
+ return df
+def _fmt_f(v):
+ v=F(v or 0.0);av=A(v)
+ return f'{v:.6f}'if 0<av<1.0 else f'{v:.4f}'if av<100.0 else f'{v:.2f}'
+def _fmt_pnl(v):
+ v=F(v or 0.0);av=A(v)
+ return f'{v:+.4f} USDT'if 0<av<0.05 else f'{v:+.2f} USDT'
+def anlik_fiyat_getir(J,D='future'):
+ raw_s=str(J).split(':')[0].replace('/','').upper()
+ urls=(f'https://fapi.binance.com/fapi/v1/ticker/price?symbol={raw_s}',f'https://api.binance.com/api/v3/ticker/price?symbol={raw_s}')if D=='future'else(f'https://api.binance.com/api/v3/ticker/price?symbol={raw_s}',f'https://fapi.binance.com/fapi/v1/ticker/price?symbol={raw_s}')
+ for u in urls:
+  try:
+   r=_HTTP_SES.get(u,timeout=1.5)
+   if r.status_code==200:
+    p=F(r.json().get('price')or 0.0)
+    if p>0:return p
+  except X:pass
+ cl_ist=veri_ist(D)
+ for s_try in(J,J.split(':')[0],f"{J.split(':')[0]}:USDT"if D=='future'and':'not in J else J):
+  try:
+   tk=cl_ist.fetch_ticker(s_try)
+   pz=tk.get('last')or tk.get('close')or tk.get('bid')or tk.get('ask')or tk.get('info',{}).get('lastPrice')
+   if pz is not None and F(pz)>0:return F(pz)
+  except X:pass
+ try:
+  ak_k=anahtar_yap(J,D)
+  if ak_k in a1 and F(a1[ak_k].get('fiyat')or 0)>0:return F(a1[ak_k]['fiyat'])
+  if ak_k in analiz_hafizasi and'df_15m_full'in analiz_hafizasi[ak_k]:return _f(analiz_hafizasi[ak_k]['df_15m_full'],'close',-1)
+ except X:pass
+ raise X(f'{J} anlik fiyat alinamadi')
+def islem_kar_zarar_hesapla(O,bq):
+ if not I(bq,dict):return(0.0,0.0,0.0,0.0,0.0,1,0.0)
+ bt=str(bq.get('yon','LONG')).upper()
+ b0=bq.get('piyasa','spot'if str(O).startswith('SPOT:')else'future')
+ bZ=F(bq.get('giris')or 0.0)
+ bM=F(bq.get('anlik')or 0.0)
+ if bM<=0 and O in a1 and F(a1[O].get('fiyat')or 0.0)>0:bM=F(a1[O]['fiyat'])
+ if bM<=0:bM=bZ
+ k1=M(1,int(F(bq.get('kaldirac')or(KALDIRAC if b0=='future'else 1))))
+ Y=F(bq.get('miktar')or 0.0)
+ sl=F(bq.get('sl')or 0.0)
+ if Y<=0 and bZ>0:
+  Y=R((MAKS_MARJIN_USDT*k1)/bZ,6)
+  bq['miktar']=Y
+ fk=(Y*bZ)/M(k1,1)if bZ>0 else F(bq.get('marjin_usdt')or MAKS_MARJIN_USDT)
+ k0=F(bq.get('risk_usdt')or(A(bZ-sl)*Y if sl>0 else ISLEM_BASI_RISK_USDT))
+ fark=(bZ-bM)if bt=='SHORT'else(bM-bZ)
+ gW=fark*Y
+ nD=(fark/M(bZ,1e-09))*100.0*k1 if bZ>0 else 0.0
+ bq['anlik']=bM;bq['pnl_usdt']=R(gW,6);bq['pnl_yuzde']=R(nD,3);bq['marjin_usdt']=R(fk,2)
+ return(gW,nD,bZ,bM,fk,k1,k0)
+def indiktorleri_ekle(df):
+ df=df.copy();tr=pd.concat([df['high']-df['low'],(df['high']-df['close'].shift()).abs(),(df['low']-df['close'].shift()).abs()],axis=1).max(axis=1);df['atr']=tr.rolling(dj).mean().bfill();d=df['close'].diff();rs=d.where(d>0,0.0).rolling(14).mean()/(-d.where(d<0,0.0)).rolling(14).mean().replace(0,np.nan);df['rsi']=(100.0-100.0/(1.0+rs)).fillna(50.0);qH=(df['high']+df['low'])/2.0;df['ao']=(qH.rolling(5).mean()-qH.rolling(34).mean()).fillna(0.0);df['cvd']=((df['close']-df['low']-(df['high']-df['close']))/(df['high']-df['low']).replace(0,1e-09)*df['volume']).cumsum();return df
+def _mum_kapanis_onayli_tepe_mi(df,i,E):
+ h,l,o,c=(_f(df,'high',i),_f(df,'low',i),_f(df,'open',i),_f(df,'close',i))
+ govde_ust=M(o,c);govde=A(c-o);ust_igne=h-govde_ust
+ if ust_igne<=M(govde*1.8,E*1.1):return True
+ w1=M(0,i-3);w2=N(L(df)-1,i+3)
+ esik=govde_ust+ust_igne*0.45
+ return any((_f(df,'close',j)>=esik for j in G(w1,w2+1)if j!=i))
+def _mum_kapanis_onayli_dip_mi(df,i,E):
+ h,l,o,c=(_f(df,'high',i),_f(df,'low',i),_f(df,'open',i),_f(df,'close',i))
+ govde_alt=N(o,c);govde=A(c-o);alt_igne=govde_alt-l
+ if alt_igne<=M(govde*1.8,E*1.1):return True
+ w1=M(0,i-3);w2=N(L(df)-1,i+3)
+ esik=govde_alt-alt_igne*0.45
+ return any((_f(df,'close',j)<=esik for j in G(w1,w2+1)if j!=i))
+def _net_sert_tepe_mi(df,i,E,n=SWING_PENCERE):
+ if not _mum_kapanis_onayli_tepe_mi(df,i,E):return False
+ if n<=1:return True
+ ct=L(df);h=_f(df,'high',i);l_0=_f(df,'low',i);l_arr=df.__dict__['_np_c']['low'];w=M(3,n+1)
+ b1=M(0,i-w);b2=N(ct-1,i+w)
+ min_sol=F(l_arr[b1:i+1].min())if i>b1 else l_0
+ min_sag=F(l_arr[i:b2+1].min())if b2>i else l_0
+ esik=E*(1.55 if n>=4 else 1.1)
+ sag_esik=esik*0.5 if i>=ct-3 else esik
+ return(h-min_sol)>=esik and(h-min_sag)>=sag_esik
+def _net_sert_dip_mi(df,i,E,n=SWING_PENCERE):
+ if not _mum_kapanis_onayli_dip_mi(df,i,E):return False
+ if n<=1:return True
+ ct=L(df);l=_f(df,'low',i);h_0=_f(df,'high',i);h_arr=df.__dict__['_np_c']['high'];w=M(3,n+1)
+ b1=M(0,i-w);b2=N(ct-1,i+w)
+ max_sol=F(h_arr[b1:i+1].max())if i>b1 else h_0
+ max_sag=F(h_arr[i:b2+1].max())if b2>i else h_0
+ esik=E*(1.55 if n>=4 else 1.1)
+ sag_esik=esik*0.5 if i>=ct-3 else esik
+ return(max_sol-l)>=esik and(max_sag-l)>=sag_esik
+def ham_swing_noktalarini_bul(df,n=SWING_PENCERE,cn=False):
+ aa,ar=([],[])
+ n_eff=3 if n>=4 else M(1,n)
+ if L(df)<2*n_eff+2:return(aa,ar)
+ E=M(_f(df,'atr',-2)if'atr'in df.columns else _f(df,'close',-2)*0.002,_f(df,'close',-2)*0.001)
+ _f(df,'high',0);_f(df,'low',0)
+ h_np=df.__dict__['_np_c']['high'];l_np=df.__dict__['_np_c']['low']
+ for i in G(n_eff,L(df)-n_eff):
+  if h_np[i]==h_np[i-n_eff:i+n_eff+1].max()and(not cn or(l_np[i]>=l_np[i-1]and l_np[i]>=l_np[i+1])):
+   if _net_sert_tepe_mi(df,i,E,n):aa.append((i,F(h_np[i])))
+  if l_np[i]==l_np[i-n_eff:i+n_eff+1].min()and(not cn or(h_np[i]<=h_np[i-1]and h_np[i]<=h_np[i+1])):
+   if _net_sert_dip_mi(df,i,E,n):ar.append((i,F(l_np[i])))
+ if n>=2 and(L(aa)<2 or L(ar)<2):
+  aa,ar=([],[])
+  for i in G(n_eff,L(df)-n_eff):
+   if h_np[i]==h_np[i-n_eff:i+n_eff+1].max()and _mum_kapanis_onayli_tepe_mi(df,i,E):aa.append((i,F(h_np[i])))
+   if l_np[i]==l_np[i-n_eff:i+n_eff+1].min()and _mum_kapanis_onayli_dip_mi(df,i,E):ar.append((i,F(l_np[i])))
+ return(aa,ar)
+def _aralikta_gecerli_tepe_bul(df,bas,bit,E):
+ Bas=M(0,int(bas));Bit=N(L(df)-1,int(bit))
+ if Bit<Bas:return(Bas,_f(df,'high',Bas))
+ en_i,en_v=(None,-1e18)
+ for j in G(Bas,Bit+1):
+  hj=_f(df,'high',j)
+  if _mum_kapanis_onayli_tepe_mi(df,j,E)and hj>en_v:en_i,en_v=(j,hj)
+ if en_i is None:
+  for j in G(Bas,Bit+1):
+   bj=M(_f(df,'open',j),_f(df,'close',j))
+   if bj>en_v:en_i,en_v=(j,_f(df,'high',j))
+ return(en_i if en_i is not None else Bas,en_v if en_i is not None else _f(df,'high',Bas))
+def _aralikta_gecerli_dip_bul(df,bas,bit,E):
+ Bas=M(0,int(bas));Bit=N(L(df)-1,int(bit))
+ if Bit<Bas:return(Bas,_f(df,'low',Bas))
+ en_i,en_v=(None,1e18)
+ for j in G(Bas,Bit+1):
+  lj=_f(df,'low',j)
+  if _mum_kapanis_onayli_dip_mi(df,j,E)and lj<en_v:en_i,en_v=(j,lj)
+ if en_i is None:
+  for j in G(Bas,Bit+1):
+   bj=N(_f(df,'open',j),_f(df,'close',j))
+   if bj<en_v:en_i,en_v=(j,_f(df,'low',j))
+ return(en_i if en_i is not None else Bas,en_v if en_i is not None else _f(df,'low',Bas))
+def _sert_salinim_onayli_mi(df,bas_i,bas_v,bit_i,bit_v,E,n=2,ana_bacak=0.0):
+ genlik=A(F(bit_v)-F(bas_v));bar_fark=M(1,A(int(bit_i)-int(bas_i)))
+ min_genlik=E*(1.85 if n>=4 else 1.3)
+ if genlik<min_genlik:return False
+ if ana_bacak>E*3.2 and genlik<N(ana_bacak*0.18,E*2.6):return False
+ min_b=3 if n>=4 else 2
+ if bar_fark<min_b and genlik<min_genlik*1.75:return False
+ B1,B2=M(0,N(int(bas_i),int(bit_i))),N(L(df)-1,M(int(bas_i),int(bit_i)))
+ dusus_mu=F(bit_v)<F(bas_v)
+ zit_say=sum((1 for j in G(B1+1,B2+1)if(_f(df,'close',j)<_f(df,'open',j)if dusus_mu else _f(df,'close',j)>_f(df,'open',j))))
+ max_mum=M((A(_f(df,'close',j)-_f(df,'open',j))for j in G(B1,B2+1)),default=0.0)
+ if n>=4 and zit_say<2 and genlik<min_genlik*1.55:return False
+ return max_mum>=E*0.42 or genlik>=min_genlik*1.3
+def _qml_yapisi_bul(uH,uL,yon=None,df=None):
+ # QML olması için onaylı ZigZag üzerinde en az 3 salınım (4 onaylı nokta: p0 -> p1 -> p2 -> p3 ve p0 gerçek swing) şarttır!
+ zz=sorted([(int(i),F(v),'H')for i,v in uH]+[(int(i),F(v),'L')for i,v in uL],key=lambda x:x[0])
+ temiz=[]
+ for item in zz:
+  if not temiz or temiz[-1][2]!=item[2]:temiz.append(item)
+  else:
+   if item[2]=='H'and item[1]>=temiz[-1][1]:temiz[-1]=item
+   elif item[2]=='L'and item[1]<=temiz[-1][1]:temiz[-1]=item
+ if L(temiz)<4:return None
+ bull_qml,bear_qml=(None,None)
+ bull_any,bear_any=(None,None)
+ for m in G(L(temiz)-1,2,-1):
+  p0,p1,p2,p3=(temiz[m-3],temiz[m-2],temiz[m-1],temiz[m])
+  if p0[0]<=0 and m==3:continue
+  # Bullish QML Şablonu (En az 3 salınım): Sol Dip (L1: p0) -> Tepe (H1/CHoCH: p1) -> Daha Düşük Dip / Baş (LL: p2 < p0) -> CHoCH Kırılımı (HH: p3 > p1) => QML = p0 (L1)
+  if p0[2]=='L'and p1[2]=='H'and p2[2]=='L'and p3[2]=='H':
+   if p2[1]<p0[1]and p3[1]>p1[1]and p1[1]>p0[1]:
+    cand=(int(p0[0]),R(F(p0[1]),6),int(p2[0]),R(F(p2[1]),6),int(p1[0]),R(F(p1[1]),6),int(p3[0]),R(F(p3[1]),6))
+    if bull_any is None:bull_any=cand
+    sonraki_daha_dusuk=any((x[1]<p2[1]for x in temiz[m+1:]if x[2]=='L'))
+    if bull_qml is None and not sonraki_daha_dusuk and(df is None or F(df['low'].iloc[p3[0]:].min())>=p2[1]):
+     bull_qml=cand
+  # Bearish QML Şablonu (En az 3 salınım): Sol Tepe (H1: p0) -> Dip (L1/CHoCH: p1) -> Daha Yüksek Tepe / Baş (HH: p2 > p0) -> CHoCH Kırılımı (LL: p3 < p1) => QML = p0 (H1)
+  if p0[2]=='H'and p1[2]=='L'and p2[2]=='H'and p3[2]=='L':
+   if p2[1]>p0[1]and p3[1]<p1[1]and p0[1]>p1[1]:
+    cand=(int(p0[0]),R(F(p0[1]),6),int(p2[0]),R(F(p2[1]),6),int(p1[0]),R(F(p1[1]),6),int(p3[0]),R(F(p3[1]),6))
+    if bear_any is None:bear_any=cand
+    sonraki_daha_yuksek=any((x[1]>p2[1]for x in temiz[m+1:]if x[2]=='H'))
+    if bear_qml is None and not sonraki_daha_yuksek and(df is None or F(df['high'].iloc[p3[0]:].max())<=p2[1]):
+     bear_qml=cand
+ b_sec=bull_qml or bull_any
+ br_sec=bear_qml or bear_any
+ if yon=='BULLISH':return b_sec or br_sec
+ if yon=='BEARISH':return br_sec or b_sec
+ if bull_qml and bear_qml:return bull_qml if bull_qml[6]>=bear_qml[6]else bear_qml
+ if bull_qml or bear_qml:return bull_qml or bear_qml
+ if b_sec and br_sec:return b_sec if b_sec[6]>=br_sec[6]else br_sec
+ return b_sec or br_sec
+def _kysy_ltf_swing_analizi(df,n=2,cn=False):
+ rH,rL=ham_swing_noktalarini_bul(df,n,cn);mt={'kysy_onay':False,'bos_list':[],'elenen_highs':[],'elenen_lows':[],'elenen_sayi':0,'son_kirilim_tipi':'YOK','son_kirilim_yon':'NOTR','son_kirilim_seviye':None,'son_kirilim_idx':None,'aktif_aralik_kirildi':False,'qml_seviyesi':None,'qml_idx':None,'bull_qml_meta':None,'bear_qml_meta':None}
+ if L(df)<8 or L(rH)<1 or L(rL)<1:return([],[],mt)
+ E=M(_f(df,'atr',-2)if'atr'in df.columns else _f(df,'close',-2)*0.002,_f(df,'close',-2)*0.001)
+ n_piv=3 if n>=4 else M(1,n)
+ min_pb=E*(1.85 if n>=4 else 1.3)
+ min_bar=3 if n>=4 else 2
+ if rH[0][0]>=min_bar:
+  i0_l,v0_l=_aralikta_gecerli_dip_bul(df,0,rH[0][0]-1,E)
+  if(rH[0][1]-v0_l)>=min_pb*0.85 and(not rL or i0_l<rL[0][0]):rL.insert(0,(i0_l,v0_l))
+ if rL[0][0]>=min_bar:
+  i0_h,v0_h=_aralikta_gecerli_tepe_bul(df,0,rL[0][0]-1,E)
+  if(v0_h-rL[0][1])>=min_pb*0.85 and(not rH or i0_h<rH[0][0]):rH.insert(0,(i0_h,v0_h))
+ rH_map={i:v for i,v in rH};rL_map={i:v for i,v in rL}
+ hi,hv=rH[0];li,lv=rL[0];tr=0;oH,oL,bL=([],[],[]);sI=M(1,N(hi,li)+1);kilit_h,kilit_l=(False,False)
+ for k in G(sI,L(df)):
+  cl,ch,clw=(_f(df,'close',k),_f(df,'high',k),_f(df,'low',k))
+  tepe_onay=_mum_kapanis_onayli_tepe_mi(df,k,E)
+  dip_onay=_mum_kapanis_onayli_dip_mi(df,k,E)
+  aktif_leg=A(hv-lv)
+  if tr==0:
+   if k>hi+min_bar and cl>hv+E*0.12 and tepe_onay:
+    mI,mV=_aralikta_gecerli_dip_bul(df,hi+1,k-1,E)
+    if(hv-mV)>=min_pb*0.85 and(mI-hi)>=min_bar:
+     bI,bV=_aralikta_gecerli_dip_bul(df,0,M(0,hi-1),E)if hi>=min_bar else(mI,mV)
+     yv=ch if tepe_onay else cl
+     if hi>=min_bar and bI<hi and(hv-bV)>=min_pb*0.85:
+      if mV>=bV-E*0.2:
+       oL=[(bI,bV),(mI,mV)];oH=[(hi,hv),(k,yv)]
+       bL.append((k,hv,mI,mV,'BULLISH','BULL_BOS'))
+      else:
+       tI,tV=_aralikta_gecerli_tepe_bul(df,0,M(0,bI-1),E)if bI>=min_bar else(hi,hv)
+       if bI>=min_bar and tI<bI and(tV-bV)>=min_pb*0.85 and tV>hv:
+        oH=[(tI,tV),(hi,hv),(k,yv)];oL=[(bI,bV),(mI,mV)]
+        bL.append((k,hv,mI,mV,'BULLISH','BULL_MSB_CHOCH'))
+       else:
+        oH=[(hi,hv),(k,yv)];oL=[(mI,mV)]
+     else:
+      oH=[(hi,hv),(k,yv)];oL=[(mI,mV)]
+     li,lv=(mI,mV);hi,hv=(k,yv);tr=1;kilit_h=False
+    elif ch>hv:
+     hi,hv=(k,ch)
+   elif k>li+min_bar and cl<lv-E*0.12 and dip_onay:
+    xI,xV=_aralikta_gecerli_tepe_bul(df,li+1,k-1,E)
+    if(xV-lv)>=min_pb*0.85 and(xI-li)>=min_bar:
+     tI,tV=_aralikta_gecerli_tepe_bul(df,0,M(0,li-1),E)if li>=min_bar else(xI,xV)
+     yv=clw if dip_onay else cl
+     if li>=min_bar and tI<li and(tV-lv)>=min_pb*0.85:
+      if xV<=tV+E*0.2:
+       oH=[(tI,tV),(xI,xV)];oL=[(li,lv),(k,yv)]
+       bL.append((k,lv,xI,xV,'BEARISH','BEAR_BOS'))
+      else:
+       bI,bV=_aralikta_gecerli_dip_bul(df,0,M(0,tI-1),E)if tI>=min_bar else(li,lv)
+       if tI>=min_bar and bI<tI and(tV-bV)>=min_pb*0.85 and bV<lv:
+        oL=[(bI,bV),(li,lv),(k,yv)];oH=[(tI,tV),(xI,xV)]
+        bL.append((k,lv,xI,xV,'BEARISH','BEAR_MSB_CHOCH'))
+       else:
+        oL=[(li,lv),(k,yv)];oH=[(xI,xV)]
+     else:
+      oL=[(li,lv),(k,yv)];oH=[(xI,xV)]
+     hi,hv=(xI,xV);li,lv=(k,yv);tr=-1;kilit_l=False
+    elif clw<lv:
+     li,lv=(k,clw)
+   else:
+    if k in rH_map and ch>hv and k<=li+n_piv*4:hi,hv=(k,ch)
+    if k in rL_map and clw<lv and k<=hi+n_piv*4:li,lv=(k,clw)
+  elif tr==1:
+   if not kilit_h:
+    if ch>=hv:
+     hi,hv=(k,ch)
+     if oH:oH[-1]=(hi,hv)
+    elif(k-n_piv in rL_map and k-n_piv>=hi+min_bar and _sert_salinim_onayli_mi(df,hi,hv,k-n_piv,_f(df,'low',k-n_piv),E,n,aktif_leg))or(k>=hi+min_bar and _sert_salinim_onayli_mi(df,hi,hv,k,clw,E,n,aktif_leg)):
+     kilit_h=True
+   if kilit_h and k>hi+min_bar and cl>hv+E*0.10 and tepe_onay:
+    mI,mV=_aralikta_gecerli_dip_bul(df,hi+1,k-1,E)
+    if _sert_salinim_onayli_mi(df,hi,hv,mI,mV,E,n,aktif_leg)and(ch-mV)>=min_pb and(mI-hi)>=min_bar and(k-mI)>=2:
+     if not oL or oL[-1][0]!=mI:oL.append((mI,mV))
+     li,lv=(mI,mV);yv=ch if tepe_onay else cl
+     bL.append((k,hv,li,lv,'BULLISH','BULL_BOS'));hi,hv=(k,yv);oH.append((hi,hv));kilit_h=False
+    elif ch>=hv:
+     hi,hv=(k,ch)
+     if oH:oH[-1]=(hi,hv)
+     kilit_h=False
+   elif kilit_h and ch>hv and not(cl>hv+E*0.10 and tepe_onay):
+    mI,mV=_aralikta_gecerli_dip_bul(df,hi+1,k-1,E)
+    if not(_sert_salinim_onayli_mi(df,hi,hv,mI,mV,E,n,aktif_leg)and(mI-hi)>=min_bar):
+     hi,hv=(k,ch)
+     if oH:oH[-1]=(hi,hv)
+     kilit_h=False
+   elif k>li+min_bar and cl<lv-E*0.12 and dip_onay:
+    xI,xV=_aralikta_gecerli_tepe_bul(df,li+1,k-1,E)if k-1>=li+1 else(hi,hv)
+    if _sert_salinim_onayli_mi(df,xI,xV,k,clw,E,n):
+     if not kilit_h and oH:
+      hi,hv=(xI,xV);oH[-1]=(hi,hv)
+     yv=clw if dip_onay else cl
+     choch_ok=bool(L(oH)>=2 and L(oL)>=2 and(oH[-1][1]>oH[-2][1]or oL[-1][1]>oL[-2][1]))
+     bL.append((k,lv,hi,hv,'BEARISH','BEAR_MSB_CHOCH'if choch_ok else'BEAR_BOS'));li,lv=(k,yv);oL.append((li,lv));tr=-1;kilit_l=False
+  elif tr==-1:
+   if not kilit_l:
+    if clw<=lv:
+     li,lv=(k,clw)
+     if oL:oL[-1]=(li,lv)
+    elif(k-n_piv in rH_map and k-n_piv>=li+min_bar and _sert_salinim_onayli_mi(df,li,lv,k-n_piv,_f(df,'high',k-n_piv),E,n,aktif_leg))or(k>=li+min_bar and _sert_salinim_onayli_mi(df,li,lv,k,ch,E,n,aktif_leg)):
+     kilit_l=True
+   if kilit_l and k>li+min_bar and cl<lv-E*0.10 and dip_onay:
+    xI,xV=_aralikta_gecerli_tepe_bul(df,li+1,k-1,E)
+    if _sert_salinim_onayli_mi(df,li,lv,xI,xV,E,n,aktif_leg)and(xV-clw)>=min_pb and(xI-li)>=min_bar and(k-xI)>=2:
+     if not oH or oH[-1][0]!=xI:oH.append((xI,xV))
+     hi,hv=(xI,xV);yv=clw if dip_onay else cl
+     bL.append((k,lv,hi,hv,'BEARISH','BEAR_BOS'));li,lv=(k,yv);oL.append((li,lv));kilit_l=False
+    elif clw<=lv:
+     li,lv=(k,clw)
+     if oL:oL[-1]=(li,lv)
+     kilit_l=False
+   elif kilit_l and clw<lv and not(cl<lv-E*0.10 and dip_onay):
+    xI,xV=_aralikta_gecerli_tepe_bul(df,li+1,k-1,E)
+    if not(_sert_salinim_onayli_mi(df,li,lv,xI,xV,E,n,aktif_leg)and(xI-li)>=min_bar):
+     li,lv=(k,clw)
+     if oL:oL[-1]=(li,lv)
+     kilit_l=False
+   elif k>hi+min_bar and cl>hv+E*0.12 and tepe_onay:
+    mI,mV=_aralikta_gecerli_dip_bul(df,hi+1,k-1,E)if k-1>=hi+1 else(li,lv)
+    if _sert_salinim_onayli_mi(df,mI,mV,k,ch,E,n):
+     if not kilit_l and oL:
+      li,lv=(mI,mV);oL[-1]=(li,lv)
+     yv=ch if tepe_onay else cl
+     choch_ok=bool(L(oH)>=2 and L(oL)>=2 and(oL[-1][1]<oL[-2][1]or oH[-1][1]<oH[-2][1]))
+     bL.append((k,hv,li,lv,'BULLISH','BULL_MSB_CHOCH'if choch_ok else'BULL_BOS'));hi,hv=(k,yv);oH.append((hi,hv));tr=1;kilit_h=False
+ uH,uL=([],[])
+ for idx,val in oH:
+  if not uH or uH[-1][0]!=idx:uH.append((int(idx),F(val)))
+ for idx,val in oL:
+  if not uL or uL[-1][0]!=idx:uL.append((int(idx),F(val)))
+ hS={x[0]for x in uH};lS={x[0]for x in uL};eH=[(i,v)for i,v in rH if all(A(i-x)>1 for x in hS)];eL=[(i,v)for i,v in rL if all(A(i-x)>1 for x in lS)]
+ mt['bos_list']=bL;mt['elenen_highs']=eH;mt['elenen_lows']=eL;mt['elenen_sayi']=L(eH)+L(eL)
+ bull_qm=_qml_yapisi_bul(uH,uL,'BULLISH',df);bear_qm=_qml_yapisi_bul(uH,uL,'BEARISH',df)
+ mt['bull_qml_meta']=bull_qm;mt['bear_qml_meta']=bear_qm
+ if bL:
+  lb=bL[-1];mt['kysy_onay']=True;mt['son_kirilim_idx']=lb[0];mt['son_kirilim_seviye']=R(lb[1],6);mt['son_kirilim_yon']=lb[4];mt['son_kirilim_tipi']=lb[5];mt['aktif_aralik_kirildi']=(L(df)-2-lb[0])<=50
+  aktif_qm=_qml_yapisi_bul(uH,uL,None,df)or(bull_qm if lb[4]=='BULLISH'else bear_qm)or bull_qm or bear_qm
+  if aktif_qm is not None:
+   mt['qml_idx']=int(aktif_qm[0]);mt['qml_seviyesi']=R(F(aktif_qm[1]),6)
+ return(uH,uL,mt)
+def kirilim_yoksa_swing_yoktur_analizi(df,n=SWING_PENCERE,cn=False):
+ # Tüm zaman dilimlerinde grafiğin tamamındaki tüm onaylı swing noktalarını belirle
+ return _kysy_ltf_swing_analizi(df,n,cn)
+def swing_noktalarini_bul(df,n=SWING_PENCERE,cn=False,kirilim_sarti=True):
+ if n<=1 or not kirilim_sarti:return ham_swing_noktalarini_bul(df,n,cn)
+ uH,uL,_=kirilim_yoksa_swing_yoktur_analizi(df,n,cn);return(uH,uL)
+def wyckoff_analizi(df,aa,ar):
+ a5={'wyckoff_fazi':'TREND_IMPULSIVE','konsolidasyon_mu':False,'egimli_flama_mi':False,'spring_manipulasyon':False,'utad_manipulasyon':False,'aciklama':''}
+ if L(df)<35 or L(aa)<2 or L(ar)<2:return a5
+ ak=_f(df,'close',-2);E=M(_f(df,'atr',-2),ak*0.001);qI=(_f(df,'close',-14)-_f(df,'close',-34))/M(_f(df,'close',-34),1e-09);lK=df.iloc[-14:-3];iA,hp=(F(lK['high'].max()),F(lK['low'].min()))
+ if L(aa)>=3 and L(ar)>=3:
+  he,le=(aa[-1][1]-aa[-3][1],ar[-1][1]-ar[-3][1])
+  if he*le>0 and A(he)<=E*4.5 and A(le)<=E*4.5:a5['egimli_flama_mi']=True
+ ft=F(df['low'].iloc[-4:-1].min())<hp and ak>hp;fu=F(df['high'].iloc[-4:-1].max())>iA and ak<iA;a5['spring_manipulasyon'],a5['utad_manipulasyon']=(ft,fu)
+ if iA-hp<=E*4.2 or a5['egimli_flama_mi']:
+  a5['konsolidasyon_mu']=True
+  if qI<=-0.015:a5['wyckoff_fazi']='ACCUMULATION_SPRING'if ft else'RE_DISTRIBUTION'if fu else'ACCUMULATION_RANGE';a5['aciklama']='Wyckoff Accumulation + Spring/PO3 Süpürmesi (YT-Part1&2)'if ft else'Wyckoff Re-Distribution (Üst Likidite Operasyonu) (YT-Part1&2)'if fu else'Wyckoff Accumulation Talep Alanı (YT-Part1&2)'
+  elif qI>=0.015:a5['wyckoff_fazi']='DISTRIBUTION_UTAD'if fu else'RE_ACCUMULATION'if ft else'DISTRIBUTION_RANGE';a5['aciklama']='Wyckoff Distribution + UTAD/PO3 Süpürmesi (YT-Part1&2)'if fu else'Wyckoff Re-Accumulation (Alt Likidite Yakıt Operasyonu) (YT-Part1&2)'if ft else'Wyckoff Konsolidasyon Alanı (YT-Part1&2)'
+  else:a5['wyckoff_fazi'],a5['aciklama']=('CONSOLIDATION_RANGE','Alıcı-Satıcı Dengesi / Range Konsolidasyonu (YT-Part1&2)')
+ return a5
+def ext_int_swing_ayristir(df,aa,ar):
+ cS={'external_yon':'NOTR','strong_point':None,'strong_idx':None,'weak_point':None,'weak_idx':None,'break_line_fl':None,'break_line_idx':None,'internal_yon':'NOTR','internal_choch':'YOK','external_msb':False,'kuru_kafa_trendline_tuzagi':False,'uc_istasyon':{}}
+ if L(aa)<1 or L(ar)<1:return cS
+ aa_p=([aa[0]]*(3-L(aa))+list(aa))if L(aa)<3 else list(aa)
+ ar_p=([ar[0]]*(3-L(ar))+list(ar))if L(ar)<3 else list(ar)
+ cl,bb,bc=(_f(df,'close',-2),_f(df,'low',-2),_f(df,'high',-2));E=M(_f(df,'atr',-2),cl*0.001);(hS,H0),(gd,H1),(hf,H2)=(aa_p[-3],aa_p[-2],aa_p[-1]);(hT,L0),(ge,L1),(hg,L2)=(ar_p[-3],ar_p[-2],ar_p[-1])
+ # Tüm grafikteki belirlenen salınımlara göre her zaman dilimi için piyasa yönü ve Strong/Weak Point hesabı
+ hq=(hf>hg and H2>=H1)or(H2>H1 and cl>=L2)
+ cS['external_yon']='BULLISH'if hq else'BEARISH'
+ if hq:
+  gf,hh=(hg,L2)
+  w_i,w_v=(hf,H2)
+  fl_i,fl_v=(gd,H1)
+  cS['external_msb']=bool(L2<L1 and H2>H1)
+ else:
+  gf,hh=(hf,H2)
+  w_i,w_v=(hg,L2)
+  fl_i,fl_v=(ge,L1)
+  cS['external_msb']=bool(H2>H1 and L2<L1)
+ cS['strong_point'],cS['strong_idx']=(F(hh),int(gf))
+ cS['weak_point'],cS['weak_idx']=(F(w_v),int(w_i))
+ cS['break_line_fl'],cS['break_line_idx']=(F(fl_v),int(fl_i))
+ be,hV=(cS['break_line_fl'],cS['weak_point'])
+ bF=(be-(be-hh)*0.25 if be>hh else be-E*0.35)if hq else(be+(hh-be)*0.25 if hh>be else be+E*0.35)
+ lX=(be+(hV-be)*0.25 if hV>be else be+E*0.4)if hq else(be-(be-hV)*0.25 if be>hV else be-E*0.4)
+ cS['uc_istasyon']={'ITZ':R(bF,6),'FL':R(be,6),'FO':R(lX,6),'FTR':R(lX,6),'VALID_ORIGIN':R(hh,6)}
+ if(cl<hh)if hq else(cl>hh):cS['external_yon'],cS['external_msb']=('BEARISH'if hq else'BULLISH',True)
+ d0,d4=_kysy_ltf_swing_analizi(df,2)[:2]
+ if L(d0)>=2 and L(d4)>=2:
+  pN,oh,pO,oi=(d0[-2][1],d0[-1][1],d4[-2][1],d4[-1][1])
+  if cl>oh:cS['internal_yon'],cS['internal_choch']=('BULLISH','BULL_STRONG_CHOCH'if oi<pO else'BULL_IBOS'if oh>pN and oi>pO else'BULL_WEAK_CHOCH')
+  elif cl<oi:cS['internal_yon'],cS['internal_choch']=('BEARISH','BEAR_STRONG_CHOCH'if oh>pN else'BEAR_IBOS'if oi<pO and oh<pN else'BEAR_WEAK_CHOCH')
+ return cS
+def rbr_dbd_analizi(df,bu,aH,aJ,B='BULLISH'):
+ g=B=='BULLISH';a5={'kalip_adi':'DBR'if g else'RBD','hidden_base_dp':False,'v_shape_1mum':False,'patlama_ayrilis':False,'imbalance_koku':aJ if g else aH,'yaklasim_ipuclari':[],'yaklasim_ek_puan':0.0}
+ if bu<4 or bu>=L(df)-3:return a5
+ E=M(_f(df,'atr',-2),_f(df,'close',-2)*0.001);qJ=_f(df,'close',bu-1)-_f(df,'open',M(0,bu-4));a5['kalip_adi']=('RBR_FTR'if qJ>E*0.5 else'DBR')if g else('DBD_FTR'if qJ<-E*0.5 else'RBD');jT,hr=(df.iloc[bu],df.iloc[N(L(df)-2,bu+1)]);o1,c1,h1,l1=_r(jT,'open','close','high','low');o2,c2,h2,l2=_r(hr,'open','close','high','low');a5['imbalance_koku']=(o2 if c2>o2 else aJ)if g else(o2 if c2<o2 else aH)
+ if(c1>o1 and c2>o2 and h1-c1>E*0.15 and o2-l2>E*0.15)if g else(c1<o1 and c2<o2 and c1-l1>E*0.15 and h2-o2>E*0.15):a5['hidden_base_dp']=True
+ if A(c2-o2)>=E*1.15 or A(o2-c1)>E*0.12:a5['patlama_ayrilis']=True
+ jE=sum((1 for k in G(bu,N(L(df)-2,bu+5))if aH-E*0.1<=_f(df,'close',k)<=aJ+E*0.1));a5['v_shape_1mum']=jE<=1;qK=L(df)-2-(bu+M(jE,1))
+ if jE<=2 and qK>=8:a5['yaklasim_ipuclari'].append(f'YavasDonus(2m->{qK}m)');a5['yaklasim_ek_puan']+=1.0
+ if L(df)>=8:
+  q0=F((df['close'].iloc[-8:-5]-df['open'].iloc[-8:-5]).abs().mean());lY=F((df['close'].iloc[-5:-2]-df['open'].iloc[-5:-2]).abs().mean())
+  if q0>0 and lY<=q0*0.72:a5['yaklasim_ipuclari'].append('GovdeKuculmesi/Doji');a5['yaklasim_ek_puan']+=1.0
+  yd=df.iloc[-5:-2];lZ=(yd['high']-yd[['open','close']].max(axis=1)).mean();l4=(yd[['open','close']].min(axis=1)-yd['low']).mean()
+  if(lZ>l4*1.25)if g else(l4>lZ*1.25):a5['yaklasim_ipuclari'].append('TersUstIgneUzamasi'if g else'TersAltIgneUzamasi');a5['yaklasim_ek_puan']+=1.0
+  mp,mc=(df.iloc[-3],df.iloc[-2]);pg=A(F(mp['close'])-F(mp['open']))
+  if(F(mp['close'])<F(mp['open'])and pg>E*0.65 and F(mc['close'])>F(mc['open']))if g else(F(mp['close'])>F(mp['open'])and pg>E*0.65 and F(mc['close'])<F(mc['open'])):a5['yaklasim_ipuclari'].append('BankerManipulasyonMumu');a5['yaklasim_ek_puan']+=1.0
+ return a5
+def ftr_fo_itz_taramasi(df,z,C,a='1H',B='BULLISH'):
+ l5,K,az,bz,pe=([],[],[],None,False)
+ if L(df)<15:return(l5,bz,K,az,pe)
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);qL=z.get('uc_istasyon',{});a6=z.get('strong_point');g=B=='BULLISH';aX='Bullish'if g else'Bearish'
+ for i in G(M(3,L(df)-28),L(df)-4):
+  oj,iV,ok=(df.iloc[i-1],df.iloc[i],df.iloc[i+1]);iB=F(oj['close'])-F(oj['open']);fF=A(F(iV['close'])-F(iV['open']));fG=F(ok['close'])-F(ok['open']);nS=df['close'].iloc[i+2:-2];jU=(iB>E*0.5 and fF<=E*0.55 and fG>E*0.55 and F(ok['close'])>F(oj['high']))if g else(iB<-E*0.5 and fF<=E*0.55 and fG<-E*0.55 and F(ok['close'])<F(oj['low']))
+  if jU:
+   jc,jd=(F(iV['low']),M(F(iV['open']),F(iV['close'])))if g else(N(F(iV['open']),F(iV['close'])),F(iV['high']));r5=(not nS.empty and F(nS.min())<jc-E*0.1)if g else(not nS.empty and F(nS.max())>jd+E*0.1)
+   if not r5 and((jc-E*0.2<=bb<=jd+E*0.15 and ak>=jc)if g else(jc-E*0.15<=bc<=jd+E*0.2 and ak<=jd)):l5.append(f"{a}_{('1Mum_FTR' if g else 'Bear_1Mum_FTR')}");K.append(f"[{a}] {aX} 1 Mumluk {('RBR' if g else 'DBD')} Trend Devam FTR Testi ({jc:.4f}-{jd:.4f}) (08.pdf & YT-Part3)");az.append(('BB/FL',i,jc,jd));bz=(jc if bz is None else N(bz,jc))if g else(jd if bz is None else M(bz,jd));break
+ d5,g7=(qL.get('FO'),qL.get('ITZ'));de=bb if g else bc
+ if d5 and A(de-d5)<=E*0.35 and(ak>=d5 if g else ak<=d5):l5.append(f"{a}_{('FirstObstacle_FO' if g else 'Bear_FirstObstacle_FO')}");K.append(f'[{a}] {aX} First Obstacle (FO - Kırılım Sonrası İlk Engel: {d5:.4f}) Testi (YT-Part3)');fH=d5-E*0.45 if g else d5+E*0.45;bz=fH if bz is None else N(bz,fH)if g else M(bz,fH)
+ if g7 and A(de-g7)<=E*0.38 and(ak>=g7 if g else ak<=g7):
+  l5.append(f"{a}_{('ITZ' if g else 'Bear_ITZ')}")
+  if a6 and L(C)>0 and(g7-a6>E*0.8 if g else a6-g7>E*0.8):pe=True;bz=a6;K.append(f"[{a}] {aX} ITZ ({g7:.4f}) Testi + UYARI: ITZ ile Origin OB ({a6:.4f}) arasında açık Imbalance var; stop Origin OB'ye çekildi! (YT-Part3)")
+  else:K.append(f'[{a}] {aX} ITZ (Kırılım Öncesi Son Yapı: {g7:.4f}) Testi (08.pdf & YT-Part3)');pP=g7-E*0.45 if g else g7+E*0.45;bz=pP if bz is None else N(bz,pP)if g else M(bz,pP)
+ return(l5,bz,K,az,pe)
+def dp_ve_fl_analizi(df,z,C,a='1H',B='BULLISH'):
+ l6,l7,l8,l9=([],[],[],None);hl={'magic_line':None,'fl_turu':'YOK','dp_turu':'YOK','swing_modeli':'V_Shape'};aa,ar=(z.get('highs',[]),z.get('lows',[]))
+ if L(df)<18 or L(aa)<1 or L(ar)<1:return(l6,l9,l7,l8,hl)
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);g=B=='BULLISH'
+ def _dpt(hs,ht):
+  for k in G(M(2,hs),N(L(df)-3,ht)+1):
+   c1,c2=(df.iloc[k-1],df.iloc[k]);a0,bi,cg,ch=_r(c1,'open','close','high','low');br,a8,cI,cJ=_r(c2,'open','close','high','low');kH,h9=(A(bi-a0),A(a8-br));nh,ni=(cg-M(a0,bi),N(a0,bi)-ch);nj,nk=(cI-M(br,a8),N(br,a8)-cJ);mT=(a8>br)if g else(a8<br);rg=(bi<a0)if g else(bi>a0)
+   if((bi>a0 and mT and nh>E*0.08 and nk>E*0.08 and cJ<=cg)if g else(bi<a0 and mT and ni>E*0.08 and nj>E*0.08 and cI>=ch))and kH>E*0.3 and h9>E*0.3:return('HiddenBase_DP',N(cJ,M(a0,bi)-E*0.15)if g else N(ch,M(br,a8)-E*0.15),M(cg,N(br,a8)+E*0.15)if g else M(cI,N(a0,bi)+E*0.15),k)
+   if rg and((cI>cg and cJ<=ch and a8>a0)if g else(cI>=cg and cJ<ch and a8<a0)):return('MeraMera_QML_DP',cJ if g else ch,cg if g else cI,k)
+   if rg and mT and(a8>=a0 if g else a8<=a0)and h9>M(kH*1.05,E*0.38):return('BuE_Engulf_DP'if g else'BE_Engulf_DP',N(ch,cJ)if g else a0,a0 if g else M(cg,cI),k)
+   if kH<=E*0.25 and mT and h9>E*0.45:return('Doji_DP',ch,cg,k-1)
+   if mT and h9>E*0.38 and A((M(a0,bi)-N(br,a8))if g else(N(a0,bi)-M(br,a8)))<=E*0.1:return('WBS_DP',N(ch,cJ)if g else(N(a0,bi)+M(br,a8))/2.0-E*0.1,(M(a0,bi)+N(br,a8))/2.0+E*0.1 if g else M(cg,cI),k)
+  return('Standart_Base',None,None,None)
+ k9,bh=(aa[-2]if L(aa)>=2 else aa[-1])if g else(ar[-2]if L(ar)>=2 else ar[-1])
+ if k9<3 or k9>=L(df)-3:return(l6,l9,l7,l8,hl)
+ bP=next((k for k in G(k9+1,L(df)-2)if(_f(df,'close',k)>bh if g else _f(df,'close',k)<bh)),None)
+ if bP is None:return(l6,l9,l7,l8,hl)
+ hl['magic_line']=R(bh,5);fv='high'if g else'low';oQ=[v for r7,v in(ar if g else aa)if r7<bP];qM=sum((1 for dN in G(M(0,k9-2),N(L(df)-2,k9+3))if A(F(df[fv].iloc[dN])-bh)<=E*0.25));ma,nT=(False,'W_Model'if g else'M_Model')
+ if L(oQ)>=2:
+  lp,mU=(oQ[-2],oQ[-1]);pf=A(mU-lp)/M(lp,1e-09)
+  if pf<=0.008:ma,nT=(True,'W_EsitIkiliDip'if g else'M_EsitIkiliTepe')
+  elif(mU>lp if g else mU<lp)and pf<=0.018:ma,nT=(True,'W_SagAyakYuksek'if g else'M_SagOmuzAlcak')
+  elif(mU<lp if g else mU>lp)and pf<=0.018:ma,nT=(True,'W_SolAyakYuksek_QML'if g else'M_SolOmuzAlcak_QML')
+ hl['swing_modeli']=nT if ma else('Keskin_V_Shape'if g else'Keskin_Ters_V_Shape')if qM<=1 else('Yayvan_V_Shape'if g else'Yayvan_Ters_V_Shape')if qM<=4 else'Cup_U_Canak'if g else'Ters_Cup_U_Canak';cT=sum((1 for dN in G(M(0,k9-12),bP)if A(F(df[fv].iloc[dN])-bh)<=E*0.35));oR=cT>=3;hm,fI=(False,bP)
+ if bP+4<L(df)-2:
+  mb=df.iloc[bP+1:N(L(df)-2,bP+9)];q1=sum((1 for _,r in mb.iterrows()if(F(r['close'])<F(r['open'])if g else F(r['close'])>F(r['open']))))
+  if g:
+   if q1>=2 and F(mb['low'].min())<=bh+E*0.2 and(F(df['high'].iloc[bP+1:-1].max())>_f(df,'high',bP)+E*0.4):hm,fI=(True,int(mb['low'].idxmin()))
+  elif q1>=2 and F(mb['high'].max())>=bh-E*0.2 and(F(df['low'].iloc[bP+1:-1].min())<_f(df,'low',bP)-E*0.4):hm,fI=(True,int(mb['high'].idxmax()))
+ lL=df.iloc[bP];la,nU,rW,ph=_r(lL,'open','close','high','low');qN=nU-la if g else la-nU;oS=(la<bh<nU if g else nU<bh<la)and qN>=E*0.7 and(qN/M(rW-ph,1e-09)>=0.68);qO=fI if hm else bP;lM,eO,g8,fJ=_dpt(qO-1,qO+1);hl['dp_turu']=lM;eq=''if g else'Bear_'
+ if hm:
+  jF=f'{eq}Genis_FL_BaseKing'
+  if g:gg=eO if eO is not None else _f(df,'low',fI);gh=g8 if g8 is not None else M(bh,gg+E*0.35)
+  else:gh=g8 if g8 is not None else _f(df,'high',fI);gg=eO if eO is not None else N(bh,gh-E*0.35)
+ elif oR:jF=f'{eq}WickingBase_FL';gg=eO if eO is not None else bh-E*(0.25 if g else 0.2);gh=g8 if g8 is not None else bh+E*(0.2 if g else 0.25)
+ elif ma and lM!='Standart_Base':jF='W_Kink_FL'if g else'M_Kink_FL';gg=eO if eO is not None else bh-E*0.2;gh=g8 if g8 is not None else bh+E*0.2
+ elif oS and lM=='Standart_Base':jF=f'{eq}BlindSpot_FL';gg=M(la,bh-E*0.3)if g else bh-E*0.2;gh=bh+E*0.2 if g else N(la,bh+E*0.3)
+ else:jF=f'{eq}Dar_FL';gg=eO if eO is not None else bh-E*0.22;gh=g8 if g8 is not None else bh+E*0.22
+ hl['fl_turu']=jF;dS=bb if g else bc;cU=ak>=gg if g else ak<=gh
+ if gg-E*0.2<=dS<=gh+E*0.2 and cU:jV=f'{a}_{jF}+{lM}';l6.append(jV);l7.append(f"[{a}] {('Bullish' if g else 'Bearish')} {jF} (Magic Line: {bh:.4f} | Swing: {hl['swing_modeli']} | Sniper DP: {lM} [{gg:.4f}-{gh:.4f}]) (10,11,12.pdf & YT-Part4)");l8.append(('BB/FL',fJ if fJ else bP,gg,gh));l9=gg if g else gh
+ return(l6,l9,l7,l8,hl)
+def quasimodo_mpl_analizi(df,z,C,a='1H',B='BULLISH'):
+ lc,iC,iD,dO=([],[],[],None);dg={'qm_tipi':'YOK','qml_seviyesi':None,'mpl_seviyesi':None,'yaklasim_modeli':'Standart','karsi_fresh_hedef':None};aa,ar=(z.get('highs',[]),z.get('lows',[]))
+ if L(df)<22 or L(aa)<2 or L(ar)<2:return(lc,dO,iC,iD,dg)
+ aa_p=([aa[0]]*(3-L(aa))+list(aa))if L(aa)<3 else list(aa)
+ ar_p=([ar[0]]*(3-L(ar))+list(ar))if L(ar)<3 else list(ar)
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);(hS,H0),(gd,H1),(hf,H2)=(aa_p[-3],aa_p[-2],aa_p[-1]);(hT,L0),(ge,L1),(hg,L2)=(ar_p[-3],ar_p[-2],ar_p[-1]);d0,d4=swing_noktalarini_bul(df.iloc[-26:],1,False,False);cu=[];g=B=='BULLISH';aX='Bullish'if g else'Bearish';dg['karsi_fresh_hedef']=R(M(H1,H2)if g else N(L1,L2),5);k4=d4 if g else d0;de=bb if g else bc
+ if L(k4)>=2:
+  nV=[v for _,v in k4[-4:]];fK=sum((1 for u in nV[:-1]if A(u-nV[-1])<=E*0.28))
+  if fK>=1 and(bb<N(nV[:-1])if g else bc>M(nV[:-1]))and(L(C)>0):cu.append(f"Fakeout_{('S1S' if g else 'R1R')}{fK + 1}")
+ if L(d4)>=2 and L(d0)>=2:
+  if(d4[-1][1]<d4[-2][1]and d0[-1][1]>d0[-2][1])if g else(d0[-1][1]>d0[-2][1]and d4[-1][1]<d4[-2][1]):cu.append('Fakeout+QML_Kombo'if any(('Fakeout'in y for y in cu))else'QML_Yaklasimi')
+ nK=df.iloc[-9:-2];cw,cP=(nK['high'].values,nK['low'].values);dT=F((nK['high']-nK['low']).mean());eG=_f(df,'open',-3)-_f(df,'close',-3)if g else _f(df,'close',-3)-_f(df,'open',-3)
+ if L(cw)>=5 and(cw[-1]<cw[0]and cP[-1]<cP[0]if g else cw[-1]>cw[0]and cP[-1]>cP[0])and(dT<=E*1.15):cu.append('CPLQ_Compression+Liq'if eG>=E*0.7 else'CP_Compression')
+ if L(k4)>=3:
+  d1,d2,d3=(k4[-3][1],k4[-2][1],k4[-1][1])
+  if d1>d2>d3 if g else d1<d2<d3:cu.append('ThreeDrive_3D')
+ if L(d0)>=2 and L(d4)>=2:
+  if(F(df['high'].iloc[-6:-2].max())>d0[-2][1]if g else bc>d0[-2][1])and(bb<d4[-2][1]if g else F(df['low'].iloc[-6:-2].min())<d4[-2][1]):cu.append('Diamond_PO3_Box')
+ qm_bul=_qml_yapisi_bul(aa,ar,'BULLISH'if g else'BEARISH')
+ fw=qm_bul is not None
+ if fw:
+  gi,ku,ol_i,ol,h1_i,h1_v,h2_i,h2_v=qm_bul
+  md=(ku>L0 and h1_v>H0)if g else(ku<H0 and h1_v<L0);dg['qml_seviyesi']=R(ku,5);jW=(L0<ku and L0<ol and A(ku-(L0+(ol-L0)/M(ol_i-hT,1)*M(L(df)-2-hT,1)))<=E*0.45)if g else(H0>ku and H0>ol and A(ku-(H0+(ol-H0)/M(ol_i-hS,1)*M(L(df)-2-hS,1)))<=E*0.45);aE=''if g else'Bear_';pi=f'{aE}QMC_Hibrit'if md and jW else f'{aE}QMC'if md else f'{aE}QMR'
+  # HTF QML Toleransı: Fiyat OTE / QML / En Dip (ol..ku) koridoruna girdiğinde veya yaklaştığında QML aktif!
+  qml_mesafe_ok=(ol-E*0.3<=de<=ku+E*1.65 and ak>=ol)if g else(ku-E*1.65<=de<=ol+E*0.3 and ak<=ol)
+  if qml_mesafe_ok:
+   dg['qm_tipi']=pi;lc.append(f"{a}_{('Bull_' if g else '')}{pi}");pQ=' | Yaklaşım: '+'+'.join(cu)if cu else''
+   iC.append(f'[{a}] {aX} {pi} (Sol Omuz QML: {ku:.4f}, Baş: {ol:.4f}{pQ}) (13,14.pdf & YT-Part5)')
+   iD.append(('QML',gi,N(ol,ku),M(ol,ku+E*0.18)if g else M(ol,ku)))
+   dO=ol if dO is None else(N(dO,ol)if g else M(dO,ol))
+ jG=(H1>H0 and L1<L0 and ak>H0 and F(df['close'].iloc[M(gd,ge):-1].max())>H1 and A(bb-H0)<=E*0.42)if g else(L1<L0 and H1>H0 and ak<L0 and F(df['close'].iloc[M(gd,ge):-1].min())<L1 and A(bc-L0)<=E*0.42)
+ if jG:lq,mV=(H0,hS)if g else(L0,hT);dg['qm_tipi'],dg['qml_seviyesi']=('QMM_Flip'if g else'Bear_QMM_Flip',R(lq,5));lc.append(f"{a}_{('Bull' if g else 'Bear')}_QMM_Flip");iC.append(f'[{a}] {aX} QMM (Çalışmayan QML/OBO-TOBO [{lq:.4f}] kırıldı ve Flip oldu!) (YT-Part5)');iD.append(('QML',mV,lq-E*0.18,lq+E*0.18));pj=lq-E*0.4 if g else lq+E*0.4;dO=pj if dO is None else(N(dO,pj)if g else M(dO,pj))
+ for k in G(M(4,L(df)-24),L(df)-4):
+  ld=df.iloc[k+1]
+  if g:
+   lv,je=(_f(df,'low',k-2),_f(df,'low',k))
+   if je<lv and F(ld['close'])-F(ld['open'])>E*0.55 and F(ld['close'])>_f(df,'high',k-1):
+    oB=F(df['close'].iloc[k+2:-2].min())if k+2<L(df)-2 else lv
+    if oB>=je and je-E*0.15<=bb<=lv+E*0.2 and ak>=je:dg['mpl_seviyesi']=R(lv,5);dg['qm_tipi']='MPL_IntermediateQML'if dg['qm_tipi']=='YOK'else dg['qm_tipi'];lc.append(f'{a}_Bull_MPL');iC.append(f'[{a}] Bullish MPL (Intermediate QML: {lv:.4f}, Stop: {je:.4f}) (15.pdf & YT-Part5)');iD.append(('QML',k,je,lv));dO=je if dO is None else N(dO,je);break
+  else:
+   lx,jf=(_f(df,'high',k-2),_f(df,'high',k))
+   if jf>lx and F(ld['open'])-F(ld['close'])>E*0.55 and F(ld['close'])<_f(df,'low',k-1):
+    oC=F(df['close'].iloc[k+2:-2].max())if k+2<L(df)-2 else lx
+    if oC<=jf and lx-E*0.2<=bc<=jf+E*0.15 and ak<=jf:dg['mpl_seviyesi']=R(lx,5);dg['qm_tipi']='Bear_MPL_IntermediateQML'if dg['qm_tipi']=='YOK'else dg['qm_tipi'];lc.append(f'{a}_Bear_MPL');iC.append(f'[{a}] Bearish MPL (Intermediate QML: {lx:.4f}, Stop: {jf:.4f}) (15.pdf & YT-Part5)');iD.append(('QML',k,lx,jf));dO=jf if dO is None else M(dO,jf);break
+ if cu:dg['yaklasim_modeli']=' + '.join(cu)
+ return(lc,dO,iC,iD,dg)
+def imbalance_fvg_koku_analizi(df,z,C,a='1H',B='BULLISH'):
+ hu,hv,jX,dp=([],[],[],None);g4={'imbalance_tipi':'YOK','acik_imbalance_sayisi':L(C),'fvg_origin_koku':None,'erken_donus_fake_choch_uyarisi':False,'three_drive_d3_onay':False}
+ if L(df)<25:return(hu,dp,hv,jX,g4)
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);aa,ar=(z.get('highs',[]),z.get('lows',[]));a6=z.get('strong_point');g=B=='BULLISH';aX='Bullish'if g else'Bearish'
+ for i in G(M(3,L(df)-36),L(df)-3):
+  m0,m1,m2=(df.iloc[i-1],df.iloc[i],df.iloc[i+1]);c5,c6=(F(m0['high']),F(m0['low']));bB,cD,bC,bD=_r(m1,'open','close','high','low');aM,aD,cG,cH=_r(m2,'open','close','high','low');iF=df['low'if g else'high'].iloc[i+2:-2];jY=(cH>c5 and cD-bB>E*0.45 and not(not iF.empty and F(iF.min())<=c5))if g else(c6>cG and bB-cD>E*0.45 and not(not iF.empty and F(iF.max())>=c6))
+  if jY:
+   jg,ji=(N(c6,bD),c5)if g else(c6,M(c5,bC));g4['fvg_origin_koku']=R(ji if g else jg,5)
+   if(jg-E*0.15<=bb<=ji+E*0.2 and ak>=jg)if g else(jg-E*0.2<=bc<=ji+E*0.15 and ak<=ji):g4['imbalance_tipi']=f"{('' if g else 'Bear_')}FVG+OriginKoku";hu.append(f"{a}_{('' if g else 'Bear_')}FVG_OriginKoku");hv.append(f'[{a}] {aX} FVG + Orijin Kök Testi ({jg:.4f}-{ji:.4f}) (19.pdf & YT-Part6)');jX.append(('FVG',i-1,jg,ji));dp=(jg if dp is None else N(dp,jg))if g else(ji if dp is None else M(dp,ji));break
+  me=(cD>bB and aD>aM and aD-bB>=E*1.15 and cH<=c5 and not(not iF.empty and F(iF.min())<=bB))if g else(cD<bB and aD<aM and bB-aD>=E*1.15 and cG>=c6 and not(not iF.empty and F(iF.max())>=bB))
+  if me:
+   kI,kJ=(c6,bB)if g else(bB,c5)
+   if(kI-E*0.15<=bb<=kJ+E*0.2 and ak>=kI)if g else(kI-E*0.2<=bc<=kJ+E*0.15 and ak<=kJ):g4['imbalance_tipi']=f"{('' if g else 'Bear_')}LiquidityVoid+OriginKoku";hu.append(f"{a}_{('' if g else 'Bear_')}LiqVoid_OriginKoku");hv.append(f'[{a}] {aX} Liquidity Void (2 Mumluk Boşluk) + Orijin Kök Testi ({kI:.4f}-{kJ:.4f}) (YT-Part6)');jX.append(('FVG',i-1,kI,kJ));dp=(kI if dp is None else N(dp,kI))if g else(kJ if dp is None else M(dp,kJ));break
+ for i in G(M(4,L(df)-34),L(df)-6):
+  nW=df.iloc[i];hw=A(F(nW['close'])-F(nW['open']));bV,bU=(F(nW['low']),F(nW['high']));fL=df.iloc[i+2:N(L(df)-2,i+14)];mf=(_f(df,'open',i-1)-_f(df,'close',i-1))if g else(_f(df,'close',i-1)-_f(df,'open',i-1));jZ=(_f(df,'open',i+1)-_f(df,'close',i+1))if g else(_f(df,'close',i+1)-_f(df,'open',i+1))
+  if mf>E*0.45 and hw<=E*0.5 and jZ>E*0.45:
+   gj=any((_f(fL,'close',m)>bU+E*0.15 and _f(fL,'close',m)-_f(fL,'open',M(0,m-1))>E*0.9 for m in G(L(fL))))if g else any((_f(fL,'close',m)<bV-E*0.15 and _f(fL,'open',M(0,m-1))-_f(fL,'close',m)>E*0.9 for m in G(L(fL))))
+   if gj and(bV-E*0.15<=(bb if g else bc)<=bU+E*0.15)and(ak>=bV if g else ak<=bU):jj='TersBayrak_DBD_Flip'if g else'Bear_TersBayrak_RBR_Flip';g4['imbalance_tipi']=jj;hu.append(f'{a}_{jj}');hv.append(f'[{a}] {aX} Ters Bayrak (Kırılan DBD/RBR Base / IFVG Kaynağı: {bV:.4f}-{bU:.4f}) Flip Oldu! (YT-Part6)');jX.append(('IFVG',i,bV,bU));dp=(bV if dp is None else N(dp,bV))if g else(bU if dp is None else M(dp,bU));break
+ nL=ar if g else aa
+ if L(nL)>=3:
+  d1,d2,d3=(nL[-3][1],nL[-2][1],nL[-1][1])
+  if(d1>d2>d3 if g else d1<d2<d3)and(L(hu)>0 or(a6 and A((bb if g else bc)-a6)<=E*0.6)):g4['three_drive_d3_onay']=True;hu.append(f"{a}_{('' if g else 'Bear_')}ThreeDrive_D3_FreshPOI");hv.append(f'[{a}] {aX} Three Drive ({d1:.4f}->{d2:.4f}->{d3:.4f}) 3. Adımı Taze POI Bölgesiyle Çakıştı (YT-Part6)')
+ if a6 and L(C)>0:
+  nX=F(df['low'].iloc[-8:-2].min())if g else F(df['high'].iloc[-8:-2].max());fM=(a6+E*0.25<nX<=a6+E*1.15 and bb<=nX)if g else(a6-E*1.15<=nX<a6-E*0.25 and bc>=nX)
+  if fM:hu.append(f"{a}_{('' if g else 'Bear_')}FakeCHoCH_Sweep_Onayi");hv.append(f'[{a}] {aX} Erken Dönüş Likiditesi Süpürüldü: Ana bölge ({a6:.4f}) önü stop birikimi temizlendi! (YT-Part6)')
+  elif(bb>a6+E*0.35 if g else bc<a6-E*0.35)and L(hu)==0:g4['erken_donus_fake_choch_uyarisi']=True
+ return(hu,dp,hv,jX,g4)
+def gap_vib_fibo_analizi(df,z,Z,a='1H',B='BULLISH'):
+ g9,fl,lf,fm=([],[],[],None);er={'gap_vib_durumu':'YOK','fibo_05_saygi':False,'fibo_istasyon_uyumu':'YOK','manipulasyon_236_382':False}
+ if L(df)<25:return(g9,fm,fl,lf,er)
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);hb,fN=(z.get('swing_max',0.0),z.get('swing_min',0.0));dU=hb-fN;qP=z.get('break_line_fl');g=B=='BULLISH';aX='Bullish'if g else'Bearish';de=bb if g else bc
+ if dU>E*1.5 and sum((1 for k in G(M(2,L(df)-32),L(df)-4)if A(_f(df,'close',k)-(fN+dU*0.5))<=E*0.28))>=2:er['fibo_05_saygi']=True
+ for i in G(M(3,L(df)-30),L(df)-3):
+  c1,c2=(df.iloc[i-1],df.iloc[i]);a0,bi,cg,ch=_r(c1,'open','close','high','low');br,a8,cI,cJ=_r(c2,'open','close','high','low');nY=br-bi;cP,cw=(N(bi,br),M(bi,br));fo=df['low'if g else'high'].iloc[i+1:-2];j0=(nY>=E*0.08 and a8>bi and not(not fo.empty and F(fo.min())<cP-E*0.05))if g else(nY<=-E*0.08 and a8<bi and not(not fo.empty and F(fo.max())>cw+E*0.05))
+  if j0 and cP-E*0.2<=de<=cw+E*0.2 and(ak>=cP if g else ak<=cw):rh=cJ>cg if g else cI<ch;r6=qP is not None and A((cP if g else cw)-qP)<=E*0.6;aE=''if g else'Bear_';lr=f'{aE}Breakaway_Gap'if rh and r6 else f'{aE}Runaway_Gap'if rh else f"{('Bull' if g else 'Bear')}_VIB";er['gap_vib_durumu']=lr;g9.append(f'{a}_{lr}');fl.append(f'[{a}] {aX} {lr} Testi ({cP:.4f}-{cw:.4f}) (20.pdf & YT-Part7)');lf.append(('FVG',i,cP,cw));fm=(cP if fm is None else N(fm,cP))if g else(cw if fm is None else M(fm,cw));break
+  hx=(nY<=-E*0.08 and a8>cg and cP-E*0.18<=bb<=cw+E*0.18 and ak>=cP)if g else(nY>=E*0.08 and a8<ch and cP-E*0.18<=bc<=cw+E*0.18 and ak<=cw)
+  if hx:lr='Bull_VIB_Flip'if g else'Bear_VIB_Flip';er['gap_vib_durumu']=lr;g9.append(f'{a}_{lr}');fl.append(f'[{a}] {aX} VIB Flip ({cP:.4f}-{cw:.4f}): Ters Volume Imbalance yutulup Flip oldu! (YT-Part7)');lf.append(('IFVG',i,cP,cw));fm=(cP if fm is None else N(fm,cP))if g else(cw if fm is None else M(fm,cw));break
+ ff=z.get('geri_cekilme_oran'if g else'fibo_oran',0.5);nM=' + 0.50 AvgPrice Saygılı'if er['fibo_05_saygi']else''
+ if 0.21<=ff<=0.41 and any((x in p for p in Z for x in('FTR','FirstObstacle_FO'))):er['fibo_istasyon_uyumu']=f'GucluTrend_236_382_FTR_FO({ff:.3f})';g9.append(f'{a}_Fibo236_382_GucluTrend_FTR_FO');fl.append(f'[{a}] Güçlü Trend 0.236-0.382 ({ff:.3f}) + FTR/FO Eşleşmesi{nM} (YT-Part7)')
+ elif 0.48<=ff<=0.64 and any((x in p for p in Z for x in('FL','BB/FL','TersBayrak'))):er['fibo_istasyon_uyumu']=f'GoldenZone_05_618_FL({ff:.3f})';g9.append(f'{a}_Fibo05_618_FL_Onayi');fl.append(f'[{a}] Sihirli Fibo 0.50-0.618 ({ff:.3f}) + Flag Limit Eşleşmesi{nM} (YT-Part7)')
+ elif 0.68<=ff<=0.82 and any((x in p for p in Z for x in('OB','Valid','QML','QMR','QMC','ITZ','MPL'))):er['fibo_istasyon_uyumu']=f'OTE_705_786_OB_QML_ITZ({ff:.3f})';g9.append(f'{a}_Fibo705_786_OB_QML_Onayi');fl.append(f'[{a}] Sihirli Fibo OTE 0.705-0.786 ({ff:.3f}) + OB/QML/ITZ/Valid Eşleşmesi{nM} (YT-Part7)')
+ elif 0.84<=ff<=0.94 and any((x in p for p in Z for x in('OB','Valid','QML','QMR'))):er['fibo_istasyon_uyumu']=f'Istisnai_886_DerinOB({ff:.3f})';g9.append(f'{a}_Fibo886_Istisnai_DerinOB');fl.append(f'[{a}] Sihirli Fibo 0.886 ({ff:.3f}) İstisnai Derin OB{nM} (YT-Part7)')
+ if dU>E*2.0 and L(df)>=28:
+  q2=df.iloc[-16:-4];mW,mX=(F(q2['high'].max()),F(q2['low'].min()))
+  if mW-mX<=E*3.2:
+   if g and mX<=fN+dU*0.382 and bb<mX and ak>=mX:er['manipulasyon_236_382']=True;g9.append(f'{a}_Bull_236_382_Manipulasyon_PO3');fl.append(f'[{a}] Bullish 0.236-0.382 Sıkıştırma Manipülasyonu & -0.236 Devyasyon Dönüşü ({mX:.4f}) (YT-Part7)')
+   elif not g and mW>=hb-dU*0.382 and bc>mW and ak<=mW:er['manipulasyon_236_382']=True;g9.append(f'{a}_Bear_236_382_Manipulasyon_PO3');fl.append(f'[{a}] Bearish 0.236-0.382 Sıkıştırma Manipülasyonu & -0.236 Devyasyon Dönüşü ({mW:.4f}) (YT-Part7)')
+ return(g9,fm,fl,lf,er)
+def likidite_ve_sfp_analizi(bJ,af,a2,Z,B='BULLISH'):
+ lg,lh,li=([],[],0);dh={'external_likidite_hedefi':None,'internal_ilk_engel_hedefi':None,'sfp_durumu':'YOK','likidite_turu':'YOK','akis_protokolu_onay':False}
+ if L(bJ)<20 or L(af)<20:return(li,lg,lh,dh)
+ pl,pm=(a2.get('highs',[]),a2.get('lows',[]));nZ,n0=swing_noktalarini_bul(af,n=2,kirilim_sarti=False);d0,d4=swing_noktalarini_bul(af,n=1);lN=af.iloc[-2];d6,iG,n1,n2=(F(lN['close']),F(lN['open']),F(lN['high']),F(lN['low']));jH=M(F(lN['atr']),d6*0.001);qQ=M(_f(bJ,'atr',-2),d6*0.001);a6=a2.get('strong_point');g=B=='BULLISH';nN=M([h for _,h in pl[-3:]],default=d6*1.03)if g else N([l for _,l in pm[-3:]],default=d6*0.97);dh['external_likidite_hedefi']=R(nN,5);fx=[h for _,h in nZ[-4:]if d6+jH*0.5<h<nN]if g else[l for _,l in n0[-4:]if nN<l<d6-jH*0.5];dh['internal_ilk_engel_hedefi']=R((N(fx)if g else M(fx))if fx else nN,5);k5=n0 if g else nZ;fy=d4 if g else d0
+ if L(k5)>=2:
+  u1,u2=(k5[-1][1],k5[-2][1]);n3=A(u1-u2)<=jH*0.28;mg=(N(u1,u2)if g else M(u1,u2))if n3 else u1;j1=(n2<mg and d6>mg and N(iG,d6)-n2>=jH*0.2)if g else(n1>mg and d6<mg and n1-M(iG,d6)>=jH*0.2)
+  if j1:pR=('Bull_EQL_SFP'if n3 else'Bull_OldLow_SFP')if g else('Bear_EQH_SFP'if n3 else'Bear_OldHigh_SFP');dh['sfp_durumu'],dh['likidite_turu']=(pR,('EQL'if g else'EQH')+'_StopPool'if n3 else('OldLow'if g else'OldHigh')+'_StopPool');lg.append(pR);lh.append(f'[{LTF_PERIYOT}] {pR}: {mg:.4f} likiditesi iğneyle süpürüldü ve içeride ({d6:.4f}) kapandı! (23.pdf & YT-Part8)');li+=6
+ if a6 and L(fy)>=2:
+  om,on=(fy[-1][1],fy[-2][1]);mh=N(om,on)if g else M(om,on);fO=(A(om-on)<=jH*0.3 and a6<mh<=a6+qQ*1.1 and n2<mh and d6>=a6)if g else(A(om-on)<=jH*0.3 and a6-qQ*1.1<=mh<a6 and n1>mh and d6<=a6)
+  if fO:dh['likidite_turu']='Yakin_EQL+Imbalance_Sweep'if g else'Yakin_EQH+Imbalance_Sweep';lg.append('Bull_YakinEQL_Imb_Sweep'if g else'Bear_YakinEQH_Imb_Sweep');lh.append(f'[{MTF_PERIYOT.upper()}/{LTF_PERIYOT}] Valid Bölge ({a6:.4f}) Önü Yakın EQL/EQH ({mh:.4f}) + Imbalance İğneyle Süpürüldü! (YT-Part8)');li+=5
+ if L(k5)>=3:
+  (x0,y0),(x1,y1)=(k5[-3],k5[-2])
+  if(y1>y0 if g else y1<y0)and x1>x0:
+   gl=y1+(y1-y0)/M(x1-x0,1)*M(L(af)-2-x1,1)
+   if(n2<gl and d6>gl)if g else(n1>gl and d6<gl):
+    if dh['likidite_turu']=='YOK':dh['likidite_turu']='Trendline_Liquidity_Sweep'if g else'Bear_Trendline_Liquidity_Sweep'
+    lg.append('Bull_TrendlineLiq_SFP'if g else'Bear_TrendlineLiq_SFP');lh.append(f'[{LTF_PERIYOT}] Trend Çizgisi Likiditesi ({gl:.4f}) iğneyle süpürüldü ve içeride kapandı! (YT-Part8)');li+=4
+ if L(Z)>0 and(dh['sfp_durumu']!='YOK'or dh['likidite_turu']!='YOK'):dh['akis_protokolu_onay']=True;lg.append('AkisProtokolu_POI+LiqSweep'if g else'Bear_AkisProtokolu_POI+LiqSweep');lh.append(f"[{MTF_PERIYOT.upper()}/{LTF_PERIYOT}] 4 Adımlı Akış Protokolü: Taze POI + Likidite Süpürmesi -> İlk Engel: {dh['internal_ilk_engel_hedefi']}, Ext Hedef: {dh['external_likidite_hedefi']} (YT-Part8)");li+=4
+ return(li,lg,lh,dh)
+def range_po3_tt3_analizi(df,z,C,a='1H',B='BULLISH'):
+ hy,fP,iH,cX=([],[],[],None);fg={'range_aktif':False,'r_low':None,'r_high':None,'r_050_avg':None,'r_025':None,'r_075':None,'dev_272_ust':None,'dev_272_alt':None,'dev_500_ust':None,'dev_500_alt':None,'avg_050_saygi':False,'range_modu':'YOK','tt3_durumu':'YOK','asya_monday_po3':'YOK','dinamit_hedef':False}
+ if L(df)<26:return(hy,cX,fP,iH,fg)
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);aa,ar=(z.get('highs',[]),z.get('lows',[]));g=B=='BULLISH';aX='Bullish'if g else'Bearish';aE=''if g else'Bear_';qR=df.iloc[-28:-5];hc,cx=(F(qR['high'].max()),F(qR['low'].min()));fh=hc-cx;qS=sum((1 for _,v in aa[-5:]if A(v-hc)<=E*0.45));qT=sum((1 for _,v in ar[-5:]if A(v-cx)<=E*0.45));de=bb if g else bc
+ if E*1.6<=fh<=E*9.5 and qS+qT>=3:
+  hW,mY,mZ=(cx+fh*0.5,cx+fh*0.25,cx+fh*0.75);ri,rj=(cx+fh*1.272,cx-fh*0.272);rk,rl,rm,rn=(cx+fh*1.414,cx+fh*1.618,cx-fh*0.414,cx-fh*0.618);pS,pT=(cx+fh*1.5,cx-fh*0.5);q3=sum((1 for k in G(M(2,L(df)-26),L(df)-3)if A(_f(df,'close',k)-hW)<=E*0.25 or A(_f(df,'low',k)-hW)<=E*0.18 or A(_f(df,'high',k)-hW)<=E*0.18))>=3;fg.update({'range_aktif':True,'r_low':R(cx,5),'r_high':R(hc,5),'r_050_avg':R(hW,5),'r_025':R(mY,5),'r_075':R(mZ,5),'dev_272_ust':R(ri,5),'dev_272_alt':R(rj,5),'dev_500_ust':R(pS,5),'dev_500_alt':R(pT,5),'avg_050_saygi':q3,'dinamit_hedef':bool((qS>=2 if g else qT>=2)and L(C)>0)});oo,op=(F(df['low'].iloc[-6:-1].min()),F(df['high'].iloc[-6:-1].max()));eP=rj if g else ri;n4=cx if g else hc
+  if A(de-eP)<=E*0.35 and(ak>=cx if g else ak<=hc):fg['range_modu']=f'{aE}RangeDev_272_SFP';hy.append(f'{a}_{aE}RangeDev_272_SFP');fP.append(f'[{a}] {aX} Range 272 Devyasyon İğne/SFP Dönüşü ({eP:.4f} -> Sınır:{n4:.4f}, Avg:{hW:.4f}) (24,25.pdf & YT-Part9)');iH.append(('BB/FL',L(df)-4,N(eP,n4),M(eP,n4)));cX=eP-E*0.25 if g else eP+E*0.25
+  elif(rn-E*0.2<=bb<=rm+E*0.2 and ak>=pT)if g else(rk-E*0.2<=bc<=rl+E*0.2 and ak<=pS):qv,rJ,rK=(pT,rn,rm)if g else(pS,rk,rl);fg['range_modu']=f'{aE}RangeDev_414_618_ABCD';hy.append(f'{a}_{aE}RangeDev_414_618_ABCD');fP.append(f'[{a}] {aX} Range 414/500/618 Yarım Devyasyon (AB=CD) + POI Dönüşü ({qv:.4f}) (YT-Part9)');iH.append(('OB',L(df)-4,rJ,rK));cX=rJ-E*0.25 if g else rK+E*0.25
+  q4=sum((1 for k in G(-6,-2)if(_f(df,'low',k)<cx if g else _f(df,'high',k)>hc)));d7=(F(df['high'].iloc[-14:-5].max())>hc)if g else(F(df['low'].iloc[-14:-5].min())<cx);d8=(oo<cx and ak>cx and cx-E*0.18<=bb<=mY+E*0.12)if g else(op>hc and ak<hc and mZ-E*0.12<=bc<=hc+E*0.18)
+  if d8:pU=f'{aE}PO3_Igne+Devyasyon_ReEntry'if d7 and q4>=2 else f'{aE}PO3_Box_ReEntry_Test'if q4>=2 else f'{aE}Range_ReEntry_Test';fg['range_modu']=pU;hy.append(f'{a}_{pU}');fP.append(f'[{a}] {aX} {pU}: Range sınırı ({n4:.4f}) manipülasyonu sonrası içeri girildi ve sınır testi tamamlandı! (25.pdf & YT-Part9)');iH.append(('BB/FL',L(df)-5,oo if g else mZ,mY if g else op));cX=(oo if cX is None else N(cX,oo))if g else(op if cX is None else M(cX,op))
+  if q3 and A(de-hW)<=E*0.28 and(ak>=hW if g else ak<=hW)and L(C)>0:fg['range_modu']=f'{aE}Range_050_AvgPrice_Kalp_POI';hy.append(f'{a}_{aE}Range_050_AvgPrice_POI');fP.append(f"[{a}] {aX} Range'in Kalbi 0.50 Average Price ({hW:.4f}) + Taze POI Onayı (YT-Part9)");cX=(mY if cX is None else N(cX,mY))if g else(mZ if cX is None else M(cX,mZ))
+ oT=ar if g else aa
+ if L(oT)>=2:
+  (qp,e9),(r8,cj)=(oT[-2],oT[-1]);d9=(e9-cj)if g else(cj-e9)
+  if 0<d9<=E*1.1 and(A(de-e9)<=E*0.32 or A(de-cj)<=E*0.28)and(ak>=cj if g else ak<=cj):gm='+Imbalance'if L(C)>0 else'';gn=f"{('Bull' if g else 'Bear')}_TT3_ThreeTap{gm}";fg['tt3_durumu']=gn;hy.append(f'{a}_{gn}');fP.append(f'[{a}] {aX} Three Tap Setup (TT3: 1.Temas {e9:.4f} -> 2.Temas Sweep {cj:.4f} -> 3.Temas Giriş{gm}) (27.pdf & YT-Part9)');iH.append(('QML',qp,N(e9,cj),M(e9,cj)));cX=(cj-E*0.25 if cX is None else N(cX,cj-E*0.25))if g else(cj+E*0.25 if cX is None else M(cX,cj+E*0.25))
+ if'timestamp'in df.columns:
+  try:
+   e6=pd.to_datetime(df['timestamp'],unit='ms',utc=True);oq=e6.iloc[-2];ro=int(oq.hour);pV=df.loc[(e6.dt.date==oq.date())&(e6.dt.hour<6)]
+   if L(pV)>=3 and 6<=ro<=17:
+    nw,nx=(F(pV['high'].max()),F(pV['low'].min()));gC=nw-nx
+    if E*0.8<=gC<=E*4.5:
+     jt='Londra_Killzone'if ro<=11 else'NY_Killzone';ju=df.loc[(e6.dt.date==oq.date())&(e6.dt.hour>=6)];ih=(F(ju['low'].min())<nx and ak>nx and bb<=nx+gC*0.5)if g else(F(ju['high'].max())>nw and ak<nw and bc>=nw-gC*0.5)
+     if ih:rT=f"Asya_{jt}_{('Bull' if g else 'Bear')}_PO3";fg['asya_monday_po3']=rT;hy.append(f'{a}_{rT}');fP.append(f'[{a}] Asya Range ({nx:.4f}-{nw:.4f}) {jt} Manipülasyonu & PO3 İçeri Giriş! (26.pdf & YT-Part9)')
+   pW=df.loc[e6.dt.weekday==0]
+   if oq.weekday()in(1,2,3,4)and L(pW)>=3:
+    oL,oM=(F(pW['high'].max()),F(pW['low'].min()));kK=(F(df['low'].iloc[-8:-1].min())<oM and ak>oM and A(bb-oM)<=E*0.8)if g else(F(df['high'].iloc[-8:-1].max())>oL and ak<oL and A(bc-oL)<=E*0.8)
+    if kK:gN=f"Monday_Range_{('Bull' if g else 'Bear')}_PO3";fg['asya_monday_po3']=gN;hy.append(f'{a}_{gN}');fP.append(f'[{a}] Monday Range ({oM:.4f}-{oL:.4f}) Devyasyon Süpürmesi & PO3 İçeri Giriş! (YT-Part9)')
+  except X:pass
+ return(hy,cX,fP,iH,fg)
+def bobin_atnali_mw_analizi(df,z,C,a='1H',B='BULLISH'):
+ cy,b9,cz,aL=([],[],[],None);bQ={'bobin_durumu':'YOK','bobin_alt':None,'bobin_ust':None,'atnali_testere':'YOK','mw_modeli':'YOK','momentum_marubozu':'YOK','yingyang_hidden_base':'YOK','giris_onay_tipi':'YOK'}
+ if L(df)<24:return(cy,aL,b9,cz,bQ)
+ bb,bc,ak,pn=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2),_f(df,'open',-2));E=M(_f(df,'atr',-2),ak*0.001);aa,ar=(z.get('highs',[]),z.get('lows',[]));g=B=='BULLISH';aX='Bullish'if g else'Bearish';aE=''if g else'Bear_';de=bb if g else bc
+ for i in G(M(4,L(df)-26),L(df)-3):
+  if i+3>=L(df)-1:break
+  iI=[1 if _f(df,'close',i+q_i)>=_f(df,'open',i+q_i)else-1 for q_i in G(4)];bU=M(M(_f(df,'open',i+q_i),_f(df,'close',i+q_i))for q_i in G(4));bV=N(N(_f(df,'open',i+q_i),_f(df,'close',i+q_i))for q_i in G(4));mi=bU-bV;cY=all((iI[k]!=iI[k+1]for k in G(L(iI)-1)))or(L(set(iI[:3]))==2 and iI[0]==iI[2]and iI[0]!=iI[1])
+  if cY and E*0.18<=mi<=E*1.85:
+   bQ['bobin_alt'],bQ['bobin_ust']=(R(bV,5),R(bU,5));pX=i+3
+   if pX>=L(df)-4:
+    ia=(ak>bU and(bb<=bU+E*0.18 or _f(df,'low',-3)<=bU+E*0.18))if g else(ak<bV and(bc>=bV-E*0.18 or _f(df,'high',-3)>=bV-E*0.18))
+    if ia:gO=f'{aE}Bobin_Cozulme_IgneTest';bQ['bobin_durumu']=gO;cy.append(f'{a}_{gO}');b9.append(f'[{a}] {aX} Bobin (3-4 Mumlu Gövde Kümesi: {bV:.4f}-{bU:.4f}) Çözüldü & Anlık İğne Testi Tamamlandı! (28-bobinler.pdf & YT-Part10)');cz.append(('BB/FL',i,bV,bU));aL=(bV-E*0.2 if aL is None else N(aL,bV-E*0.2))if g else(bU+E*0.2 if aL is None else M(aL,bU+E*0.2))
+   else:
+    gj=any((_f(df,'close',r_i)>bU+E*0.35 if g else _f(df,'close',r_i)<bV-E*0.35 for r_i in G(pX+1,L(df)-2)));qa=any((_f(df,'close',r_i)<bV-E*0.15 if g else _f(df,'close',r_i)>bU+E*0.15 for r_i in G(pX+1,L(df)-2)))
+    if gj and not qa and bV-E*0.2<=de<=bU+E*0.2 and(ak>=bV if g else ak<=bU):gO=f'{aE}Bobin_Bolge_Testi_POI';bQ['bobin_durumu']=gO;cy.append(f'{a}_{gO}');b9.append(f'[{a}] {aX} Bobin Bölge Testi (HTF Bobin = LTF Range Gövde Kutusu: {bV:.4f}-{bU:.4f}) Taze POI Olarak Çalıştı! (28.pdf & YT-Part10)');cz.append(('OB',i,bV,bU));aL=(bV-E*0.2 if aL is None else N(aL,bV-E*0.2))if g else(bU+E*0.2 if aL is None else M(aL,bU+E*0.2))
+    for r9 in G(pX+1,L(df)-2):
+     nE,nF,k2,k3=(_f(df,'open',r9),_f(df,'close',r9),_f(df,'high',r9),_f(df,'low',r9));ep=(k3<bV-E*0.15 and N(nE,nF)>=bV and ak>bU)if g else(k2>bU+E*0.15 and M(nE,nF)<=bU and ak<bV)
+     if ep:nG=f'{aE}Testere_DerinIgne_Bobin';bQ['atnali_testere']=nG;cy.append(f'{a}_{nG}');b9.append(f'[{a}] {aX} Testere (Bobin [{bV:.4f}-{bU:.4f}] Derin İğneyle Yıpratıldı ve Karşı Yöne Dolduruldu!) (28.pdf & YT-Part10)');aL=(k3-E*0.15 if aL is None else N(aL,k3-E*0.15))if g else(k2+E*0.15 if aL is None else M(aL,k2+E*0.15));break
+ for k in G(M(4,L(df)-16),L(df)-2):
+  if k+3>=L(df)-1:break
+  hX,m4,a0,bi,br,a8,m5,hY=(_f(df,'open',k),_f(df,'close',k),_f(df,'open',k+1),_f(df,'close',k+1),_f(df,'open',k+2),_f(df,'close',k+2),_f(df,'open',k+3),_f(df,'close',k+3));pY,pZ=(M(_f(df,'high',k),_f(df,'high',k+1)),N(_f(df,'low',k),_f(df,'low',k+1)));p0,p5=(M(_f(df,'high',k+2),_f(df,'high',k+3)),N(_f(df,'low',k+2),_f(df,'low',k+3)));eQ=(m4<hX and bi<=a0 and a8>=br and hY>m5 and hY>M(hX,a0))if g else(m4>hX and bi>=a0 and a8<=br and hY<m5 and hY<N(hX,a0))
+  if eQ:
+   go='Extended_AtNali'if(p5<pZ if g else p0>pY)else'ShortFormed_AtNali'if(p5>pZ+E*0.05 if g else p0<pY-E*0.05)else'Simple_AtNali';lt=M(a0,a8)if g else N(a0,a8);kw=N(pZ,p5)if g else M(pY,p0)
+   if A(de-lt)<=E*0.45 and(ak>=lt if g else ak<=lt):jk=f'{aE}{go}_U_Turn';bQ['atnali_testere']=jk;cy.append(f'{a}_{jk}');b9.append(f'[{a}] {aX} {go} (4 Mumlu U-Dönüşü = LTF M/W Kırılımı | Giriş:{lt:.4f}, Stop:{kw:.4f}) (28,29.pdf & YT-Part10)');cz.append(('QML',k+1,N(kw,lt),M(kw,lt)));aL=(kw-E*0.15 if aL is None else N(aL,kw-E*0.15))if g else(kw+E*0.15 if aL is None else M(aL,kw+E*0.15));break
+ fz=ar if g else aa
+ if L(fz)>=2:
+  (qq,da),(sa,ck)=(fz[-2],fz[-1]);pp=(ck-da)if g else(da-ck)
+  if A(pp)<=E*1.35 and A(de-ck)<=E*0.42 and(ak>=ck if g else ak<=ck):p6='W'if g else'M';p7=f'Simple_{p6}_Trade'if A(pp)<=E*0.22 else f'ShortFormed_{p6}_2ndLeg'if pp>0 else f'Extended_{p6}_TurtleSoup_SFP';kx=z.get('ote_bull_mu'if g else'ote_bear_mu',False);p8=('+OTE'if kx else'')+('+FVG'if L(C)>0 else'');bQ['mw_modeli']=f'{p7}{p8}';cy.append(f'{a}_{p7}{p8}');b9.append(f'[{a}] {aX} {p7}{p8} (1.Bacak:{da:.4f} -> 2.Bacak Giriş:{ck:.4f} | HTF At Nalı Karşılığı) (29-m-w-trade.pdf & YT-Part10)');cz.append(('QML',qq,N(da,ck),M(da,ck)));aL=(N(da,ck)-E*0.22 if aL is None else N(aL,N(da,ck)-E*0.22))if g else(M(da,ck)+E*0.22 if aL is None else M(aL,M(da,ck)+E*0.22))
+ for j in G(M(3,L(df)-18),L(df)-2):
+  c8,c9,hZ,h4=(_f(df,'open',j),_f(df,'close',j),_f(df,'high',j),_f(df,'low',j));j2=A(c9-c8);ot,ou=(hZ-M(c8,c9),N(c8,c9)-h4);ml=(c9>c8)if g else(c9<c8);cZ=ml and j2>=E*0.65 and((ou>=j2*0.35 and ou>ot*1.6)if g else(ot>=j2*0.35 and ot>ou*1.6))
+  if cZ:
+   ly,lz=(h4,c8)if g else(c8,hZ)
+   if ly-E*0.18<=de<=lz+E*0.18 and(ak>=ly if g else ak<=lz):jm=f'{aE}TersIgneli_Momentum_POI';bQ['momentum_marubozu']=jm;cy.append(f'{a}_{jm}');b9.append(f'[{a}] {aX} Ters İğneli Momentum Mumu İğne İçi Gizli POI Testi ({ly:.4f}-{lz:.4f}) (35.pdf & YT-Part10)');cz.append(('BB/FL',j,ly,lz));aL=(ly-E*0.15 if aL is None else N(aL,ly-E*0.15))if g else(lz+E*0.15 if aL is None else M(aL,lz+E*0.15));break
+  if j+1<L(df)-2:
+   fa,nl,kL,kM=(_f(df,'open',j+1),_f(df,'close',j+1),_f(df,'high',j+1),_f(df,'low',j+1));h5=(c9>c8 and nl>fa and ot>E*0.18 and fa-kM>E*0.18 and kM<=hZ)if g else(c9<c8 and nl<fa and ou>E*0.18 and kL-fa>E*0.18 and kL>=h4)
+   if h5:
+    lD,lE=(N(kM,c9),M(hZ,fa))if g else(N(h4,fa),M(kL,c9))
+    if lD-E*0.15<=de<=lE+E*0.15 and(ak>=lD if g else ak<=lE):jv=f'{aE}YingYang_HiddenBase_Test';bQ['yingyang_hidden_base']=jv;cy.append(f'{a}_{jv}');b9.append(f'[{a}] {aX} Ying-Yang (Hidden Base İğne Kesişimi: {lD:.4f}-{lE:.4f}) Bölge Testi! (35-ying-yang.pdf & YT-Part10)');cz.append(('BB/FL',j,lD,lE));aL=(lD-E*0.15 if aL is None else N(aL,lD-E*0.15))if g else(lE+E*0.15 if aL is None else M(aL,lE+E*0.15));break
+ eR,eS,pq,pr=(_f(df,'open',-3),_f(df,'close',-3),_f(df,'high',-3),_f(df,'low',-3));eT,eU,ps,pt=(_f(df,'open',-2),_f(df,'close',-2),_f(df,'high',-2),_f(df,'low',-2));eH=A(eU-eT);iJ,iK=(ps-M(eT,eU),N(eT,eU)-pt);mm,mo=(pq-M(eR,eS),N(eR,eS)-pr);dV=(eU>eT and eH>=E*0.48 and iK<=eH*0.08 and(eS<eR and mo<=A(eS-eR)*0.12 or iJ<=eH*0.12))if g else(eU<eT and eH>=E*0.48 and iJ<=eH*0.08 and(eS>eR and mm<=A(eS-eR)*0.12 or iK<=eH*0.12))
+ if dV:iL=f"{('Bull' if g else 'Bear')}_Istekli_Marubozu";bQ['momentum_marubozu']=iL;cy.append(f'{a}_{iL}');b9.append(f'[{a}] {aX} İstekli Mum / Marubozu Open (Bölgeden İğnesiz Sıfır Mukavemetli Çıkış: {eT:.4f}->{eU:.4f}) (35.pdf & YT-Part10)')
+ return(cy,aL,b9,cz,bQ)
+def engulf_pinbar_analizi(df,z,C,a='1H',B='BULLISH'):
+ bW,bA,dq,aS=([],[],[],None);bl={'engulf_outside_mera':'YOK','star_turu':'YOK','pinbar_spike':'YOK','railroad_tracks':'YOK','bosalt_doldur_kademe':'YOK','kombo_patern':'YOK','sentetik_mum':'YOK'}
+ if L(df)<20:return(bW,aS,bA,dq,bl)
+ bb,bc,ak,pn=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2),_f(df,'open',-2));E=M(_f(df,'atr',-2),ak*0.001);g=B=='BULLISH';aX='Bullish'if g else'Bearish';aE='Bull'if g else'Bear';de=bb if g else bc;m0,m1,m2,m3=(df.iloc[-5],df.iloc[-4],df.iloc[-3],df.iloc[-2]);o0,c0,h0,l0,o1,c1,h1,l1=(*_r(m0,'open','close','high','low'),*_r(m1,'open','close','high','low'));o2,c2,h2,l2,o3,c3,h3,l3=(*_r(m2,'open','close','high','low'),*_r(m3,'open','close','high','low'));g1,g2,g3=(A(c1-o1),A(c2-o2),A(c3-o3));mq,mr,n5,n6=(M(o2,c2),N(o2,c2),M(o3,c3),N(o3,c3));pv,pw,n7,n8=(h2-mq,mr-l2,h3-n5,n6-l3);oU=(c2<o2 and c3>o3 and n5>=mq and n6<=mr)if g else(c2>o2 and c3<o3 and n5>=mq and n6<=mr);oV=h3>=h2 and l3<=l2 and(h3>h2 or l3<l2)and(c3>o3 if g else c3<o3);hn=h3>=h2 and l3<=l2 and((n8>=g2*0.75 and mr<=n6 and l3<l2 and c3>o3)or(c2<o2 and c3>h2 and l3<=l2)if g else(n7>=g2*0.75 and mq>=n5 and h3>h2 and c3<o3)or(c2>o2 and c3<l2 and h3>=h2))
+ if hn:ad=f'{aE}_MeraMera_Outside_QML';bl['engulf_outside_mera']=ad;bW.append(f'{a}_{ad}');bA.append(f'[{a}] {aX} Mera Mera (Outside Bar + İğne İçi Gövde Yutuşu = LTF Gizli QML) (30.pdf & YT-Part11)');dq.append(('QML',L(df)-3,l3 if g else mr,mq if g else h3));aS=l3-E*0.18 if g else h3+E*0.18
+ elif oU and oV:ad=f'{aE}_Engulf+Outside_Super';bl['engulf_outside_mera']=ad;bW.append(f'{a}_{ad}');bA.append(f'[{a}] {aX} Çifte Güçlü Engulf + Outside Bar (Hem Gövde Hem High-Low Yutuldu!) (30.pdf & YT-Part11)');dq.append(('OB',L(df)-3,N(l2,l3)if g else o2,o2 if g else M(h2,h3)));aS=N(l2,l3)-E*0.18 if g else M(h2,h3)+E*0.18
+ elif oU:gD=g3>=g2*1.45 and g3>=E*0.45;ad=f"{aE}_{('Kaliteli_Imb_Engulf' if gD else 'Weak_Engulf')}";bl['engulf_outside_mera']=ad;bW.append(f'{a}_{ad}');bA.append(f'[{a}] {aX} {ad} (Zıt Renkli Gövde Yutuşu: {o3:.4f}->{c3:.4f}) (30.pdf & YT-Part11)');aS=N(l2,l3)-E*0.18 if g else M(h2,h3)+E*0.18
+ elif oV:ad=f'{aE}_OutsideBar_HL';bl['engulf_outside_mera']=ad;bW.append(f'{a}_{ad}');bA.append(f'[{a}] {aX} Outside Bar (High-Low Yutuşu: {l3:.4f}-{h3:.4f}) (30.pdf & YT-Part11)');aS=l3-E*0.18 if g else h3+E*0.18
+ jI=(c1<o1 and g1>=E*0.4 and g2<=g1*0.5 and c3>o3)if g else(c1>o1 and g1>=E*0.4 and g2<=g1*0.5 and c3<o3)
+ if jI:
+  q5=(c3>=o1)if g else(c3<=o1);j3=(c3>=o1-g1*0.35)if g else(c3<=o1+g1*0.35)
+  if q5 or j3:p9=f"{aE}_{('Strong_Engulf_Star' if q5 else 'Railroad_Star_70pct')}";bl['star_turu']=p9;bW.append(f'{a}_{p9}');bA.append(f"[{a}] {aX} {('Sabah' if g else 'Akşam')} Yıldızı ({p9}: 3 Mum Toplamı = Sentetik Pinbar) (YT-Part11)");oB,oC=(N(l1,l2,l3),M(h1,h2,h3));aS=(oB-E*0.18 if aS is None else N(aS,oB-E*0.18))if g else(oC+E*0.18 if aS is None else M(aS,oC+E*0.18))
+ lO=(c2<o2 and c3>o3 and g2>=E*0.45 and g2*0.62<=g3<g2*1.02)if g else(c2>o2 and c3<o3 and g2>=E*0.45 and g2*0.62<=g3<g2*1.02)
+ if lO:n9=(N(l2,l3)+M(h2,h3))/2.0;ad=f'{aE}_Railroad_Tracks_Pinbar';bl['railroad_tracks']=ad;bl['sentetik_mum']=f'2Mum_RR_Pinbar(50%:{n9:.4f})';bW.append(f'{a}_{ad}');bA.append(f'[{a}] {aX} Railroad Tracks (%65-%98 Gövde Dönüşü = Sentetik Pinbar | %50 Seviyesi: {n9:.4f}) (31.pdf & YT-Part11)');dq.append(('BB/FL',L(df)-3,N(l2,l3)if g else n9,n9 if g else M(h2,h3)));aS=(N(l2,l3)-E*0.18 if aS is None else N(aS,N(l2,l3)-E*0.18))if g else(M(h2,h3)+E*0.18 if aS is None else M(aS,M(h2,h3)+E*0.18))
+ jJ=(n8>=M(g3*1.55,E*0.32)and n8>n7*1.35)if g else(n7>=M(g3*1.55,E*0.32)and n7>n8*1.35);k6=(pw>=M(g2*1.55,E*0.32)and pw>pv*1.35)if g else(pv>=M(g2*1.55,E*0.32)and pv>pw*1.35)
+ if jJ or k6:mt=((l3+h3)/2.0)if jJ else((l2+h2)/2.0);eV=(c3>=o3 if jJ else c2>=o2)if g else(c3<=o3 if jJ else c2<=o2);iM='50pct_Retest'if k6 and not jJ and(l2<=bb<=mt+E*0.12 if g else mt-E*0.12<=bc<=h2)and(ak>=mt if g else ak<=mt)else'Break_Entry'if k6 and(ak>h2 if g else ak<l2)else'Kapanis_Onayli'if eV else'Spike_Tepki';iN=f'{aE}_Pinbar_{iM}';bl['pinbar_spike']=iN;bW.append(f'{a}_{iN}');bA.append(f'[{a}] {aX} Reversal Pinbar ({iM} | %50 HL:{mt:.4f}) (31-spike-pinbar.pdf & YT-Part11)');hz=(N(l2,l3)-E*0.18)if g else(M(h2,h3)+E*0.18);aS=(hz if aS is None else N(aS,hz))if g else(hz if aS is None else M(aS,hz))
+ if k6 and jJ:iO=f'{aE}_Double_Pinbar_Combo';bl['kombo_patern']=iO;bW.append(f'{a}_{iO}');bA.append(f'[{a}] {aX} Double Pinbar (Çift İğne Reddiyesi Kombo Patern!) (YT-Part11)')
+ elif k6 and(oU or oV):iO=f'{aE}_Pinbar+Engulf_Outside_Combo';bl['kombo_patern']=iO;bW.append(f'{a}_{iO}');bA.append(f'[{a}] {aX} Pinbar + Engulf/Outside Bar Çifte Kanıt Kombo Patern! (YT-Part11)')
+ elif(jJ and h3<=h2 and l3>=l2)or(k6 and h3<=h2 and l3>=l2 and(c3>o3 if g else c3<o3)):iO=f'{aE}_Pinbar+InsideBar_Combo';bl['kombo_patern']=iO;bW.append(f'{a}_{iO}');bA.append(f'[{a}] {aX} Pinbar + Inside Bar Kombo Patern! (YT-Part11)')
+ for k in G(M(4,L(df)-14),L(df)-2):
+  ko,kc,kh,kl=(_f(df,'open',k),_f(df,'close',k),_f(df,'high',k),_f(df,'low',k));kg=A(kc-ko);s_k=M(0,k-4);fQ=M((_f(df,'high',q_k)-M(_f(df,'open',q_k),_f(df,'close',q_k)))for q_k in G(s_k,k));hA=M(_f(df,'high',q_k)for q_k in G(s_k,k));fR=M((N(_f(df,'open',q_k),_f(df,'close',q_k))-_f(df,'low',q_k))for q_k in G(s_k,k));hB=N(_f(df,'low',q_k)for q_k in G(s_k,k));fS=(kc>ko and kg>=E*0.58 and fQ>=E*0.22 and kc>=hA-E*0.08)if g else(kc<ko and kg>=E*0.58 and fR>=E*0.22 and kc<=hB+E*0.08)
+  if fS:
+   if k==L(df)-2:nm=f'{aE}_BosaltDoldur_Kademe2_Doldurma';bl['bosalt_doldur_kademe']=nm;bW.append(f'{a}_{nm}');bA.append(f'[{a}] {aX} Boşalt-Doldur (2.Kademe: İğnelenmiş Bölge Momentum Mumla Dolduruldu!) (32.pdf & YT-Part11)');aS=(ko-E*0.18 if aS is None else N(aS,ko-E*0.18))if g else(ko+E*0.18 if aS is None else M(aS,ko+E*0.18));break
+   elif(ko-E*0.12<=bb<=kc and ak>=ko)if g else(kc<=bc<=ko+E*0.12 and ak<=ko):nm=f'{aE}_BosaltDoldur_Kademe3_TersIgne_Sniper';bl['bosalt_doldur_kademe']=nm;bW.append(f'{a}_{nm}');bA.append(f'[{a}] {aX} Boşalt-Doldur (3.Kademe Sniper: Dolduran Momentum Mumuna [{ko:.4f}-{kc:.4f}] Ters İğne Testi!) (32-bosalt-doldur.pdf & YT-Part11)');dq.append(('BB/FL',k,N(ko,kc),M(ko,kc)));aS=(ko-E*0.18 if aS is None else N(aS,ko-E*0.18))if g else(ko+E*0.18 if aS is None else M(aS,ko+E*0.18));break
+ if bl['sentetik_mum']=='YOK':
+  ky,kA,m6,m7=(o2,c3,M(h2,h3),N(l2,l3));mu=A(kA-ky);gp,gq=(N(ky,kA)-m7,m6-M(ky,kA))
+  if(gp>=M(mu*1.6,E*0.35)and gp>gq*1.4)if g else(gq>=M(mu*1.6,E*0.35)and gq>gp*1.4):bl['sentetik_mum']=f'{aE}_2Mum_Toplam_Pinbar({(m7+m6)/2.0:.4f})'
+  elif(c1>o1 and c2>o2 and c3>o3 and c3-o1>=E*1.1)if g else(c1<o1 and c2<o2 and c3<o3 and o1-c3>=E*1.1):bl['sentetik_mum']=f'{aE}_3Mum_Sentetik_Marubozu_LiqVoid'
+ return(bW,aS,bA,dq,bl)
+def ib_fakey_smt_analizi(df,z,C,a='1H',B='BULLISH',J='BTC/USDT'):
+ ca,cA,ea=([],[],[]);fA=None;bg={'inside_bar_durumu':'YOK','fake_setup_tipi':'YOK','dvg_durumu':'YOK','smt_durumu':'YOK','dar_sl_4r':False,'gelis_atr':0.0,'mb_high':None,'mb_low':None,'ib_high':None,'ib_low':None,'fake_idx':None}
+ if L(df)<20:return(ca,fA,cA,ea,bg)
+ bb,bc,ak,pn=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2),_f(df,'open',-2));eI=F(df['atr'].iloc[-10:-1].mean())if'atr'in df.columns and L(df)>=12 else M(_f(df,'atr',-2),ak*0.001);E=M(eI,ak*0.001);bg['gelis_atr']=R(E,5);g=B=='BULLISH'
+ for dN in G(M(4,L(df)-16),L(df)-2):
+  bm,bn,m8,m9=(_f(df,'high',dN),_f(df,'low',dN),_f(df,'open',dN),_f(df,'close',dN));c4=bm-bn
+  if c4<E*0.65:continue
+  iS,b3,b4=(0,-1e18,1e18)
+  for j in G(dN+1,N(L(df)-1,dN+5)):
+   jh,jl=(_f(df,'high',j),_f(df,'low',j))
+   if jh<=bm and jl>=bn:iS+=1;b3=M(b3,jh);b4=N(b4,jl)
+   else:break
+  if iS==0:continue
+  fU=dN+iS;j4=M(b3-b4,1e-9);bO=j4/M(c4,1e-9);uF=m9>m8 and b4>=bn+c4*0.42;aF=m9<m8 and b3<=bm-c4*0.42;dr=bO<=0.55 and((uF if g else aF)or bO<=0.38);aI=any((dN-3<=fi<=dN for fi in C));bg['mb_high'],bg['mb_low'],bg['ib_high'],bg['ib_low']=(R(bm,5),R(bn,5),R(b3,5),R(b4,5))
+  if fU<L(df)-1:
+   bp=fU+1;db,bL,cK,cM=(_f(df,'open',bp),_f(df,'close',bp),_f(df,'high',bp),_f(df,'low',bp));kB=cK-cM
+   if(bL>bm if g else bL<bn):
+    fb=kB>E*1.65;fc=(bn<=bb<=bm+E*0.18 and ak>=b4)if g else(bn-E*0.18<=bc<=bm and ak<=b3)
+    if bp==L(df)-2 and not fb or(fc and bp<L(df)-2):
+     iE=f"{a}_{('Kaliteli_Flama_InsideBar_Brk' if dr else 'InsideBar_Breakout_Retest' if bp<L(df)-2 else 'InsideBar_Breakout_Close')}"
+     if iE not in ca:
+      ca.append(iE);bg['inside_bar_durumu']=f"{iE}({iS}Bar,Oran:%{bO*100:.0f})"
+      if not aI:bg['dar_sl_4r']=True;ca.append(f'{a}_InsideBar_DarSL_4R')
+      cA.append(f"[{a}] {('Bullish' if g else 'Bearish')} {iE} (AnaBar:{bn:.4f}-{bm:.4f}, {iS}x InsideBar Oran:%{bO*100:.0f}{', Flama Konumu' if uF or aF else ''}{', Arkada Açık Imb Yok -> Dar SL 2R->4R!' if not aI else ''}) (33-inside-bar.pdf & YT-Part12)");ea.append(('IB_MB',dN,bn,bm));fA=(b4 if not aI else bn)if g else(b3 if not aI else bm)
+   gE,gF=(cK-M(bL,db),N(bL,db)-cM)
+   if(cM<bn and bL>=bn and gF>A(bL-db)*1.2)if g else(cK>bm and bL<=bm and gE>A(bL-db)*1.2):
+    cr=(bL>=b4)if g else(bL<=b3);uK=(bL>b3)if g else(bL<b4)
+    if cr and(bp>=L(df)-3 or(bn<=bb<=bm and ak>=b4 if g else bn<=bc<=bm and ak<=b3)):
+     fT='Kuralli_Pinbarli_FakeSetup_GucluUst'if uK else'Kuralli_Pinbarli_FakeSetup_IcKapanis';jw=f'{a}_{fT}'
+     if jw not in ca:ca.append(jw);bg['fake_setup_tipi'],bg['fake_idx']=(fT,bp);oO=(cM+cK)/2.0;gS='%50 İğne Retest'if(cM<=bb<=oO and ak>=oO if g else oO<=bc<=cK and ak<=oO)else'Pinbar Kapanış/Kırılım';cA.append(f"[{a}] {('Bullish' if g else 'Bearish')} {fT}: Ana Bar ({(bn if g else bm):.4f}) iğneyle süpürüldü ve Inside Bar {('üstünde/altında kırarak' if uK else 'içinde')} kurallı kapandı! Giriş: {gS} (34-fake-setup.pdf & YT-Part12)");ea.append(('FAKEY_PIN',dN,N(bn,cM),M(bm,cK)));fA=cM if g else cK
+    elif not cr and bp>=L(df)-3:bg['fake_setup_tipi']='Kuralsiz_Pinbarli_FakeSetup_Zayif'
+   if bp+1<L(df):
+    fd=bp+1;kW,dc,ny,nz=(_f(df,'open',fd),_f(df,'close',fd),_f(df,'high',fd),_f(df,'low',fd));nA,nB=(A(dc-kW),A(bL-db));gG=(bL<db and dc>kW)if g else(bL>db and dc<kW);dJ=(cM<bn and dc>=b4 and(dc>=b3 or nA>=nB*0.75))if g else(cK>bm and dc<=b3 and(dc<=b4 or nA>=nB*0.75))
+    if gG and dJ and(fd>=L(df)-3 or(bn<=bb<=bm and ak>=b4 if g else bn<=bc<=bm and ak<=b3)):
+     aK='Engulf_Outside'if(dc>=db if g else dc<=db)else'Railroad_AtNali';jx=f'{a}_Pinbarsiz_FakeSetup_{aK}'
+     if jx not in ca:ca.append(jx);bg['fake_setup_tipi'],bg['fake_idx']=(f'Pinbarsiz_FakeSetup_{aK}_PO3',fd);cA.append(f"[{a}] {('Bullish' if g else 'Bearish')} Pinbarsız Fake Setup ({aK} / PO3 Box): 3.Mum Ana Barı ihlal etti, 4.Mum zıt renkle Inside Barı yutarak içeri döndü! (34-fake-setup.pdf & YT-Part12)");ea.append(('FAKEY_NOPIN',dN,N(bn,cM,nz),M(bm,cK,ny)));fA=N(cM,nz)if g else M(cK,ny)
+ aa,ar=(z.get('highs',[]),z.get('lows',[]));cV=ar if g else aa
+ if L(cV)>=2 and'rsi'in df.columns:
+  (i1,w1),(i2,w2)=(cV[-2],cV[-1]);c1,c2=(_f(df,'close',i1),_f(df,'close',i2));bY,ci,gr,kC,gt,gu=(_f(df,'rsi',i1),_f(df,'rsi',i2),_f(df,'ao',i1),_f(df,'ao',i2),_f(df,'cvd',i1),_f(df,'cvd',i2));rO=(bY<=40.0)if g else(bY>=60.0);cp=(c2<c1*0.999 and ci>bY+1.8)if g else(c2>c1*1.001 and ci<bY-1.8);dt=(w2<w1*0.999 and((kC>gr and gr<0)or gu>gt))if g else(w2>w1*1.001 and((kC<gr and gr>0)or gu<gt));eW=A(w2-w1)/M(w1,1e-9)<=0.0038 and((ci>bY+1.5 or kC>gr)if g else(ci<bY-1.5 or kC<gr));du=(w2<w1*0.9985 if g else w2>w1*1.0015)and A(ci-bY)<=0.9;eb=(w2>w1*1.002 and ci<bY-2.0)if g else(w2<w1*0.998 and ci>bY+2.0)
+  if cp or dt:
+   kY='RSI_Close'if cp else'AO_CVD_Wick';dE=f'{a}_Strong_Regular_DVG_{kY}'
+   if rO:dE+='+RSIOver_2_3_Ayak'
+   ca.append(dE);bg['dvg_durumu']=dE;cA.append(f"[{a}] {('Pozitif (Bullish)' if g else 'Negatif (Bearish)')} Strong Regular Divergence ({kY}: RSI Kapanış {bY:.1f}->{ci:.1f}{', 1.Ayak RSI Over 2./3.Ayak Onaylı!' if rO else ''}) (38-dvg.pdf & YT-Part12)")
+  elif eW:dE=f"{a}_Medium_{('IkiliDip_EQL' if g else 'IkiliTepe_EQH')}_DVG";ca.append(dE);bg['dvg_durumu']=f'{dE}(KisaInternalHedef)';cA.append(f"[{a}] Medium Regular Divergence ({('İkili Dip EQL' if g else 'İkili Tepe EQH')} + Osilatör Uyumsuzluğu -> Arkada Likidite Bıraktığı İçin Kısa/Internal Hedef Odaklı) (38-dvg.pdf & YT-Part12)")
+  elif du:bg['dvg_durumu']='Weak_EsitOsilator_DVG(TercihEdilmez)'
+  elif eb:bg['dvg_durumu']='Hidden_Gizli_DVG_Red(FailureSwing_Kullanilmaz)'
+ eF=J.split(':')[0];rA='ETH/USDT'if eF=='BTC/USDT'else'BTC/USDT';bj=an.get(a.lower(),an.get(LTF_PERIYOT,an.get('15m',{}))).get(rA)
+ if bj is not None and L(bj)>=18 and L(df)>=18:
+  dv='low'if g else'high';fV=F(df[dv].iloc[-16:-6].min()if g else df[dv].iloc[-16:-6].max());fW=F(df[dv].iloc[-6:-1].min()if g else df[dv].iloc[-6:-1].max());fX=F(bj[dv].iloc[-16:-6].min()if g else bj[dv].iloc[-16:-6].max());fY=F(bj[dv].iloc[-6:-1].min()if g else bj[dv].iloc[-6:-1].max());pL=(fW<fV)if g else(fW>fV);ec=(fY<fX)if g else(fY>fX);iP=A(_f(df,'close',-2)-_f(df,'close',-6))/M(E*4.0,1e-9);mv=M(_f(bj,'atr',-2),_f(bj,'close',-2)*0.001);iQ=A(_f(bj,'close',-2)-_f(bj,'close',-6))/M(mv*4.0,1e-9);hU=M(iP,iQ)/M(N(iP,iQ),0.05)>=1.55
+  if pL!=ec:sR='POIye_Takilan_DusukRiskSL'if not pL else'Likidite_Alan_Devyasyon';sE=f'{a}_SMT_{sR}';ca.append(sE);bg['smt_durumu']=f"{sE}({rA}{',HizFarki' if hU else ''})";cA.append(f"[{a}] {rA} ile {('Pozitif (Bullish)' if g else 'Negatif (Bearish)')} SMT: {('Bu parite Fresh POIye takıldı (Düşük Riskli Net Stop!), ' + rA + ' likidite aldı' if not pL else 'Bu parite likiditeyi süpürdü (Devyasyon), ' + rA + ' POIye takıldı')}{' + Hız/İvme Farkı Onaylı' if hU else ''} -> TP1: En Yakın Internal FTR/FL! (39-smt.pdf & YT-Part12)")
+  elif hU:bg['smt_durumu']=f'SMT_Hiz_Farki_ErkenUyari({rA})'
+ return(ca,fA,cA,ea,bg)
+def entry_mtf_3r_analizi(df,z,Z,C,a='1H',B='BULLISH'):
+ dw,cC,fZ=([],[],[]);eJ=None;bv={'aktif_entry_modeli':'Beklemede','istisnai_ob_durumu':'YOK','fvgli_choch_entry_alani':'YOK','zayif_choch_filtresi':'YOK','atr_stop_kalkani':'YOK','dogal_rr_orani':0.0,'mtf_ahenk_durumu':'Ahenkli','basabas_winrate':'%25 (1:3 R:R)'}
+ if L(df)<20:return(dw,eJ,cC,fZ,bv)
+ bb,bc,ak,pn=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2),_f(df,'open',-2));lP=F(df['atr'].iloc[-10:-1].mean())if'atr'in df.columns and L(df)>=12 else M(_f(df,'atr',-2),ak*0.001);E=M(lP,ak*0.001);g=B=='BULLISH';cb,j5,aV=(z.get('qm_meta',{}),z.get('v6_meta',{}),z.get('v12_meta',{}));g5=z.get('uc_istasyon',{});bx,eX=(z.get('strong_point'),z.get('weak_point'));co=cb.get('qml_seviyesi')
+ if I(co,(int,F))and I(bx,(int,F))and L(C)>0:
+  if(bx<co-E*0.35 if g else bx>co+E*0.35):
+   bv['istisnai_ob_durumu']=f'Istisnai_OB({bx:.4f}_vs_QML_{co:.4f})'
+   if(bx-E*0.2<=bb<=co+E*0.15 and ak>=bx)if g else(co-E*0.15<=bc<=bx+E*0.2 and ak<=bx):qr=f'{a}_Istisnai_OB_QML_Disi_Imb';dw.append(qr);eJ=bx;cC.append(f"[{a}] {('Bullish' if g else 'Bearish')} İstisnai Order Block ({bx:.4f}): QML ({co:.4f}) gerisinde açık Imbalance olduğu için OB uç noktada ayrıştı! (YT-Part13)")
+ cN=z.get('internal_choch','YOK');es=L(C)>0 or any(('FVG'in p or'Imb'in p for p in Z));aT=aV.get('smt_durumu','YOK')!='YOK'or aV.get('dvg_durumu','YOK')!='YOK';fB=('BULL_STRONG_CHOCH'in cN or'BULL_IBOS'in cN)if g else('BEAR_STRONG_CHOCH'in cN or'BEAR_IBOS'in cN);fC=('BULL_WEAK_CHOCH'in cN)if g else('BEAR_WEAK_CHOCH'in cN);be,bF=(g5.get('FL'),g5.get('ITZ'))
+ if fB and es:
+  ed=N(be,bF)if I(be,(int,F))and I(bF,(int,F))else ak-E*0.6;ee=M(be,bF)if I(be,(int,F))and I(bF,(int,F))else ak+E*0.6;mw=f"{a}_FVGli_Guclu_CHoCH_EntryAlani{'_RetestSMT' if aT else ''}";dw.append(mw);bv['fvgli_choch_entry_alani']=f'{mw}[{ed:.4f}-{ee:.4f}]';bv['aktif_entry_modeli']='Model5_FVGli_CHoCH+RetestSMT'if aT else'Model5_FVGli_Guclu_CHoCH_EntryAlani';fZ.append(('ENTRY_ZONE',M(2,L(df)-6),ed,ee))
+  if I(bF,(int,F)):eJ=(bF-E*0.35)if g else(bF+E*0.35)
+  cC.append(f"[{a}] FVG'li Güçlü CHoCH Giriş Alanı (FL-ITZ-OB Entry Zone: {ed:.4f}-{ee:.4f}){' + Testte İkinci SMT/DVG Onayı!' if aT else ''} -> Stop HTF arkasına değil LTF kırılım yapısına çekildi! (41.pdf & YT-Part13)")
+ elif fC:
+  if L(Z)>0 and(es or aT):qs=f'{a}_AnaPOI_FVGli_ZayifCHoCH_Onay';dw.append(qs);bv['zayif_choch_filtresi']='Onayli_AnaPOI_FVGli_ZayifCHoCH';bv['aktif_entry_modeli']='Model5_AnaPOI_FVGli_Zayif_CHoCH';cC.append(f"[{a}] Ana POI İçinde FVG'li Zayıf CHoCH Onayı{' + SMT Destekli' if aT else ''}: Bölge taze ve güçlü olduğu için likiditesiz erken dönüş onaylandı! (YT-Part13)")
+  else:bv['zayif_choch_filtresi']='RED_KitabinOrtasi_TersAkis_ZayifCHoCH_Tuzagi'
+ elif aT and L(Z)>0:bv['aktif_entry_modeli']='Model2_FreshPOI_SMT_DVG_ErkenGiris';dw.append(f'{a}_FreshPOI_SMT_DVG_ErkenEntry');cC.append(f'[{a}] Fresh POI + SMT/DVG Destekli Erken Giriş: Kırılım beklemeden Imbalance giderildiği anda SMT onayıyla uçtan pozlanma! (YT-Part13)')
+ iq=R(ak-E*1.5 if g else ak+E*1.5,5);lQ=R(ak-E*2.0 if g else ak+E*2.0,5);lR=R(ak-E*2.5 if g else ak+E*2.5,5);bv['atr_stop_kalkani']=f'1.5x:{iq}|2.0x:{lQ}(Safe)|2.5x:{lR}';jK=eJ if eJ is not None else(bx if I(bx,(int,F))else iq);dW=M(A(ak-jK),E*1.2);eu=cb.get('karsi_fresh_hedef')or eX or(ak+dW*3.2 if g else ak-dW*3.2);jL=A(F(eu)-ak);bR=R(jL/M(dW,1e-9),2);bv['dogal_rr_orani']=bR
+ if bR>=3.0:dw.append(f'{a}_Dogal_3R_Ustu_Potansiyel({bR:.1f}R)');cC.append(f'[{a}] Doğal >= 3R Trade Planı Onayı ({bR:.1f}R -> Hedef: {F(eu):.4f}): Uydurma stop/TP olmadan doğal yapı >= 3R veriyor (%25 Başabaş / %30 Winrate ile +20R Kasa Disiplini)! (44,45.pdf & YT-Part13)')
+ lS=cb.get('yaklasim_modeli','Standart');bv['pa_diyagrami_durumu']=f"1.Kalite({'OK' if L(Z)>0 else '-'})|2.Yaklasim({lS})|3.Giris({bv['aktif_entry_modeli']})"
+ if L(Z)>0 and(bv['aktif_entry_modeli']!='Beklemede'or I(be,(int,F))or I(bF,(int,F))):dw.append(f'{a}_PA_Diyagrami_3Asama_Onay');cC.append(f"[{a}] Price Action Diyagramı 3 Aşama Onayı (OB->QML[ITZ/DP/MPL]->MagicLine/BB[B.Spot/FL]->FO/FTR | Yaklaşım: {lS} | Giriş: {bv['aktif_entry_modeli']}) (YT-Short Diyagram)")
+ return(dw,eJ,cC,fZ,bv)
+def market_yapisi_ve_fibo_analizi(df,n=SWING_PENCERE):
+ aa,ar,kM=kirilim_yoksa_swing_yoktur_analizi(df,n);eK=ext_int_swing_ayristir(df,aa,ar);oW=wyckoff_analizi(df,aa,ar);a5={'yon':'NOTR','bos_var_mi':False,'kirilim_tipi':'YOK','discount_mu':False,'premium_mu':False,'ote_bull_mu':False,'ote_bear_mu':False,'guclu_trend_fibo':False,'range_low_yakin':False,'range_high_yakin':False,'fibo_oran':0.5,'geri_cekilme_oran':0.5,'swing_max':0.0,'swing_min':0.0,'fibo_hedefleri':{},'fibo_seviyeleri':{},'highs':aa,'lows':ar,'external_yon':eK['external_yon'],'strong_point':eK['strong_point'],'weak_point':eK['weak_point'],'break_line_fl':eK['break_line_fl'],'uc_istasyon':eK['uc_istasyon'],'internal_yon':eK['internal_yon'],'internal_choch':eK['internal_choch'],'external_msb':eK['external_msb'],'kuru_kafa_trendline_tuzagi':eK['kuru_kafa_trendline_tuzagi'],'wyckoff_fazi':oW['wyckoff_fazi'],'wyckoff_aciklama':oW['aciklama'],'egimli_flama_mi':oW['egimli_flama_mi'],'kysy_meta':kM,'kysy_onay':kM['kysy_onay'],'elenen_highs':kM['elenen_highs'],'elenen_lows':kM['elenen_lows'],'qml_seviyesi':kM.get('qml_seviyesi'),'qml_idx':kM.get('qml_idx')}
+ if L(aa)<1 or L(ar)<1:return a5
+ aa_p=([aa[0]]*(3-L(aa))+list(aa))if L(aa)<3 else list(aa)
+ ar_p=([ar[0]]*(3-L(ar))+list(ar))if L(ar)<3 else list(ar)
+ cl=_f(df,'close',-1);(hS,H0),(gd,H1),(hf,H2)=(aa_p[-3],aa_p[-2],aa_p[-1]);(hT,L0),(ge,L1),(hg,L2)=(ar_p[-3],ar_p[-2],ar_p[-1])
+ ir=(H2>H1 and L2>L1)and cl>=L2;it=L2<L1 and(cl>H2 or(H2>H1 and hf>hg));iu=L1<L0 and L2>=L1 and(cl>H2 or(H2>H1 and hf>hg));jM=cl>H2 and L2>=L1
+ iv=(H2<H1 and L2<L1)and cl<=H2;iw=H2>H1 and(cl<L2 or(L2<L1 and hg>hf));ix=H1>H0 and H2<=H1 and(cl<L2 or(L2<L1 and hg>hf));jN=cl<L2 and H2<=H1
+ kE=f" [Tüm Grafik Swingleri ({L(aa)}H/{L(ar)}L) | {kM['elenen_sayi']} İç Gürültü Elendi]"if kM['elenen_sayi']>0 else f" [Tüm Grafik Onaylı Swingler ({L(aa)}H/{L(ar)}L)]"
+ if not kM['kysy_onay']and not(ir or it or iu or jM or iv or iw or ix or jN):a5['yon'],a5['bos_var_mi'],a5['kirilim_tipi']=('NOTR',False,'Kırılım Yok -> Swing Yok (06-no-bos-no-trade.pdf: İç Yapı Gürültüsü)')
+ elif(kM['son_kirilim_yon']=='BULLISH'and not(cl<L2 and H2<H1))or((kM['son_kirilim_yon']!='BEARISH'or cl>H2)and(it or iu or ir or jM)):
+  a5['yon'],a5['bos_var_mi']=('BULLISH',True)
+  a5['kirilim_tipi']=(('Bullish External MSB / QML Kırılımı -> Fresh Talep OB Oluşturdu (YT-Part1,3,5)'if eK['external_msb']or L2<L1 else'Bullish Güçlü CHoCH (Likidite Alımlı Reversal -> Internal OB - YT-Part2&3)')if it else'Bullish Continue BOS / i-BOS -> Valid Demand Oluşturdu (YT-Part1,2,3)')+kE
+ elif kM['son_kirilim_yon']=='BEARISH'or iw or ix or iv or jN:
+  a5['yon'],a5['bos_var_mi']=('BEARISH',True)
+  a5['kirilim_tipi']=(('Bearish External MSB / QML Kırılımı -> Fresh Arz OB Oluşturdu (YT-Part1,3,5)'if eK['external_msb']or H2>H1 else'Bearish Güçlü CHoCH (Likidite Alımlı Reversal -> Internal Bear OB - YT-Part2&3)')if iw else'Bearish Continue BOS / i-BOS -> Valid Supply Oluşturdu (YT-Part1,2,3)')+kE
+ # Ters Yönde Fibonacci: Bullish ise Swing Low (L2 = 1) -> Swing High (H2 = 0); Bearish ise Swing High (H2 = 1) -> Swing Low (L2 = 0)
+ hb,fN=(F(H2),F(L2))if F(H2)>F(L2)else(M(F(H1),F(H2)),N(F(L1),F(L2)))
+ a5['swing_max'],a5['swing_min']=(hb,fN);dU=hb-fN
+ if dU>0:
+  j6=(cl-fN)/dU;j7=(hb-cl)/dU
+  a5['fibo_oran'],a5['geri_cekilme_oran']=(R(j6,3),R(j7,3))
+  a5['discount_mu'],a5['premium_mu']=(j6<=0.5,j6>0.5)
+  a5['ote_bull_mu'],a5['ote_bear_mu']=(0.60<=j7<=0.886,0.60<=j6<=0.886)
+  a5['guclu_trend_fibo']=bool((ir and 0.236<=j7<0.5)or(iv and 0.236<=j6<0.5))
+  a5['range_low_yakin'],a5['range_high_yakin']=(j6<=0.25,j6>=0.75)
+  if a5['yon']=='BULLISH':
+   a5['fibo_seviyeleri']={'-0.236':R(hb+dU*0.236,5),'0':R(hb,5),'0.236':R(hb-dU*0.236,5),'0.382':R(hb-dU*0.382,5),'0.5':R(hb-dU*0.5,5),'0.618':R(hb-dU*0.618,5),'0.705':R(hb-dU*0.705,5),'0.786':R(hb-dU*0.786,5),'1':R(fN,5)}
+   a5['fibo_hedefleri']={'TP1_Zero':R(hb,5),'TP2_0236':R(hb+dU*0.236,5),'TP3_Simetrik':R(hb+dU*0.618,5),'TP4_ABCD':R(hb+dU*1.0,5)}
+  else:
+   a5['fibo_seviyeleri']={'-0.236':R(M(0.0,fN-dU*0.236),5),'0':R(fN,5),'0.236':R(fN+dU*0.236,5),'0.382':R(fN+dU*0.382,5),'0.5':R(fN+dU*0.5,5),'0.618':R(fN+dU*0.618,5),'0.705':R(fN+dU*0.705,5),'0.786':R(fN+dU*0.786,5),'1':R(hb,5)}
+   a5['fibo_hedefleri']={'TP1_Zero':R(fN,5),'TP2_0236':R(M(0.0,fN-dU*0.236),5),'TP3_Simetrik':R(M(0.0,fN-dU*0.618),5),'TP4_ABCD':R(M(0.0,fN-dU*1.0),5)}
+ return a5
+def poi_ve_bolge_analizi(df,z,a='1H',B='BULLISH'):
+ bb,bc,ak=(_f(df,'low',-2),_f(df,'high',-2),_f(df,'close',-2));E=M(_f(df,'atr',-2),ak*0.001);aa,ar=(z['highs'],z['lows']);dP,K,az,U,px=([],[],[],None,0.0);C=set();g=B=='BULLISH'
+ for i in G(M(2,L(df)-40),L(df)-2):
+  bC,bD,aD,aM,cd,cc=(_f(df,'high',i-1),_f(df,'low',i-1),_f(df,'close',i),_f(df,'open',i),_f(df,'low',i+1),_f(df,'high',i+1))
+  if(cd>bC and aD-aM>E*0.45)if g else(bD>cc and aM-aD>E*0.45):
+   C.add(i);fo=df['low'if g else'high'].iloc[i+2:-2];kN,kO=(bC,cd)if g else(cc,bD);qa=(not fo.empty and F(fo.min())<bC-E*0.1)if g else(not fo.empty and F(fo.max())>bD+E*0.1)
+   if not qa and(kN-E*0.25<=bb<=kO+E*0.15 and ak>=kN if g else kN-E*0.15<=bc<=kO+E*0.25 and ak<=kO):
+    nn=f"{a}_{('FVG' if g else 'SIBI_FVG')}"
+    if nn not in dP:dP.append(nn);K.append(f"[{a}] Taze {('BISI' if g else 'Bearish SIBI')} FVG / Imbalance Kök Testi ({kN:.4f}-{kO:.4f}) (19.pdf & YT-Part3)");az.append(('FVG',i-1,kN,kO));U=(kN if U is None else N(U,kN))if g else(kO if U is None else M(U,kO))
+  if(bD>cc and aM-aD>E*0.45 and ak>bD and cc-E*0.15<=bb<=bD+E*0.2)if g else(cd>bC and aD-aM>E*0.45 and ak<bC and bC-E*0.2<=bc<=cd+E*0.15):
+   iW=f"{a}_{('IFVG' if g else 'Bear_IFVG')}";kP,kQ=(cc,bD)if g else(bC,cd)
+   if iW not in dP:dP.append(iW);K.append(f"[{a}] {('Bullish' if g else 'Bearish')} Inversion FVG (IFVG Dönüşümü) (19-fvg.pdf)");az.append(('IFVG',i-1,kP,kQ));U=(kP if U is None else N(U,kP))if g else(kQ if U is None else M(U,kQ))
+ pz,pA=(ar,aa)if g else(aa,ar);qU=N([h for _,h in aa[-4:]if h>ak*1.005],default=ak*1.05)if g else M([l for _,l in ar[-4:]if l<ak*0.995],default=ak*0.95)
+ if L(pz)>=2:
+  for bu,lu in pz[-4:]:
+   if bu<2 or bu>=L(df)-3:continue
+   ov=[kv for ki,kv in pA if ki<bu];e7=df.iloc[M(0,bu-1):N(L(df)-2,bu+2)]
+   if g:
+    gH=ov[-1]if ov else F(df['high'].iloc[:bu].max());no=F(df['high'].iloc[bu+1:-1].max())
+    if no<=gH:continue
+    nq=e7[e7['close']<e7['open']];aH,aJ=(lu,F(nq['high'].max())if not nq.empty else lu+E*0.5);qt=no-aH
+   else:
+    gH=ov[-1]if ov else F(df['low'].iloc[:bu].min());no=F(df['low'].iloc[bu+1:-1].min())
+    if no>=gH:continue
+    nq=e7[e7['close']>e7['open']];aH,aJ=(F(nq['low'].min())if not nq.empty else lu-E*0.5,lu);qt=aJ-no
+   hi=rbr_dbd_analizi(df,bu,aH,aJ,B);qb=M(aJ,hi['imbalance_koku'])if g else N(aH,hi['imbalance_koku']);rp=2.0 if(any((bu<=sd<=bu+4 for sd in C))or hi['patlama_ayrilis'])and qt>=E*2.2 else 1.0 if qt>=E*1.5 else 0.0;jE=sum((1 for k in G(bu,N(L(df)-2,bu+6))if(_f(df,'close',k)<=aJ if g else _f(df,'close',k)>=aH)));rq=2.0 if hi['v_shape_1mum']or jE<=2 else 1.0 if jE<=5 else 0.0;oD,ry=(0,False)
+   for k in G(N(L(df)-2,bu+M(jE,2)+1),L(df)-2):
+    if _f(df,'close',k)<aH if g else _f(df,'close',k)>aJ:ry=True;break
+    if _f(df,'low',k)<=aJ if g else _f(df,'high',k)>=aH:oD+=1
+   if ry or oD>=3:continue
+   rr=3.0 if oD==0 else 1.5 if oD==1 else 0.0;rt=(qU-aJ if g else aH-qU)/M(aJ-aH,E*0.25);na=3.0 if rt>=3.0 else 1.5 if rt>=2.0 else 0.5;mD=N(10.0,R(rp+rq+rr+na+N(1.0,hi['yaklasim_ek_puan']*0.5),1));qc=[av for ai,av in pz if ai<bu];gv=L(qc)>0 and(lu<qc[-1]if g else lu>qc[-1]);ru='Ext'if a=='1H'else'Int';qd=f"{ru}_{('Reversal_OB' if g else 'Reversal_BearOB')}_{hi['kalip_adi']}"if gv else f"{ru}_{('Continue_ValidDem' if g else 'Continue_ValidSup')}_{hi['kalip_adi']}"
+   if hi['hidden_base_dp']:qd+='+HiddenDP'
+   if(aH-E*0.25<=bb<=qb+E*0.15 and ak>=aH)if g else(qb-E*0.15<=bc<=aJ+E*0.25 and ak<=aJ):px=M(px,mD);dP.append(f'{a}_{qd}({mD}/10)');pQ=', Yaklaşım: '+'+'.join(hi['yaklasim_ipuclari'])if hi['yaklasim_ipuclari']else'';K.append(f"[{a}] {('Bullish' if g else 'Bearish')} {qd} (İmbalans Kökü: {qb:.4f}) | Güç: {mD}/10 (Çıkış:{rp}p, V-Shape:{rq}p, Fresh:{rr}p, RR:{na}p{pQ}) (YT-Part1,2,3)");az.append(('OB',bu,aH,aJ));U=(N(U,aH)if U else aH)if g else(M(U,aJ)if U else aJ);break
+ if L(pA)>=2:
+  for gw,ow in pA[-4:-1]:
+   if gw<2 or gw>=L(df)-5:continue
+   fL=df.iloc[gw+1:N(L(df)-2,gw+12)];kR,kS=((_f(df,'open',gw)if _f(df,'close',gw)>_f(df,'open',gw)else ow-E*0.35),ow)if g else(ow,(_f(df,'open',gw)if _f(df,'close',gw)<_f(df,'open',gw)else ow+E*0.35));h6=any((F(r['close'])>kS+E*0.12 and F(r['close'])-F(r['open'])>E*0.5 for _,r in fL.iterrows()))if g else any((F(r['close'])<kR-E*0.12 and F(r['open'])-F(r['close'])>E*0.5 for _,r in fL.iterrows()))
+   if h6 and(kR-E*0.2<=(bb if g else bc)<=kS+E*0.2)and(ak>=kR if g else ak<=kS):dP.append(f"{a}_{('TersFlag_Flip' if g else 'Bear_TersFlag_Flip')}");K.append(f"[{a}] {('Bullish' if g else 'Bearish')} Flip Bölge / Ters Flag ({(kS if g else kR):.4f}) (YT-Part1,2,3)");az.append(('BB/FL',gw,kR,kS));U=(kR if U is None else N(U,kR))if g else(kS if U is None else M(U,kS));break
+ j8,f0,f1,hC,_=ftr_fo_itz_taramasi(df,z,C,a,B);eY,dx,dy,ef,eg=dp_ve_fl_analizi(df,z,C,a,B);j9,mx,iC,iD,dg=quasimodo_mpl_analizi(df,z,C,a,B);ka,eh,hv,jX,g4=imbalance_fvg_koku_analizi(df,z,C,a,B);z['fl_dp_meta'],z['qm_meta'],z['v6_meta']=(eg,dg,g4)
+ for kb,f2,kd,hD in[(j8,f0,f1,hC),(eY,dx,dy,ef),(j9,mx,iC,iD),(ka,eh,hv,jX)]:
+  for eZ in kb:
+   if eZ not in dP:dP.append(eZ)
+  K.extend(kd);az.extend(hD)
+  if f2 is not None:U=f2 if U is None else N(U,f2)if g else M(U,f2)
+ ke,ei,fl,lf,er=gap_vib_fibo_analizi(df,z,dP,a,B);kf,ej,fP,iH,fg=range_po3_tt3_analizi(df,z,C,a,B);hE,dz,b9,cz,bQ=bobin_atnali_mw_analizi(df,z,C,a,B);hF,dA,bA,dq,bl=engulf_pinbar_analizi(df,z,C,a,B);ev,dB,cA,ea,bg=ib_fakey_smt_analizi(df,z,C,a,B,z.get('sembol','BTC/USDT'));z['v7_meta'],z['v9_meta'],z['v10_meta'],z['v11_meta'],z['v12_meta']=(er,fg,bQ,bl,bg);hG,dC,cC,fZ,bv=entry_mtf_3r_analizi(df,z,dP+ev,C,a,B);z['v13_meta']=bv
+ for rX,jS,ph,rY in[(ke,ei,fl,lf),(kf,ej,fP,iH),(hE,dz,b9,cz),(hF,dA,bA,dq),(ev,dB,cA,ea),(hG,dC,cC,fZ)]:
+  for vp in rX:
+   if vp not in dP:dP.append(vp)
+  K.extend(ph);az.extend(rY)
+  if jS is not None:U=jS if U is None else N(U,jS)if g else M(U,jS)
+ return(dP,U,K,az,px)
+def likidite_smt_analizi(J,bJ,af,a2,B='BULLISH'):
+ iR,K,a3=([],[],0);pl,pm=(a2['highs'],a2['lows']);nZ,n0=swing_noktalarini_bul(af,n=2,kirilim_sarti=False);cl=_f(af,'close',-2);eF=J.split(':')[0];qV='ETH/USDT'if eF=='BTC/USDT'else'BTC/USDT';k7=an.get(LTF_PERIYOT,an.get('15m',{})).get(qV);oX=a2.get('wyckoff_fazi','');g=B=='BULLISH'
+ if(g and oX in('ACCUMULATION_SPRING','RE_ACCUMULATION'))or(not g and oX in('DISTRIBUTION_UTAD','RE_DISTRIBUTION')):iR.append(oX);K.append(f"[{MTF_PERIYOT.upper()}] {a2.get('wyckoff_aciklama', 'Wyckoff Yakıt Operasyonu')}");a3+=7
+ hH,pB=(n0 if g else nZ,pm if g else pl)
+ if L(hH)>=1:
+  my=hH[-1][1]
+  if(F(af['low'].iloc[-4:-1].min())<my and cl>my)if g else(F(af['high'].iloc[-4:-1].max())>my and cl<my):iR.append('Bull_SFP'if g else'Bear_SFP');K.append(f"[{LTF_PERIYOT}] {('Bullish' if g else 'Bearish')} SFP: {my:.4f} likiditesi süpürüldü (23-sfp.pdf)");a3+=9
+ if L(pB)>=2:
+  u1,u2=(pB[-2][1],pB[-1][1])
+  if A(u2-u1)/M(u1,1e-09)<=0.004:iR.append('EQL_Fakeout'if g else'EQH_Fakeout');K.append(f"[{MTF_PERIYOT.upper()}] {('EQL' if g else 'EQH')} Fake-Out Likiditesi (16-fakeout.pdf)");a3+=5
+  if(_f(bJ,'low',-2)<u2 and _f(bJ,'close',-2)>u2)if g else(_f(bJ,'high',-2)>u2 and _f(bJ,'close',-2)<u2):iR.append('HTF_TT3/SFP'if g else'HTF_BearTT3');K.append(f'[{MTF_PERIYOT.upper()}] Three Tap Setup (TT3) / HTF Sapma Dönüşü (27-tt3.pdf)');a3+=8
+ if L(hH)>=3:
+  d1,d2,d3=(hH[-3][1],hH[-2][1],hH[-1][1])
+  if(d1>d2>d3 and d1-d2>0 and 0.45<=(d2-d3)/(d1-d2)<=1.65)if g else(d1<d2<d3 and d2-d1>0 and 0.45<=(d3-d2)/(d2-d1)<=1.65):iR.append('3D_Bull'if g else'3D_Bear');K.append(f"[{LTF_PERIYOT}] {('Bullish' if g else 'Bearish')} Three Drive (3D) Yorulma Yaklaşımı (17.pdf)");a3+=5
+ if L(hH)>=2:
+  (ib,u1),(ic,u2)=(hH[-2],hH[-1]);nb,nc=(_f(af,'close',ib),_f(af,'close',ic));bY,ci,gr,kC,gt,gu=(_f(af,'rsi',ib),_f(af,'rsi',ic),_f(af,'ao',ib),_f(af,'ao',ic),_f(af,'cvd',ib),_f(af,'cvd',ic));f3=(nc<=nb*1.001 and ci>bY+1.8)if g else(nc>=nb*0.999 and ci<bY-1.8);hI=(u2<=u1*1.0015 and((kC>gr and gr<0)or gu>gt))if g else(u2>=u1*0.9985 and((kC<gr and gr>0)or gu<gt))
+  if f3 or hI:gx='Medium_EQ_DVG'if A(u2-u1)/M(u1,1e-9)<=0.0035 else'Strong_Regular_DVG';iR.append(f"{('Bull' if g else 'Bear')}_{gx}");K.append(f"[{LTF_PERIYOT}] {('Bullish' if g else 'Bearish')} {gx} ({'RSI Kapanış' if f3 else 'AO/CVD İğne'} {bY:.0f}->{ci:.0f}) (38-dvg.pdf & YT-Part12)");a3+=7 if'Strong'in gx else 5
+ if k7 is not None and L(k7)>=18 and L(af)>=18:
+  dv='low'if g else'high';ox,oy=(F(af[dv].iloc[-16:-6].min()if g else af[dv].iloc[-16:-6].max()),F(af[dv].iloc[-6:-1].min()if g else af[dv].iloc[-6:-1].max()));oz,oA=(F(k7[dv].iloc[-16:-6].min()if g else k7[dv].iloc[-16:-6].max()),F(k7[dv].iloc[-6:-1].min()if g else k7[dv].iloc[-6:-1].max()))
+  if(oy<ox and oA>=oz or(oy>=ox and oA<oz))if g else(oy>ox and oA<=oz or(oy<=ox and oA>oz)):iR.append('Bull_SMT'if g else'Bear_SMT');K.append(f"[{LTF_PERIYOT}] {qV} ile {('Pozitif (Bullish)' if g else 'Negatif (Bearish)')} SMT Uyuşmazlığı (39-smt.pdf & YT-Part10)");a3+=6
+ return(N(25,a3),iR,K)
+def ltf_pa_ve_giris_tetikleyici(af,U=None,B='BULLISH'):
+ aa,ar=swing_noktalarini_bul(af,n=2)
+ if L(af)<2:return(0,[],[],0.0,0.0)
+ if L(aa)<1 or L(ar)<1 or L(af)<8:
+  g6_fb=_f(af,'close',-1)
+  al_fb=R(g6_fb*(0.992 if B=='BULLISH'else 1.008),6)
+  return(0,[],[],g6_fb,al_fb)
+ m0,m1,m2,m3=(af.iloc[-5],af.iloc[-4],af.iloc[-3],af.iloc[-2]);g6=_f(af,'close',-1);E=M(F(m3['atr']),g6*0.001);rZ,r0,c5,c6,bB,cD,bC,bD=(*_r(m0,'open','close','high','low'),*_r(m1,'open','close','high','low'));aM,aD,cG,cH,bf,at,cc,cd=(*_r(m2,'open','close','high','low'),*_r(m3,'open','close','high','low'));hJ,cq,ce=(A(cD-bB),A(aD-aM),A(at-bf));mz,mA=(N(at,bf)-cd,cc-M(at,bf));pC,pD=(cG-M(aD,aM),N(aD,aM)-cH);f4,lk,f5,ll=(aa[-1][1],aa[-2][1]if L(aa)>=2 else aa[-1][1],ar[-1][1],ar[-2][1]if L(ar)>=2 else ar[-1][1]);pE,q6=(cG<=bC and cH>=bD,bC<=c5 and bD>=c6);el,K,a3=([],[],0);g=B=='BULLISH';eq,aX=('Bull'if g else'Bear','Bullish'if g else'Bearish');oY=(aD<aM and at>cG)if g else(aD>aM and at<cH);jO=(aD<aM and at>bf and at>=aM and ce>cq*1.05)if g else(aD>aM and at<bf and at<=aM and ce>cq*1.05);ho=cc>cG and cd<cH and(at>bf if g else at<bf)
+ if oY:el.append(f'{eq}_MeraMera_QML_DP');K.append(f'[{LTF_PERIYOT}] {aX} Mera Mera / Outside Engulf Karar Noktası (DP = LTF Gizli QML) (10, 30.pdf & YT-Part4&5)');a3+=13
+ elif jO or ho:el.append(f'{eq}_Engulf/OB');K.append(f'[{LTF_PERIYOT}] {aX} Engulfing / Outside Bar Onay Mumu (30-engulf.pdf)');a3+=12
+ jP=(mz>ce*1.6 and mz>mA*1.4 and at>=bf)if g else(mA>ce*1.6 and mA>mz*1.4 and at<=bf);fD=(aD<aM and at>bf if g else aD>aM and at<bf)and cq>E*0.45 and ce>E*0.45 and A(ce-cq)<=cq*0.3
+ if jP:el.append(f'{eq}_Pinbar');K.append(f'[{LTF_PERIYOT}] {aX} Tepki Spike / Pinbar Reddiyesi (31-spike-pinbar.pdf)');a3+=10
+ elif fD:el.append(f'{eq}_Railroad');K.append(f'[{LTF_PERIYOT}] {aX} Railroad Tracks Dönüş Formasyonu (31-railroad.pdf)');a3+=10
+ lT=(aM-aD>E*0.6 and at-bf>E*0.6 and at>=aM or(aD>aM and cq>E*0.55 and aD>bC and aM<=cd<=aD and at>=aD))if g else(aD-aM>E*0.6 and bf-at>E*0.6 and at<=aM or(aD<aM and cq>E*0.55 and aD<bD and aD<=cc<=aM and at<=aD))
+ if lT:el.append(f'{eq}_BosaltDoldur');K.append(f'[{LTF_PERIYOT}] {aX} Boşalt-Doldur Momentum + Ters İğne Onayı (32-bosalt-doldur.pdf)');a3+=14
+ b1=(pE and cd<bD and at>=cH)if g else(pE and cc>bC and at<=cG);dm=(q6 and cH<c6 and aD<aM and at>bf and at>=bD)if g else(q6 and cG>c5 and aD>aM and at<bf and at<=bC)
+ if b1 or dm:el.append(f"{eq}_{('Kuralli_Pinbarli_Fakey' if b1 else 'Pinbarsiz_Fakey_PO3')}");K.append(f"[{LTF_PERIYOT}] {aX} {('Kurallı Pinbarlı Fake Setup (Inside Bar İçinde/Üstünde Kapandı)' if b1 else 'Pinbarsız 4-Mum Fake Setup (Zıt Renkli Dönüş)')} (34-fake-setup.pdf & YT-Part12)");a3+=15
+ elif pE and(at>bC if g else at<bD):el.append(f'{eq}_InsideBrk');K.append(f'[{LTF_PERIYOT}] {aX} Inside Bar Kırılımı (33-inside-bar.pdf)');a3+=10
+ lU=(aD>aM and at>bf and pC>pD*1.25 and aM<=cd<=aD and at>cG)if g else(aD<aM and at<bf and pD>pC*1.25 and aD<=cc<=aM and at<cH)
+ if lU:el.append(f'{eq}_YingYang_HiddenBase');K.append(f'[{LTF_PERIYOT}] {aX} Ying-Yang (Hidden Base) Momentum Devam Formasyonu (35.pdf & YT-Part10)');a3+=12
+ eL=(at>bf and ce>=E*0.5 and mz<=ce*0.09 and(aD<aM and pD<=cq*0.12 or mA<=ce*0.1))if g else(at<bf and ce>=E*0.5 and mA<=ce*0.09 and(aD>aM and pC<=cq*0.12 or mz<=ce*0.1))
+ if eL:el.append(f'{eq}_Istekli_Marubozu');K.append(f'[{LTF_PERIYOT}] {aX} İstekli Mum / Marubozu (Bölgeden İğnesiz Sıfır Mukavemetli Dönüş) (35.pdf & YT-Part10)');a3+=12
+ if(cD<bB and hJ>E*0.45 and cq<=hJ*0.45 and at>bf and at>=(bB+cD)/2.0)if g else(cD>bB and hJ>E*0.45 and cq<=hJ*0.45 and at<bf and at<=(bB+cD)/2.0):el.append('Bull_MorningStar_Doji'if g else'Bear_EveningStar_Doji');K.append(f"[{LTF_PERIYOT}] {aX} {('Sabah' if g else 'Akşam')} Yıldızı (Doji + Güçlü Dönüş Mumu) (YT-Part2&3)");a3+=11
+ if g:
+  if A(f5-ll)/M(ll,1e-09)<=0.0085 and at>bf and at>f5+E*0.28:iX='Simple_W_Trade'if A(f5-ll)<=E*0.2 else'ShortFormed_W_Trade'if f5>ll else'Extended_W_Trade';el.append(iX);K.append(f'[{LTF_PERIYOT}] {iX} (2. Bacak Onayı + W-Kink Dönüşü) (29.pdf & YT-Part10)');a3+=11
+  if at>f4 and aD<=f4:kD=f5<ll;el.append('LTF_Strong_Bull_CHoCH'if kD else'LTF_Weak_Bull_CHoCH');K.append(f"[{LTF_PERIYOT}] LTF {('Güçlü' if kD else 'Zayıf')} Bullish CHoCH (> {f4:.4f}) (YT-Part1,2,3,10)");a3+=13 if kD else 9
+  r1=N(f5,ll if f5>=g6*0.996 else f5,F(af['low'].iloc[-15:].min()));al=R(N(r1-M(E*0.5,g6*0.0025),g6*0.996),6)
+  if g6<cd:a3=0
+ else:
+  if A(f4-lk)/M(lk,1e-09)<=0.0085 and at<bf and at<f4-E*0.28:iY='Simple_M_Trade'if A(f4-lk)<=E*0.2 else'ShortFormed_M_Trade'if f4<lk else'Extended_M_Trade';el.append(iY);K.append(f'[{LTF_PERIYOT}] {iY} (2. Bacak Onayı + M-Kink Dönüşü) (29.pdf & YT-Part10)');a3+=11
+  if at<f5 and aD>=f5:kD=f4>lk;el.append('LTF_Strong_Bear_CHoCH'if kD else'LTF_Weak_Bear_CHoCH');K.append(f"[{LTF_PERIYOT}] LTF {('Güçlü' if kD else 'Zayıf')} Bearish CHoCH (< {f5:.4f}) (YT-Part1,2,3,10)");a3+=13 if kD else 9
+  r2=M(f4,lk if f4<=g6*1.004 else f4,F(af['high'].iloc[-15:].max()));al=R(M(r2+M(E*0.5,g6*0.0025),g6*1.004),6)
+  if g6>cc:a3=0
+ return(N(25,a3),el,K,g6,al)
+def _karne_checklist_olustur(H,html_mi=False,yorum_on_eki=''):
+ kFlt=H.get('konum_meta',{})if I(H,dict)else{}
+ chk=kFlt.get('checklist',{})
+ yon_ok=bool(chk.get('yon_ok',kFlt.get('htf_yon_ok',False)))
+ qml_ok=bool(chk.get('qml',kFlt.get('htf_qml_bolgesinde',False)))
+ ote_ok=bool(chk.get('ote',kFlt.get('htf_ote_bolgesinde',False)))
+ ob_ok=bool(chk.get('ob',kFlt.get('htf_ob_bolgesinde',False)))
+ fresh_ok=bool(chk.get('fresh_arz_talep',kFlt.get('htf_arz_talep_bolgesinde',False)))
+ choch_ok=bool(chk.get('choch_noktasi',kFlt.get('htf_choch_noktasinda',False)))
+ bos_ok=bool(chk.get('bos_noktasi',kFlt.get('htf_bos_noktasinda',False)))
+ itz_ok=bool(chk.get('itz',kFlt.get('htf_itz_bolgesinde',False)))
+ magic_ok=bool(chk.get('magic_line',kFlt.get('htf_magic_line_bolgesinde',False)))
+ ltf_kir_ok=bool(chk.get('ltf_reversal_kirilim',kFlt.get('ltf_reversal_kirilim_onay',False)))
+ ltf_mum_ok=bool(chk.get('ltf_reversal_mum',kFlt.get('ltf_reversal_mum_onay',False)))
+ safe_sayi=int(kFlt.get('htf_bolge_sayisi',sum([int(qml_ok),int(ote_ok),int(ob_ok),int(fresh_ok),int(choch_ok),int(bos_ok),int(itz_ok),int(magic_ok)])))
+ safe_puan=int(kFlt.get('htf_safe_puan',N(100,safe_sayi*15+(15 if yon_ok else 0)+(15 if(ltf_kir_ok or ltf_mum_ok)else 0))))
+ safe_derece=str(kFlt.get('htf_safe_derecesi','🛡️ ULTRA SAFE'if safe_sayi>=4 else'🛡️ ÇOK SAFE'if safe_sayi==3 else'🟢 SAFE'if safe_sayi==2 else'🟡 STANDART SAFE'if safe_sayi==1 else'🔴 BÖLGE DIŞI'))
+ htf_yon_str=str(H.get('yon_4h',kFlt.get('hedef_yon','-')))
+ kir_detay=', '.join(kFlt.get('ltf_kirilim_listesi',[])[:2])or('Onaylı'if ltf_kir_ok else'Bekleniyor')
+ mum_detay=', '.join(kFlt.get('ltf_mum_listesi',[])[:2])or('Onaylı'if ltf_mum_ok else'Bekleniyor')
+ maddeler=[
+  ('1. Yön Belirleme (HTF Ana Yön)',yon_ok,htf_yon_str),
+  ('1.Öncelik: QML (Quasimodo Seviyesi)',qml_ok,str(chk.get('qml_fiyat','-'))),
+  ('2.Öncelik: OB (HTF Order Block)',ob_ok,str(chk.get('ob_aralik','-'))),
+  ('3.Öncelik: Fresh Arz/Talep Bölgesi',fresh_ok,str(chk.get('fresh_aralik','-'))),
+  ('4.Öncelik: OTE (Fibo 0.618-0.705-0.786)',ote_ok,str(chk.get('ote_aralik','-'))),
+  ('2.Kademe: BOS Yaptıran Nokta (Kırılım)',bos_ok,str(chk.get('bos_fiyat','-'))),
+  ('2.Kademe: CHoCH Yapılan Nokta (Kırılım)',choch_ok,str(chk.get('choch_fiyat','-'))),
+  ('2.Kademe: ITZ (Kırılım Öncesi Son Yapı)',itz_ok,str(chk.get('itz_fiyat','-'))),
+  ('2.Kademe: Magic Line (Flag Limit / FL)',magic_ok,str(chk.get('magic_fiyat','-'))),
+  ('3a. LTF Reversal Kırılım Onayı',ltf_kir_ok,kir_detay),
+  ('3b. LTF Reversal Mum Konsepti',ltf_mum_ok,mum_detay)
+ ]
+ if html_mi:
+  satirlar=[]
+  satirlar.append(f'<div id="karne_checklist_kutu" style="background:#0f172a;border:1px solid #334155;border-radius:6px;padding:6px 8px;margin:5px 0;">')
+  satirlar.append(f'<div style="color:#fde047;font-weight:bold;font-size:11.5px;margin-bottom:4px;">📋 STRATEJİ & SEVİYE KARNESİ CHECK-LIST ({safe_sayi}/8 HTF Bölge | {safe_derece} | Safe Puanı: {safe_puan}/100)</div>')
+  for ad,ok_mu,dt in maddeler:
+   ikon='✅'if ok_mu else'⬜'
+   renk='#4ade80'if ok_mu else'#94a3b8'
+   agirlik='bold'if ok_mu else'normal'
+   satirlar.append(f'<div style="color:{renk};font-weight:{agirlik};font-size:11px;line-height:1.42;">{ikon} {ad}: <span style="color:#cbd5e1;font-weight:normal;">{dt}</span></div>')
+  satirlar.append('</div>')
+  return''.join(satirlar)
+ satirlar=[
+  f"{yorum_on_eki}========================================",
+  f"{yorum_on_eki}📋 STRATEJİ & SEVİYE KARNESİ CHECK-LIST",
+  f"{yorum_on_eki}🛡️ SAFE SKORU: {safe_sayi}/8 HTF Bölge Sağlandı | {safe_derece} ({safe_puan}/100 Puan)",
+  f"{yorum_on_eki}========================================"
+ ]
+ for ad,ok_mu,dt in maddeler:
+  ikon='[✅]'if ok_mu else'[⬜]'
+  satirlar.append(f"{yorum_on_eki} {ikon} {ad:<36} : {dt}")
+ return'\n'.join(satirlar)+'\n'
+def _htf_adimlari_ve_ltf_tetik_kontrolu(bS,bw,aY,aP,Q,aj,f4h,f6,q8,hN,q7,ra,kk,B='BULLISH'):
+ g=B=='BULLISH';ak=_f(aY,'close',-1);bb=N(_f(aY,'low',-3),_f(aY,'low',-2),_f(aY,'low',-1));bc=M(_f(aY,'high',-3),_f(aY,'high',-2),_f(aY,'high',-1))
+ de=bb if g else bc
+ scalp_aktif=(ISLEM_TARZI_MODU=='Scalp')
+ tol_k=1.65 if scalp_aktif else 1.0
+ E_htf=M(_f(bS,'atr',-2)if'atr'in bS.columns else ak*0.003,ak*0.001)*tol_k
+ E_ltf=M(_f(aY,'atr',-2)if'atr'in aY.columns else ak*0.0015,ak*0.0005)
+ # ADIM 1: YÖN BELİRLEMEK (HTF Swing ve Yapı Yönü)
+ htf_yon_ok=(aP.get('yon')==B)
+ ts_htf=list(G(L(bS)))
+ htf_bos_raw=aP.get('kysy_meta',{}).get('bos_list',[])
+ bs_htf=[{'orig_idx':b[2],'idx2':b[0],'yon':b[4],'tip':b[5]}for b in htf_bos_raw]
+ htf_qml_lvl=F(aP.get('qml_seviyesi')or aP.get('qm_meta',{}).get('qml_seviyesi')or aP.get('qm_meta',{}).get('mpl_seviyesi')or 0.0)
+ htf_at_list,htf_imb_list=_arz_talep_ve_imbalance_sablon_hesapla(bS,ts_htf,bs_htf,E_htf,htf_qml_lvl if htf_qml_lvl>0 else None)
+ hedef_tur='TALEP'if g else'ARZ'
+ htf_yon_at=[z for z in htf_at_list if z.get('tur')==hedef_tur]
+ sMax,sMin=(F(aP.get('swing_max')or 0.0),F(aP.get('swing_min')or 0.0))
+ dU=M(0.0,sMax-sMin)
+ # ADIM 2: HTF'DE 8 BÖLGE / SEVİYE BELİRLEMEK VE KAÇ TANESİNİ SAĞLADIĞINI PUANLAMAK (SAFE SKORU)
+ # 2.1 - QML (Bullish QML / Bearish QML Seviyesi)
+ qml_band_ok=False
+ if htf_qml_lvl>0 and dU>0:
+  if g and sMin<=htf_qml_lvl<=sMin+dU*0.42:
+   qml_band_ok=bool((sMin-E_htf*0.18<=de<=htf_qml_lvl+E_htf*0.35 or sMin-E_htf*0.18<=ak<=htf_qml_lvl+E_htf*0.35)and ak>=sMin-E_htf*0.1)
+  elif not g and sMax-dU*0.42<=htf_qml_lvl<=sMax:
+   qml_band_ok=bool((htf_qml_lvl-E_htf*0.35<=de<=sMax+E_htf*0.18 or htf_qml_lvl-E_htf*0.35<=ak<=sMax+E_htf*0.18)and ak<=sMax+E_htf*0.1)
+ htf_qml_bolgesinde=bool((htf_qml_lvl>0 and(A(de-htf_qml_lvl)<=E_htf*0.6 or A(ak-htf_qml_lvl)<=E_htf*0.6))or qml_band_ok or any('QM'in p or'MPL'in p for p in f4h))
+ # 2.2 - OTE (Optimal Trade Entry: 0.618 - 0.705 - 0.786)
+ ote_lo,ote_hi=(0.0,0.0)
+ if dU>0:
+  ote_lo,ote_hi=(sMax-dU*0.786,sMax-dU*0.618)if g else(sMin+dU*0.618,sMin+dU*0.786)
+  htf_ote_bolgesinde=bool((ote_lo-E_htf*0.15<=de<=ote_hi+E_htf*0.15)or(ote_lo-E_htf*0.15<=ak<=ote_hi+E_htf*0.15))
+ else:
+  htf_ote_bolgesinde=False
+ # 2.3 - OB (HTF Order Block Kutusu)
+ htf_ob_list=[z for z in htf_yon_at if z.get('alt_tur')in('REVERSAL_OB','VALID_DEMAND','VALID_SUPPLY')]
+ htf_sp=F(aP.get('strong_point')or 0.0)
+ ob_lo,ob_hi=(0.0,0.0)
+ if htf_ob_list:
+  ob_lo,ob_hi=(F(htf_ob_list[-1]['lo']),F(htf_ob_list[-1]['hi']))
+ elif dU>0:
+  ob_lo,ob_hi=((sMin,sMin+N(dU*0.18,E_htf*1.25))if g else(sMax-N(dU*0.18,E_htf*1.25),sMax))
+ htf_ob_temas=any((z['lo']-E_htf*0.2<=de<=z['hi']+E_htf*0.2)or(z['lo']-E_htf*0.2<=ak<=z['hi']+E_htf*0.2)for z in htf_ob_list)or any((lo-E_htf*0.2<=de<=hi+E_htf*0.2)or(lo-E_htf*0.2<=ak<=hi+E_htf*0.2)for ktip,_,lo,hi in hN if ktip=='OB')or(ob_hi>ob_lo>0 and((ob_lo-E_htf*0.18<=de<=ob_hi+E_htf*0.18 or ob_lo-E_htf*0.18<=ak<=ob_hi+E_htf*0.18)and(ak>=ob_lo-E_htf*0.1 if g else ak<=ob_hi+E_htf*0.1)))
+ htf_ob_bolgesinde=bool(htf_ob_temas)
+ # 2.4 - Fresh Arz/Talep Noktası (Taze Talep / Taze Arz Bölgesi - Grafiklerdeki 1 ile 0.786/QML arası Taze Bölge veya Taze POI)
+ fresh_lo,fresh_hi=(0.0,0.0)
+ if dU>0:
+  if g:
+   fresh_lo=sMin
+   fresh_hi=M(sMax-dU*0.786,htf_qml_lvl if sMin<htf_qml_lvl<=sMax-dU*0.5 else sMax-dU*0.786)
+  else:
+   fresh_hi=sMax
+   fresh_lo=N(sMin+dU*0.786,htf_qml_lvl if sMin+dU*0.5<=htf_qml_lvl<sMax else sMin+dU*0.786)
+ fresh_kutu_temas=any((z['lo']-E_htf*0.2<=de<=z['hi']+E_htf*0.2)or(z['lo']-E_htf*0.2<=ak<=z['hi']+E_htf*0.2)for z in htf_yon_at if z.get('taze',True))or any((lo-E_htf*0.2<=de<=hi+E_htf*0.2)or(lo-E_htf*0.2<=ak<=hi+E_htf*0.2)for ktip,_,lo,hi in hN if ktip in('BB/FL','OB'))
+ fresh_grafik_bolge_temas=bool(fresh_hi>fresh_lo>0 and((fresh_lo-E_htf*0.18<=de<=fresh_hi+E_htf*0.18)or(fresh_lo-E_htf*0.18<=ak<=fresh_hi+E_htf*0.18))and(ak>=fresh_lo-E_htf*0.1 if g else ak<=fresh_hi+E_htf*0.1))
+ htf_arz_talep_bolgesinde=bool(fresh_kutu_temas or fresh_grafik_bolge_temas)
+ # 2.5 - CHoCH Yapılan Nokta (Kırılım Varsa: Market Karakterini Değiştiren CHoCH / MSB Noktası)
+ choch_list=[b for b in htf_bos_raw if b[4]==B and('CHOCH'in str(b[5])or'MSB'in str(b[5]))]
+ choch_lvl=F(choch_list[-1][1])if choch_list else 0.0
+ choch_orig=F(choch_list[-1][3])if choch_list else 0.0
+ son_kir_tip=str(aP.get('kysy_meta',{}).get('son_kirilim_tipi',''))
+ aktif_yapi_choch=bool(('CHOCH'in son_kir_tip or'MSB'in son_kir_tip or aP.get('external_msb'))and aP.get('yon')==B)
+ htf_choch_noktasinda=bool((choch_lvl>0 and(A(de-choch_lvl)<=E_htf*0.65 or A(ak-choch_lvl)<=E_htf*0.65))or(choch_orig>0 and(A(de-choch_orig)<=E_htf*1.15 or A(ak-choch_orig)<=E_htf*1.15))or(aktif_yapi_choch and(htf_qml_bolgesinde or htf_ote_bolgesinde or htf_ob_bolgesinde or htf_arz_talep_bolgesinde)))
+ # 2.6 - BOS Yaptıran Nokta (Trend Devam Ediyorsa: BOS Yaptıran Dip/Tepe Nokta ve Kırılım Seviyesi)
+ bos_only_list=[b for b in htf_bos_raw if b[4]==B and'BOS'in str(b[5])and'CHOCH'not in str(b[5])]
+ bos_lvl=F(bos_only_list[-1][1])if bos_only_list else 0.0
+ bos_orig=F(bos_only_list[-1][3])if bos_only_list else(htf_sp if htf_sp>0 else 0.0)
+ aktif_yapi_bos=bool(('BOS'in son_kir_tip and'CHOCH'not in son_kir_tip)and aP.get('yon')==B)
+ htf_bos_noktasinda=bool((bos_orig>0 and(A(de-bos_orig)<=E_htf*1.15 or A(ak-bos_orig)<=E_htf*1.15))or(bos_lvl>0 and(A(de-bos_lvl)<=E_htf*0.65 or A(ak-bos_lvl)<=E_htf*0.65))or(aktif_yapi_bos and(htf_ob_bolgesinde or htf_ote_bolgesinde or htf_arz_talep_bolgesinde)))
+ # 2.7 - ITZ (Kırılım Öncesi Son Yapı / Internal Tardigrade Zone)
+ htf_ist=aP.get('uc_istasyon',{})
+ htf_itz_lvl=F(htf_ist.get('ITZ')or 0.0)
+ htf_itz_bolgesinde=bool((htf_itz_lvl>0 and(A(de-htf_itz_lvl)<=E_htf*0.6 or A(ak-htf_itz_lvl)<=E_htf*0.6))or any('ITZ'in p for p in f4h))
+ # 2.8 - Magic Line (Flag Limit / Kırılan Tepe-Dip FL Hattı)
+ htf_magic_lvl=F(aP.get('fl_dp_meta',{}).get('magic_line')or htf_ist.get('FL')or aP.get('break_line_fl')or 0.0)
+ htf_magic_line_bolgesinde=bool((htf_magic_lvl>0 and(A(de-htf_magic_lvl)<=E_htf*0.6 or A(ak-htf_magic_lvl)<=E_htf*0.6))or any(x in p for p in f4h for x in('FL','Magic','TersFlag','W_Kink','M_Kink','BlindSpot','WickingBase')))
+ # 1. ÖNCELİKLİ HTF BÖLGELERİ (Sırasıyla: 1.QML -> 2.OB -> 3.Fresh Arz/Talep -> 4.OTE)
+ htf_oncelikli_bolge_sayisi=sum([
+  int(htf_qml_bolgesinde),
+  int(htf_ob_bolgesinde),
+  int(htf_arz_talep_bolgesinde),
+  int(htf_ote_bolgesinde)
+ ])
+ htf_oncelikli_bolge_onay=(htf_oncelikli_bolge_sayisi>=1)
+ # 2. İKİNCİL HTF BÖLGELERİ (Öncelikli 4 bölgede uygun parite bulunamazsa kontrol edilir): BOS Noktası, CHoCH Noktası, ITZ, Magic Line
+ htf_ikincil_bolge_sayisi=sum([
+  int(htf_bos_noktasinda),
+  int(htf_choch_noktasinda),
+  int(htf_itz_bolgesinde),
+  int(htf_magic_line_bolgesinde)
+ ])
+ htf_ikincil_bolge_onay=(htf_ikincil_bolge_sayisi>=1)
+ # 8 HTF Bölgeden Kaç Tanesini Sağlıyor? (Ne kadar çoksa işlem o kadar SAFE olur)
+ htf_bolge_sayisi=htf_oncelikli_bolge_sayisi+htf_ikincil_bolge_sayisi
+ htf_zorunlu_bolge_onay=(htf_bolge_sayisi>=1)
+ # HTF İşlem Yönündeki Imbalance ve Likidite Sayısı
+ yon_kisa='BULL'if g else'BEAR'
+ htf_yon_imbalance=[im for im in htf_imb_list if im.get('yon')==yon_kisa]
+ htf_imbalance_sayisi=L(htf_yon_imbalance)+sum(1 for p in f4h if'FVG'in p or'LiqVoid'in p or'VIB'in p or'Gap'in p)
+ jn_h,jo_h=swing_noktalarini_bul(bS,2,False,False)
+ eq_havuz=0
+ hedef_sw=jn_h if g else jo_h
+ for k_i in G(L(hedef_sw)-1):
+  if A(hedef_sw[k_i+1][1]-hedef_sw[k_i][1])/M(hedef_sw[k_i][1],1e-09)<=0.005:eq_havuz+=1
+ sfp_htf=1 if(L(jo_h)>=1 and F(bS['low'].iloc[-6:-1].min())<jo_h[-1][1]and _f(bS,'close',-1)>jo_h[-1][1]if g else L(jn_h)>=1 and F(bS['high'].iloc[-6:-1].max())>jn_h[-1][1]and _f(bS,'close',-1)<jn_h[-1][1])else 0
+ htf_likidite_sayisi=eq_havuz+sfp_htf+M(1,L(hedef_sw[-3:]))
+ # Ara Zaman Diliminde (MTF: 2h / 1h / 30m) Yön Onayı
+ mtf_yon_onay=bool(Q.get('yon')==B or Q.get('external_yon')==B or Q.get('internal_yon')==B)
+ # ADIM 3: FİYAT BU HTF NOKTALARINA GELDİĞİNDE LTF ONAY BULMA (REVERSAL KIRILIMLAR & REVERSAL MUM KONSEPTLERİ)
+ ltf_kysy=aj.get('kysy_meta',{})
+ ltf_son_bos_yon=ltf_kysy.get('son_kirilim_yon','NOTR')
+ ltf_son_kir_tip=str(ltf_kysy.get('son_kirilim_tipi',''))
+ ltf_int_choch=str(aj.get('internal_choch','YOK'))
+ ltf_kirilim_listesi=[]
+ for p_k in(kk+q8):
+  if any(x in p_k for x in('CHoCH','MSB','BOS','InsideBrk','Fakey','FakeSetup','Simple_W','ShortFormed_W','Extended_W','Simple_M','ShortFormed_M','Extended_M','AtNali','QMM_Flip','TersBayrak','TersFlag_Flip','W_Kink','M_Kink')):
+   if p_k not in ltf_kirilim_listesi:ltf_kirilim_listesi.append(p_k)
+ if yon_kisa in ltf_int_choch and ltf_int_choch not in ltf_kirilim_listesi:
+  ltf_kirilim_listesi.append(ltf_int_choch)
+ if aj.get('yon')==B and ltf_son_bos_yon==B and ltf_son_kir_tip and ltf_son_kir_tip!='YOK':
+  if ltf_son_kir_tip not in ltf_kirilim_listesi:ltf_kirilim_listesi.append(f"LTF_{ltf_son_kir_tip}")
+ ltf_reversal_kirilim_onay=bool(L(ltf_kirilim_listesi)>0)
+ ltf_mum_listesi=[]
+ for p_m in(kk+q8):
+  if any(x in p_m for x in('Engulf','Outside','MeraMera','Pinbar','Spike','Railroad','Star','MorningStar','EveningStar','BosaltDoldur','Marubozu','YingYang','Bobin','Fakey','FakeSetup')):
+   if p_m not in ltf_mum_listesi:ltf_mum_listesi.append(p_m)
+ if scalp_aktif and not ltf_mum_listesi and L(aY)>=4:
+  c_s1,o_s1,h_s1,l_s1=(_f(aY,'close',-2),_f(aY,'open',-2),_f(aY,'high',-2),_f(aY,'low',-2))
+  c_s0,o_s0,h_s0,l_s0=(_f(aY,'close',-3),_f(aY,'open',-3),_f(aY,'high',-3),_f(aY,'low',-3))
+  if(g and c_s1>o_s1 and(c_s1-o_s1)>=E_ltf*0.32 and(c_s1>=M(o_s0,c_s0)or ak>h_s1))or((not g)and c_s1<o_s1 and(o_s1-c_s1)>=E_ltf*0.32 and(c_s1<=N(o_s0,c_s0)or ak<l_s1)):
+   ltf_mum_listesi.append(f"{LTF_PERIYOT}_Scalp_Momentum_Mum")
+ ltf_reversal_mum_onay=bool(L(ltf_mum_listesi)>0)
+ ltf_choch_var=bool(ltf_reversal_kirilim_onay)
+ ltf_qml_lvl=F(aj.get('qml_seviyesi')or aj.get('qm_meta',{}).get('qml_seviyesi')or 0.0)
+ ltf_qml_temas=bool((ltf_qml_lvl>0 and A(de-ltf_qml_lvl)<=E_ltf*1.85 and(ak>=ltf_qml_lvl-E_ltf*0.5 if g else ak<=ltf_qml_lvl+E_ltf*0.5))or any('QM'in p or'MPL'in p or'MeraMera'in p for p in(q8+kk)))
+ ltf_ist=aj.get('uc_istasyon',{})
+ ltf_fl_lvl=F(aj.get('fl_dp_meta',{}).get('magic_line')or ltf_ist.get('FL')or ltf_kysy.get('son_kirilim_seviye')or 0.0)
+ ltf_itz_lvl=F(ltf_ist.get('ITZ')or 0.0)
+ ltf_kirilim_yeri_temas=bool((ltf_fl_lvl>0 and A(de-ltf_fl_lvl)<=E_ltf*1.85)or(ltf_itz_lvl>0 and A(de-ltf_itz_lvl)<=E_ltf*1.85)or L(q8)>0 or L(ra)>0 or ltf_reversal_kirilim_onay)
+ ltf_a_choch_kirilim_yeri=bool(ltf_reversal_kirilim_onay and ltf_kirilim_yeri_temas)
+ ltf_b_choch_qml_seviyesi=bool(ltf_reversal_kirilim_onay and ltf_qml_temas)
+ ltf_c_mum_yapisi=bool(ltf_reversal_mum_onay)
+ ltf_herhangi_tetik=bool(ltf_reversal_kirilim_onay or ltf_reversal_mum_onay)
+ alt_tetik_kodlari=[]
+ if ltf_reversal_kirilim_onay:alt_tetik_kodlari.append(f"LTF_Reversal_Kirilim({'/'.join(ltf_kirilim_listesi[:2])})")
+ if ltf_reversal_mum_onay:alt_tetik_kodlari.append(f"LTF_Reversal_Mum({'/'.join(ltf_mum_listesi[:2])})")
+ if ltf_b_choch_qml_seviyesi and'LTF_QML'not in'/'.join(alt_tetik_kodlari):alt_tetik_kodlari.append('LTF_CHoCH+QML')
+ # 8 HTF Bölge Giriş Şartlarının LTF Onayla Eşleşmesi
+ sart1_htf_poi_giris=bool(htf_arz_talep_bolgesinde and ltf_herhangi_tetik)
+ sart2_htf_ob_giris=bool(htf_ob_bolgesinde and ltf_herhangi_tetik)
+ sart3_htf_ote_giris=bool(htf_ote_bolgesinde and ltf_herhangi_tetik)
+ sart4_htf_qml_giris=bool(htf_qml_bolgesinde and ltf_herhangi_tetik)
+ sart5_htf_choch_giris=bool(htf_choch_noktasinda and ltf_herhangi_tetik)
+ sart6_htf_bos_giris=bool(htf_bos_noktasinda and ltf_herhangi_tetik)
+ sart7_htf_itz_giris=bool(htf_itz_bolgesinde and ltf_herhangi_tetik)
+ sart8_htf_magic_giris=bool(htf_magic_line_bolgesinde and ltf_herhangi_tetik)
+ oncelikli_giris_sart_sayisi=sum([
+  int(sart1_htf_poi_giris),
+  int(sart2_htf_ob_giris),
+  int(sart3_htf_ote_giris),
+  int(sart4_htf_qml_giris)
+ ])
+ ikincil_giris_sart_sayisi=sum([
+  int(sart5_htf_choch_giris),
+  int(sart6_htf_bos_giris),
+  int(sart7_htf_itz_giris),
+  int(sart8_htf_magic_giris)
+ ])
+ saglanan_giris_sart_sayisi=oncelikli_giris_sart_sayisi+ikincil_giris_sart_sayisi
+ saglanan_alt_kural_sayisi=saglanan_giris_sart_sayisi*M(1,L(alt_tetik_kodlari))
+ htf_safe_puan=N(100,int(R((16 if htf_yon_ok else 0)+htf_oncelikli_bolge_sayisi*13.5+htf_ikincil_bolge_sayisi*9.0+(12 if ltf_reversal_kirilim_onay else 0)+(12 if ltf_reversal_mum_onay else 0),0)))
+ htf_safe_derecesi='🛡️ ULTRA SAFE (A+++)'if htf_bolge_sayisi>=5 else'🛡️ ÇOK SAFE (A++)'if htf_bolge_sayisi==4 else'🛡️ SAFE (A+)'if htf_bolge_sayisi==3 else'🟢 İYİ SAFE (A)'if htf_bolge_sayisi==2 else'🟡 STANDART SAFE (B)'if htf_bolge_sayisi==1 else'🔴 BÖLGE DIŞI (GİRİLMEZ)'
+ aktif_htf_bolgeler=[]
+ if htf_qml_bolgesinde:aktif_htf_bolgeler.append(f"QML({htf_qml_lvl:.4f})"if htf_qml_lvl>0 else"QML")
+ if htf_ob_bolgesinde:aktif_htf_bolgeler.append("OB")
+ if htf_arz_talep_bolgesinde:aktif_htf_bolgeler.append(f"Fresh_{hedef_tur}")
+ if htf_ote_bolgesinde:aktif_htf_bolgeler.append("OTE")
+ if htf_bos_noktasinda:aktif_htf_bolgeler.append("BOS_Noktasi")
+ if htf_choch_noktasinda:aktif_htf_bolgeler.append("CHoCH_Noktasi")
+ if htf_itz_bolgesinde:aktif_htf_bolgeler.append("ITZ")
+ if htf_magic_line_bolgesinde:aktif_htf_bolgeler.append("MagicLine")
+ oncelik_vektor=(int(htf_qml_bolgesinde),int(htf_ob_bolgesinde),int(htf_arz_talep_bolgesinde),int(htf_ote_bolgesinde))
+ giris_oncelik_vektor=(int(sart4_htf_qml_giris),int(sart2_htf_ob_giris),int(sart1_htf_poi_giris),int(sart3_htf_ote_giris))
+ ikincil_vektor=(int(htf_bos_noktasinda),int(htf_choch_noktasinda),int(htf_itz_bolgesinde),int(htf_magic_line_bolgesinde))
+ en_yuksek_oncelik_sira=(1 if htf_qml_bolgesinde else 2 if htf_ob_bolgesinde else 3 if htf_arz_talep_bolgesinde else 4 if htf_ote_bolgesinde else(5 if htf_ikincil_bolge_onay else 9))
+ en_yuksek_oncelik_etiket=('1.Öncelik:QML'if htf_qml_bolgesinde else'2.Öncelik:OB'if htf_ob_bolgesinde else'3.Öncelik:Fresh_Arz/Talep'if htf_arz_talep_bolgesinde else'4.Öncelik:OTE'if htf_ote_bolgesinde else('2.Kademe:BOS/CHoCH/ITZ/Magic'if htf_ikincil_bolge_onay else'Bölge Dışı'))
+ aktif_ltf_tetikler=list(alt_tetik_kodlari)
+ checklist_dict={
+  'yon_ok':bool(htf_yon_ok),
+  'qml':bool(htf_qml_bolgesinde),
+  'qml_fiyat':f"{htf_qml_lvl:.4f}"if htf_qml_lvl>0 else'-',
+  'ote':bool(htf_ote_bolgesinde),
+  'ote_aralik':f"{N(ote_lo,ote_hi):.4f}-{M(ote_lo,ote_hi):.4f}"if ote_hi>0 and ote_lo>0 else'-',
+  'ob':bool(htf_ob_bolgesinde),
+  'ob_aralik':f"{N(ob_lo,ob_hi):.4f}-{M(ob_lo,ob_hi):.4f}"if ob_hi>0 and ob_lo>0 else'-',
+  'fresh_arz_talep':bool(htf_arz_talep_bolgesinde),
+  'fresh_aralik':f"{N(fresh_lo,fresh_hi):.4f}-{M(fresh_lo,fresh_hi):.4f}"if fresh_hi>0 and fresh_lo>0 else'-',
+  'choch_noktasi':bool(htf_choch_noktasinda),
+  'choch_fiyat':f"{choch_lvl:.4f}"if choch_lvl>0 else(f"Origin:{choch_orig:.4f}"if choch_orig>0 else'-'),
+  'bos_noktasi':bool(htf_bos_noktasinda),
+  'bos_fiyat':f"{bos_lvl:.4f} (Origin:{bos_orig:.4f})"if bos_lvl>0 and bos_orig>0 else(f"{bos_orig:.4f}"if bos_orig>0 else'-'),
+  'itz':bool(htf_itz_bolgesinde),
+  'itz_fiyat':f"{htf_itz_lvl:.4f}"if htf_itz_lvl>0 else'-',
+  'magic_line':bool(htf_magic_line_bolgesinde),
+  'magic_fiyat':f"{htf_magic_lvl:.4f}"if htf_magic_lvl>0 else'-',
+  'ltf_reversal_kirilim':bool(ltf_reversal_kirilim_onay),
+  'ltf_reversal_mum':bool(ltf_reversal_mum_onay),
+  'safe_sayisi':int(htf_bolge_sayisi),
+  'safe_puan':int(htf_safe_puan),
+  'safe_derece':htf_safe_derecesi
+ }
+ # HTF'de trendi değiştiren noktanın (Strong Point / Origin) altına/üstüne stop hesabı
+ htf_trend_degistiren_nokta=F(htf_bos_raw[-1][3])if htf_bos_raw else F(aP.get('strong_point')or(sMin if g else sMax))
+ if g:
+  if htf_sp>0 and htf_trend_degistiren_nokta>0:htf_trend_degistiren_nokta=N(htf_trend_degistiren_nokta,htf_sp,sMin if sMin>0 else htf_sp)
+ else:
+  if htf_sp>0 and htf_trend_degistiren_nokta>0:htf_trend_degistiren_nokta=M(htf_trend_degistiren_nokta,htf_sp,sMax if sMax>0 else htf_sp)
+ return{'hedef_yon':B,'htf_yon_ok':htf_yon_ok,'mtf_yon_onay':mtf_yon_onay,'htf_zorunlu_bolge_onay':htf_zorunlu_bolge_onay,'htf_arz_talep_bolgesinde':htf_arz_talep_bolgesinde,'htf_ob_bolgesinde':htf_ob_bolgesinde,'htf_ote_bolgesinde':htf_ote_bolgesinde,'htf_qml_bolgesinde':htf_qml_bolgesinde,'htf_choch_noktasinda':htf_choch_noktasinda,'htf_bos_noktasinda':htf_bos_noktasinda,'htf_itz_bolgesinde':htf_itz_bolgesinde,'htf_magic_line_bolgesinde':htf_magic_line_bolgesinde,'htf_bolge_sayisi':htf_bolge_sayisi,'htf_safe_puan':htf_safe_puan,'htf_safe_derecesi':htf_safe_derecesi,'aktif_htf_bolgeler':aktif_htf_bolgeler,'htf_imbalance_sayisi':htf_imbalance_sayisi,'htf_likidite_sayisi':htf_likidite_sayisi,'ltf_choch_var':ltf_choch_var,'ltf_reversal_kirilim_onay':ltf_reversal_kirilim_onay,'ltf_reversal_mum_onay':ltf_reversal_mum_onay,'ltf_kirilim_listesi':ltf_kirilim_listesi,'ltf_mum_listesi':ltf_mum_listesi,'ltf_herhangi_tetik':ltf_herhangi_tetik,'ltf_qml_giris':ltf_b_choch_qml_seviyesi,'ltf_kirilim_yeri_giris':ltf_a_choch_kirilim_yeri,'ltf_mum_yapisi_giris':ltf_c_mum_yapisi,'aktif_ltf_tetikler':aktif_ltf_tetikler,'sart1_htf_poi_giris':sart1_htf_poi_giris,'sart2_htf_ob_giris':sart2_htf_ob_giris,'sart3_htf_ote_giris':sart3_htf_ote_giris,'sart4_htf_qml_giris':sart4_htf_qml_giris,'sart5_htf_choch_giris':sart5_htf_choch_giris,'sart6_htf_bos_giris':sart6_htf_bos_giris,'sart7_htf_itz_giris':sart7_htf_itz_giris,'sart8_htf_magic_giris':sart8_htf_magic_giris,'htf_oncelikli_bolge_onay':htf_oncelikli_bolge_onay,'htf_oncelikli_bolge_sayisi':htf_oncelikli_bolge_sayisi,'oncelikli_giris_sart_sayisi':oncelikli_giris_sart_sayisi,'htf_ikincil_bolge_onay':htf_ikincil_bolge_onay,'htf_ikincil_bolge_sayisi':htf_ikincil_bolge_sayisi,'ikincil_giris_sart_sayisi':ikincil_giris_sart_sayisi,'oncelik_vektor':oncelik_vektor,'giris_oncelik_vektor':giris_oncelik_vektor,'ikincil_vektor':ikincil_vektor,'en_yuksek_oncelik_sira':en_yuksek_oncelik_sira,'en_yuksek_oncelik_etiket':en_yuksek_oncelik_etiket,'bolge_kademesi':(1 if htf_oncelikli_bolge_onay else(2 if htf_ikincil_bolge_onay else 0)),'saglanan_giris_sart_sayisi':saglanan_giris_sart_sayisi,'saglanan_alt_kural_sayisi':saglanan_alt_kural_sayisi,'htf_trend_degistiren_nokta':htf_trend_degistiren_nokta,'checklist':checklist_dict}
+def konum_ve_karar_bolgesi_filtresi(bS,bw,aY,aP,Q,aj,f4h,f6,q8,hN,q7,ra,kk,B='BULLISH'):
+ adim=_htf_adimlari_ve_ltf_tetik_kontrolu(bS,bw,aY,aP,Q,aj,f4h,f6,q8,hN,q7,ra,kk,B)
+ konum_onay=bool(adim['htf_zorunlu_bolge_onay'])
+ flip_var=any(x in p for p in(f4h+f6+q8)for x in('Flip','TersFlag','TersBayrak','QMM_Flip','VIB_Flip','Breakaway_Gap','1Mum_FTR','FirstObstacle_FO','IFVG'))
+ if not konum_onay:
+  durum='RED_HTF_BOLGE_DISI_YASAK'
+  senaryo='HTF_8_BOLGEDEN_BIRI_BEKLENIYOR'
+  aciklama=f"[HTF BÖLGE FİLTRESİ RED] Fiyat HTF ({HTF_PERIYOT.upper()}) QML, OTE, OB, Fresh Arz/Talep, CHoCH Noktası, BOS Noktası, ITZ veya Magic Line bölgesinde değil!"
+ else:
+  bolge_str='+'.join(adim['aktif_htf_bolgeler'])
+  durum=f"ONAY_{adim['htf_bolge_sayisi']}_8_SAFE({bolge_str})"
+  senaryo=f"{adim['htf_safe_derecesi']} | SAFE:{adim['htf_bolge_sayisi']}/8 ({adim['htf_safe_puan']}p)"if adim['saglanan_giris_sart_sayisi']>0 else f"HTF_BOLGEDE({adim['htf_bolge_sayisi']}/8)_LTF_ONAY_BEKLENIYOR"
+  aciklama=f"[HTF SAFE BÖLGE: {adim['htf_bolge_sayisi']}/8 ({bolge_str}) -> {adim['htf_safe_derecesi']}] LTF Onay: {'+'.join(adim['aktif_ltf_tetikler'])or'Reversal Kırılım / Mum Bekleniyor'}"
+ adim.update({'konum_onay':konum_onay,'konum_durumu':durum,'karar_senaryosu':senaryo,'htf_poi_aktif':adim['htf_arz_talep_bolgesinde']or adim['htf_ob_bolgesinde'],'mtf_poi_aktif':L(f6)>0 or L(q7)>0,'fibo_konum_uygun':adim['htf_ote_bolgesinde'],'flip_devam_mi':flip_var,'ters_bolge_engeli':not konum_onay,'tuzak_choch_mu':bool(adim['ltf_choch_var']and not konum_onay),'aciklama':aciklama})
+ return adim
+def stop_noktasi_belirle(bS,bw,aY,aP,Q,aj,kFlt,P,B='BULLISH',sl4h=None,f7=None,q9=None,al_ltf=None,mod=None):
+ sec_mod=str(mod or STOP_BELIRLEME_MODU)
+ g=(B=='BULLISH')
+ E_htf=M(_f(bS,'atr',-2)if bS is not None and'atr'in bS.columns else P*0.003,P*0.0015)
+ E_ltf=M(_f(aY,'atr',-2)if aY is not None and'atr'in aY.columns else P*0.0015,P*0.0008)
+ # 1) HTF YAPIYA GÖRE STOP (HTF Trend Değiştiren Dip/Tepe, Strong Origin, Swing Min/Max, HTF OB/POI + ATR Kalkanı)
+ htf_td=F(kFlt.get('htf_trend_degistiren_nokta')or 0.0)if I(kFlt,dict)else 0.0
+ htf_sp=F(aP.get('strong_point')or 0.0)if I(aP,dict)else 0.0
+ htf_sw=F((aP.get('swing_min')if g else aP.get('swing_max'))or 0.0)if I(aP,dict)else 0.0
+ htf_poi_sl=F(sl4h or 0.0)if I(sl4h,(int,F))else 0.0
+ if g:
+  htf_adaylar=[x for x in(htf_td,htf_sp,htf_sw,htf_poi_sl)if 0<x<P]
+  htf_baz=N(htf_adaylar)if htf_adaylar else(htf_td if htf_td>0 and htf_td<P else P*0.988)
+  al_htf=R(N(htf_baz-E_htf*0.15,P*(1.0-aW)),6)
+ else:
+  htf_adaylar=[x for x in(htf_td,htf_sp,htf_sw,htf_poi_sl)if x>P]
+  htf_baz=M(htf_adaylar)if htf_adaylar else(htf_td if htf_td>P else P*1.012)
+  al_htf=R(M(htf_baz+E_htf*0.15,P*(1.0+aW)),6)
+ # 2) LTF YAPIYA GÖRE STOP (PDF 28-35, 41, 44, 45 & YT-Part10-13: LTF CHoCH/MSB Origin, InsideBar DarSL, Fakey İğnesi, Pinbar/Engulf/MeraMera/Bobin/MW & LTF POI + ATR Kalkanı)
+ v10=aj.get('v10_meta',{})if I(aj,dict)else{}
+ v12=aj.get('v12_meta',{})if I(aj,dict)else{}
+ v13=aj.get('v13_meta',{})if I(aj,dict)else{}
+ ltf_ist=aj.get('uc_istasyon',{})if I(aj,dict)else{}
+ ltf_sp=F(aj.get('strong_point')or 0.0)if I(aj,dict)else 0.0
+ ltf_itz=F(ltf_ist.get('ITZ')or 0.0)
+ ltf_poi_sl=F(q9 or 0.0)if I(q9,(int,F))else 0.0
+ ltf_pa_sl=F(al_ltf or 0.0)if I(al_ltf,(int,F))else 0.0
+ ib_sl=0.0
+ if v12.get('dar_sl_4r')and I(v12.get('ib_low'if g else'ib_high'),(int,F)):
+  ib_sl=F(v12['ib_low'])-E_ltf*0.12 if g else F(v12['ib_high'])+E_ltf*0.12
+ elif I(v12.get('mb_low'if g else'mb_high'),(int,F))and v12.get('inside_bar_durumu','YOK')!='YOK':
+  ib_sl=F(v12['mb_low'])-E_ltf*0.15 if g else F(v12['mb_high'])+E_ltf*0.15
+ bobin_sl=0.0
+ if I(v10.get('bobin_alt'if g else'bobin_ust'),(int,F)):
+  bobin_sl=F(v10['bobin_alt'])-E_ltf*0.18 if g else F(v10['bobin_ust'])+E_ltf*0.18
+ ltf_sw_son=0.0
+ if I(aj,dict):
+  sw_l=aj.get('lows'if g else'highs',[])
+  if sw_l:ltf_sw_son=F(sw_l[-1][1])
+ ltf_mum_uc=0.0
+ if aY is not None and L(aY)>=6:
+  ltf_mum_uc=F(aY['low'].iloc[-6:].min())-E_ltf*0.22 if g else F(aY['high'].iloc[-6:].max())+E_ltf*0.22
+ min_ltf_mes=M(E_ltf*0.55,P*aW)
+ max_ltf_mes=M(E_ltf*3.2,P*(0.008 if ISLEM_TARZI_MODU=='Scalp'else 0.022))
+ if g:
+  ltf_ham_adaylar=[x for x in(ib_sl,ltf_poi_sl,ltf_itz-E_ltf*0.25 if ltf_itz>0 else 0.0,bobin_sl,ltf_sp-E_ltf*0.2 if ltf_sp>0 else 0.0,ltf_sw_son-E_ltf*0.2 if ltf_sw_son>0 else 0.0,ltf_mum_uc,ltf_pa_sl)if 0<x<P]
+  ltf_sec=M(ltf_ham_adaylar)if v12.get('dar_sl_4r')and ib_sl>0 and ib_sl<P else(ltf_poi_sl if 0<ltf_poi_sl<P else(ltf_mum_uc if 0<ltf_mum_uc<P else(N(ltf_ham_adaylar)if ltf_ham_adaylar else P-min_ltf_mes)))
+  mes_ltf=M(min_ltf_mes,N(max_ltf_mes,P-ltf_sec))
+  al_ltf_son=R(P-mes_ltf,6)
+ else:
+  ltf_ham_adaylar=[x for x in(ib_sl,ltf_poi_sl,ltf_itz+E_ltf*0.25 if ltf_itz>0 else 0.0,bobin_sl,ltf_sp+E_ltf*0.2 if ltf_sp>0 else 0.0,ltf_sw_son+E_ltf*0.2 if ltf_sw_son>0 else 0.0,ltf_mum_uc,ltf_pa_sl)if x>P]
+  ltf_sec=N(ltf_ham_adaylar)if v12.get('dar_sl_4r')and ib_sl>P else(ltf_poi_sl if ltf_poi_sl>P else(ltf_mum_uc if ltf_mum_uc>P else(M(ltf_ham_adaylar)if ltf_ham_adaylar else P+min_ltf_mes)))
+  mes_ltf=M(min_ltf_mes,N(max_ltf_mes,ltf_sec-P))
+  al_ltf_son=R(P+mes_ltf,6)
+ # Kullanıcının arayüzdeki seçimine göre Stop noktasını döndür
+ if'LTF'in sec_mod and'Otomatik'not in sec_mod:
+  return(al_ltf_son,f'LTF Yapısal Stop ({LTF_PERIYOT} Kırılım/Mum/POI + ATR Kalkanı)')
+ if'Otomatik'in sec_mod:
+  ltf_onay_aktif=bool((I(kFlt,dict)and(kFlt.get('ltf_reversal_kirilim_onay')or kFlt.get('ltf_reversal_mum_onay')))or v12.get('dar_sl_4r')or v13.get('aktif_entry_modeli','Beklemede')!='Beklemede'or ISLEM_TARZI_MODU=='Scalp')
+  if ltf_onay_aktif:
+   return(al_ltf_son,f'Otomatik -> LTF Yapısal Stop ({LTF_PERIYOT} Onaylı Kırılım/Mum)')
+  return(al_htf,f'Otomatik -> HTF Yapısal Stop ({HTF_PERIYOT.upper()} Dip/Tepe & OB)')
+ return(al_htf,f'HTF Yapısal Stop ({HTF_PERIYOT.upper()} Dip/Tepe & OB)')
+def tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,B='BULLISH'):
+ fj=[];bT=[];b2=0;aP['sembol'],Q['sembol'],aj['sembol']=(J,J,J)
+ f4h,sl4h,em4h,hN,e4h=poi_ve_bolge_analizi(bS,aP,HTF_PERIYOT.upper(),B);f6,f7,em,q7,e0=poi_ve_bolge_analizi(bw,Q,MTF_PERIYOT.upper(),B);q8,q9,dD,ra,en=poi_ve_bolge_analizi(aY,aj,LTF_PERIYOT,B);b8=f4h+f6+q8;oZ=M(e4h,e0,en)
+ dn,hK,oa=likidite_smt_analizi(J,bw,aY,Q,B)
+ hL,jQ,kj,dh=likidite_ve_sfp_analizi(bw,aY,Q,b8,B);Q['v8_meta']=dh
+ for vs in jQ:
+  if vs not in hK:hK.append(vs)
+ oa.extend(kj)
+ eM=sl4h if sl4h is not None else(f7 if f7 is not None else q9);mB_raw,kk,hM,P,al_ltf=ltf_pa_ve_giris_tetikleyici(aY,eM,B)
+ son_kapanis_ltf=_f(aY,'close',-1)if L(aY)>0 else(_f(bw,'close',-1)if L(bw)>0 else 1.0)
+ P=F(P)if I(P,(int,F))and F(P)>0 else F(son_kapanis_ltf)
+ al_ltf=F(al_ltf)if I(al_ltf,(int,F))and F(al_ltf)>0 else R(P*(0.992 if B=='BULLISH'else 1.008),6)
+ kFlt=konum_ve_karar_bolgesi_filtresi(bS,bw,aY,aP,Q,aj,f4h,f6,q8,hN,q7,ra,kk,B);Q['konum_meta'],aj['konum_meta']=(kFlt,kFlt)
+ al,stop_kaynak_bilgi=stop_noktasi_belirle(bS,bw,aY,aP,Q,aj,kFlt,P,B,sl4h,f7,q9,al_ltf,STOP_BELIRLEME_MODU)
+ kFlt['stop_kaynak_bilgi']=stop_kaynak_bilgi
+ chk=kFlt.get('checklist',{})
+ # 1. ATLI (0-25 Puan): 1. YÖN BELİRLEMEK (HTF Ana Yön + MTF Uyum + OTE Konumu)
+ if kFlt['htf_yon_ok']:
+  b2+=15;fj.append(f"{HTF_PERIYOT.upper()}_YON:{B[:4]}");bT.append(f"✅ 1. Adım [Yön Belirleme - {HTF_PERIYOT.upper()}]: {aP['kirilim_tipi']} (+15p)")
+ else:
+  bT.append(f"⬜ 1. Adım [Yön Belirleme - {HTF_PERIYOT.upper()}]: HTF yönü {aP.get('yon')} ({B} ile uyumsuz) (0p)")
+ if kFlt['mtf_yon_onay']:
+  b2+=6;fj.append(f"{MTF_PERIYOT.upper()}_ONAY:{B[:4]}");bT.append(f"✅ Ara TF [{MTF_PERIYOT.upper()} Yön Onayı]: {Q['kirilim_tipi']} (+6p)")
+ if kFlt['htf_ote_bolgesinde']:
+  b2+=4
+ b2=N(25,b2)
+ # 2. ATLI (0-25 Puan + Çoklu Bölge Safe Bonusu): 2. HTF'DE BÖLGE BELİRLEMEK (8 Kriterden Kaç Tanesini Sağlıyorsa İşlem O Kadar Safe Olur)
+ aO=0
+ htf_kriter_log=[
+  ('QML [1.Öncelik Safe #1]',kFlt['htf_qml_bolgesinde'],chk.get('qml_fiyat','-'),8),
+  ('OB [2.Öncelik Safe #2]',kFlt['htf_ob_bolgesinde'],chk.get('ob_aralik','-'),7),
+  ('Fresh Arz/Talep Bölgesi [3.Öncelik Safe #3]',kFlt['htf_arz_talep_bolgesinde'],chk.get('fresh_aralik','-'),7),
+  ('OTE [4.Öncelik Safe #4]',kFlt['htf_ote_bolgesinde'],chk.get('ote_aralik','-'),6),
+  ('BOS Yaptıran Nokta [2.Kademe]',kFlt['htf_bos_noktasinda'],chk.get('bos_fiyat','-'),4),
+  ('CHoCH Yapılan Nokta [2.Kademe]',kFlt['htf_choch_noktasinda'],chk.get('choch_fiyat','-'),4),
+  ('ITZ [2.Kademe]',kFlt['htf_itz_bolgesinde'],chk.get('itz_fiyat','-'),4),
+  ('Magic Line [2.Kademe]',kFlt['htf_magic_line_bolgesinde'],chk.get('magic_fiyat','-'),4)
+ ]
+ for k_ad,k_ok,k_fiyat,k_puan in htf_kriter_log:
+  if k_ok:
+   aO+=k_puan;fj.append(f"HTF_{k_ad.split()[0]}");bT.append(f"✅ 2. Adım HTF Bölge [{k_ad}]: Sağlandı ({k_fiyat}) (+{k_puan}p)")
+  else:
+   bT.append(f"⬜ 2. Adım HTF Bölge [{k_ad}]: Sağlanmadı ({k_fiyat})")
+ if kFlt['htf_bolge_sayisi']>=1:
+  aO=N(25,aO+4)
+ else:
+  aO=0;bT.append(f"⛔ {kFlt['aciklama']}")
+ bT.append(f"🛡️ HTF SAFE DERECESİ: {kFlt['htf_bolge_sayisi']}/8 Bölge Sağlandı -> {kFlt['htf_safe_derecesi']} (Safe Puanı: {kFlt['htf_safe_puan']}/100) | HTF Stop: {al:.4f}")
+ bT.extend([f'HTF/MTF Bölge Detayı: {k}'for k in em4h+em+dD])
+ # 3. ATLI (0-25 Puan): HTF Imbalance, Likidite & Çoklu HTF Safe Bölge Yoğunluğu
+ safe_ek_puan=N(12,kFlt['htf_bolge_sayisi']*3)
+ imb_puan=N(7,kFlt['htf_imbalance_sayisi']*3)
+ liq_puan=N(8,kFlt['htf_likidite_sayisi']*2+(3 if dn>=8 else 0))
+ dn_toplam=N(25,safe_ek_puan+imb_puan+liq_puan)
+ fj.extend(hK);bT.extend([f'Likidite/SMT Detayı: {k}'for k in oa])
+ # 4. ATLI (0-25 Puan): 3. FİYAT BU NOKTALARA GELDİĞİNDE LTF ONAY (REVERSAL KIRILIMLAR & REVERSAL MUM KONSEPTLERİ)
+ mB=0
+ if kFlt['ltf_reversal_kirilim_onay']:
+  mB+=14;fj.append(f"{LTF_PERIYOT}_Reversal_Kirilim")
+  bT.append(f"✅ 3. Adım LTF Onay [Reversal Kırılımlar]: {', '.join(kFlt['ltf_kirilim_listesi'][:3])} (+14p)")
+ else:
+  bT.append(f"⬜ 3. Adım LTF Onay [Reversal Kırılımlar]: Henüz LTF CHoCH/MSB/i-BOS/M-W kırılımı yok")
+ if kFlt['ltf_reversal_mum_onay']:
+  mB+=14;fj.append(f"{LTF_PERIYOT}_Reversal_Mum")
+  bT.append(f"✅ 3. Adım LTF Onay [Reversal Mum Konseptleri]: {', '.join(kFlt['ltf_mum_listesi'][:3])} (+14p)")
+ else:
+  bT.append(f"⬜ 3. Adım LTF Onay [Reversal Mum Konseptleri]: Henüz LTF Engulf/Pinbar/MeraMera/RR/BoşaltDoldur mum onayı yok")
+ if not kFlt['htf_zorunlu_bolge_onay']or not kFlt['ltf_herhangi_tetik']:
+  mB=N(6,mB)
+ mB=N(25,mB)
+ kural_ozet_str=f"Safe:{kFlt['htf_bolge_sayisi']}/8 ({kFlt['htf_safe_derecesi']}) | LTF:{'Kırılım+Mum'if(kFlt['ltf_reversal_kirilim_onay']and kFlt['ltf_reversal_mum_onay'])else'Reversal Kırılım'if kFlt['ltf_reversal_kirilim_onay']else'Reversal Mum'if kFlt['ltf_reversal_mum_onay']else'Bekleniyor'}"
+ bT.insert(0,f"📊 [CHECK-LIST ÖZETİ]: 1.Yön:{'✅'if kFlt['htf_yon_ok']else'⬜'} | 2.HTF Bölge:{kFlt['htf_bolge_sayisi']}/8 ({'+'.join(kFlt['aktif_htf_bolgeler'])or'Yok'}) | 3.LTF Onay:{'✅'if kFlt['ltf_herhangi_tetik']else'⬜'}")
+ bT.extend([f'LTF Mum/PA Detayı: {k}'for k in hM])
+ fj.insert(0,f"Safe:{kFlt['htf_bolge_sayisi']}/8({kFlt['htf_safe_puan']}p)")
+ fj.extend(b8);fj.extend(kk)
+ nO=N(100,b2+aO+dn_toplam+mB)
+ if not kFlt['htf_zorunlu_bolge_onay']:
+  nO=N(45,nO)
+  di=f"HTF Bölge Dışı ({HTF_PERIYOT.upper()} QML/OTE/OB/Fresh/CHoCH/BOS/ITZ/Magic Bekleniyor)"
+ elif kFlt['ltf_herhangi_tetik']:
+  di=f"Safe {kFlt['htf_bolge_sayisi']}/8 [{'+'.join(kFlt['aktif_htf_bolgeler'][:4])}] + {'/'.join(kFlt['aktif_ltf_tetikler'][:2])}"
+ else:
+  nO=N(M(48,MIN_CONFLUENCE_SKORU-5),nO)
+  di=f"HTF Bölgesinde (Safe {kFlt['htf_bolge_sayisi']}/8: {'+'.join(kFlt['aktif_htf_bolgeler'][:4])}) -> {LTF_PERIYOT} Reversal Kırılım / Mum Bekleniyor"
+ dX=aj.get('v10_meta',Q.get('v10_meta',{}));dX['giris_onay_tipi']='+'.join(kFlt['aktif_ltf_tetikler'])if kFlt['aktif_ltf_tetikler']else'Beklemede'
+ return{'hedef_yon':B,'skor':nO,'bolge_10p_skor':oZ,'giris_modeli':di,'atli_puanlar':(b2,aO,dn_toplam,mB),'giris':P,'sl':al,'detay_etiketleri':fj,'detayli_kurallar':bT,'kutular':ra+q7[:2],'kutular_15m':ra,'kutular_1h':q7,'kutular_4h':hN,'poi_4h':f4h,'poi_1h':f6,'poi_15m':q8,'konum_meta':kFlt,'uygun_kural_sayisi':kFlt['htf_bolge_sayisi'],'uygun_alt_kural_sayisi':kFlt['saglanan_alt_kural_sayisi'],'kural_ozeti':kural_ozet_str}
+def mahserin_4_atlisi_confluence_analizi(J,bS,bw,aY,D=None):
+ jR=D if D else'spot'if PIYASA_MODU=='spot'else'future';aP=market_yapisi_ve_fibo_analizi(bS);Q=market_yapisi_ve_fibo_analizi(bw);aj=market_yapisi_ve_fibo_analizi(aY,n=2)
+ if jR!='future'or aP['yon']=='BULLISH':
+  dQ=tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,'BULLISH')
+ elif aP['yon']=='BEARISH':
+  dQ=tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,'BEARISH')
+ else:
+  o5=tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,'BULLISH');qe,qf=(dict(Q),dict(aj));rc=tek_yon_4_atli_hesapla(J,bS,bw,aY,aP,Q,aj,'BEARISH')
+  if rc['skor']>o5['skor']:dQ=rc
+  else:dQ=o5;Q.update(qe);aj.update(qf)
+ iy=dQ['hedef_yon'];p1,p2,p3,p4=dQ['atli_puanlar'];nO=dQ['skor'];kFlt=dQ.get('konum_meta',{'konum_onay':False,'htf_zorunlu_bolge_onay':False,'saglanan_giris_sart_sayisi':0});kysy_ok=bool(aP.get('kysy_onay',True))
+ if aP['yon']=='BEARISH'and Q['yon']=='BEARISH':mC='BEARISH'
+ elif aP['yon']=='BULLISH'and Q['yon']=='BULLISH':mC='BULLISH'
+ else:mC=aP['yon']if aP['yon']in('BULLISH','BEARISH')else iy
+ # 3 ADIMLI KESİN GİRİŞ KURALI:
+ # 1. HTF Yön Belirlendi (aP['yon'] == iy)
+ # 2. HTF Bölge Belirlendi (8 HTF noktasından en az 1'i sağlandı: QML, OTE, OB, Fresh Arz/Talep, CHoCH Noktası, BOS Noktası, ITZ, Magic Line)
+ # 3. Fiyat bu noktaya geldiğinde LTF Onay (Reversal Kırılım veya Reversal Mum Konsepti) bulundu!
+ htf_bolge_ve_ltf_onay_ok=bool(kFlt.get('htf_zorunlu_bolge_onay',False)and kFlt.get('ltf_herhangi_tetik',False)and kFlt.get('saglanan_giris_sart_sayisi',0)>=1)
+ aU='BEKLE'
+ if htf_bolge_ve_ltf_onay_ok and kysy_ok and(nO>=MIN_CONFLUENCE_SKORU):
+  if iy=='BULLISH'and aP['yon']=='BULLISH':aU='LONG';mC='BULLISH'
+  elif iy=='BEARISH'and jR=='future'and aP['yon']=='BEARISH':aU='SHORT';mC='BEARISH'
+ dY=' + '.join(dQ['detay_etiketleri'][:5])if dQ['detay_etiketleri']else'Kurulum Bekleniyor';hN=dQ.get('kutular_4h')or poi_ve_bolge_analizi(bS,aP,HTF_PERIYOT.upper(),iy)[3];o6={'sembol':J,'piyasa':jR,'htf_periyot':HTF_PERIYOT,'mtf_periyot':MTF_PERIYOT,'ltf_periyot':LTF_PERIYOT,'mtf_sablonu':AKTIF_MTF_SABLONU,'yon_4h':aP['yon'],'yon_1h':Q['yon'],'ana_yon':mC,'skor':nO,'bolge_10p_skor':dQ['bolge_10p_skor'],'giris_modeli':dQ['giris_modeli'],'atli_puanlar':dQ['atli_puanlar'],'sinyal':aU,'giris':dQ['giris'],'sl':dQ['sl'],'ozet':dY,'detayli_kurallar':dQ['detayli_kurallar'],'df_4h_full':bS,'df_1h_full':bw,'df_15m_full':aY,'df_4h':bS,'df_1h':bw,'df_15m':aY,'yapi_4h':aP,'yapi_1h':Q,'yapi_15m':aj,'cizim_kutulari_4h':hN,'cizim_kutulari_1h':dQ.get('kutular_1h',[]),'cizim_kutulari_15m':dQ['kutular'],'cizim_kutulari_ltf_saf':dQ.get('kutular_15m',[]),'fibo_oran':Q['fibo_oran'],'fibo_hedefleri':Q['fibo_hedefleri'],'wyckoff_fazi':Q.get('wyckoff_fazi','TREND_IMPULSIVE'),'strong_point':Q.get('strong_point'),'weak_point':Q.get('weak_point'),'uc_istasyon':Q.get('uc_istasyon',{}),'internal_choch':aj.get('internal_choch','YOK'),'fl_dp_meta':Q.get('fl_dp_meta',{}),'qm_meta':aj.get('qm_meta',Q.get('qm_meta',{})),'v6_meta':aj.get('v6_meta',Q.get('v6_meta',{})),'v7_meta':Q.get('v7_meta',aj.get('v7_meta',{})),'v8_meta':Q.get('v8_meta',{}),'v9_meta':aj.get('v9_meta',Q.get('v9_meta',{})),'v10_meta':aj.get('v10_meta',Q.get('v10_meta',{})),'v11_meta':aj.get('v11_meta',Q.get('v11_meta',{})),'v12_meta':aj.get('v12_meta',Q.get('v12_meta',{})),'v13_meta':aj.get('v13_meta',Q.get('v13_meta',{})),'konum_meta':kFlt,'kysy_4h':aP.get('kysy_meta',{}),'kysy_1h':Q.get('kysy_meta',{}),'kysy_ltf':aj.get('kysy_meta',{}),'_ts_mem':time.time()};O=anahtar_yap(J,jR);analiz_hafizasi[O]=o6
+ df_tutulan=[k_m for k_m,v_m in analiz_hafizasi.items()if I(v_m,dict)and'df_15m'in v_m and not I(acik_islemler.get(k_m),dict)]
+ if L(df_tutulan)>24:
+  df_tutulan.sort(key=lambda k_m:F(analiz_hafizasi[k_m].get('_ts_mem',0.0)))
+  for eski_k in df_tutulan[:-18]:
+   eski_d=analiz_hafizasi.get(eski_k)
+   if I(eski_d,dict):
+    for df_k_sil in('df_4h_full','df_1h_full','df_15m_full','df_4h','df_1h','df_15m'):eski_d.pop(df_k_sil,None)
+ return o6
+def tek_tf_canli_pa_analizi(J,bN,D='future',B=None,limit=300):
+ lV=veri_cek(J,bN,limit,D);k8=market_yapisi_ve_fibo_analizi(lV,n=SWING_PENCERE);iy=B if B in('BULLISH','BEARISH')else k8['yon']if k8['yon']in('BULLISH','BEARISH')else'BULLISH';dP,ob,K,az,mD=poi_ve_bolge_analizi(lV,k8,bN.upper(),iy);_,_,_,dh=likidite_ve_sfp_analizi(lV,lV,k8,dP,iy);k8['v8_meta']=dh;return{'df_full':lV,'yapi':k8,'kutular':az,'poi_list':dP,'kurallar':K,'bolge_10p_skor':mD,'hedef_yon':iy}
+def puana_gore_risk_hesapla(mN=0):
+ # Stopta alınan risk her zaman arayüzde yazılan 'İşlem Başı Risk($)' tutarı kadardır
+ return R(M(0.1,F(ISLEM_BASI_RISK_USDT)),2)
+def dinamik_miktar_hesapla(J,P,al,D=None,mN=0):
+ jR=D if D else'spot'if PIYASA_MODU=='spot'else'future';cv=veri_ist(jR);nP=M(A(P-al),P*1e-05)
+ o7=KALDIRAC if jR=='future'else 1;aktif_risk=puana_gore_risk_hesapla(mN);lW=aktif_risk/nP;dZ=lW*P;fk=dZ/M(o7,1)
+ if dZ<6.0:
+  dZ=6.0;fk=dZ/M(o7,1);lW=dZ/M(P,1e-09)
+ try:Y=F(cv.amount_to_precision(J,lW))
+ except X:Y=R(lW,6)
+ if Y<=0 and lW>0:Y=M(R(lW,6),1e-06)
+ fk=(Y*P)/M(o7,1)
+ do=R(aktif_risk,2);return(Y,fk,do)
+def _parite_mtf_periyotlarini_bul(O_key=None,J=None,D='future',H_mevcut=None):
+ dR=acik_islemler.get(O_key)if O_key else None
+ if not I(dR,dict)and J:
+  dR=acik_islemler.get(anahtar_yap(J,D))or acik_islemler.get(f"FUT:{J}")or acik_islemler.get(f"SPOT:{J}")
+ if I(dR,dict):
+  hp=str(dR.get('htf_periyot')or(H_mevcut.get('htf_periyot')if I(H_mevcut,dict)else None)or HTF_PERIYOT)
+  mp=str(dR.get('mtf_periyot')or(H_mevcut.get('mtf_periyot')if I(H_mevcut,dict)else None)or MTF_PERIYOT)
+  lp=str(dR.get('ltf_periyot')or(H_mevcut.get('ltf_periyot')if I(H_mevcut,dict)else None)or LTF_PERIYOT)
+  sb=str(dR.get('mtf_sablonu')or f"{hp} / {mp} / {lp}")
+  return(hp,mp,lp,sb)
+ hp=str((H_mevcut.get('htf_periyot')if I(H_mevcut,dict)else None)or HTF_PERIYOT)
+ mp=str((H_mevcut.get('mtf_periyot')if I(H_mevcut,dict)else None)or MTF_PERIYOT)
+ lp=str((H_mevcut.get('ltf_periyot')if I(H_mevcut,dict)else None)or LTF_PERIYOT)
+ sb=str((H_mevcut.get('mtf_sablonu')if I(H_mevcut,dict)else None)or AKTIF_MTF_SABLONU)
+ return(hp,mp,lp,sb)
+def pine_icin_4h_1h_5m_veri_hazirla(J,D='future',H_mevcut=None,O_key=None):
+ htf_p,mtf_p,ltf_p,mtf_sb=_parite_mtf_periyotlarini_bul(O_key,J,D,H_mevcut)
+ b4h=H_mevcut.get('df_4h_full')if H_mevcut and H_mevcut.get('htf_periyot')==htf_p and'df_4h_full'in H_mevcut else None
+ b1h=H_mevcut.get('df_1h_full')if H_mevcut and H_mevcut.get('mtf_periyot')==mtf_p and'df_1h_full'in H_mevcut else None
+ b5m=H_mevcut.get('df_15m_full')if H_mevcut and H_mevcut.get('ltf_periyot')==ltf_p and'df_15m_full'in H_mevcut else None
+ try:
+  if b4h is None:b4h=veri_cek(J,htf_p,300,D)
+ except X:b4h=H_mevcut.get('df_4h_full')if H_mevcut else None
+ try:
+  if b1h is None:b1h=veri_cek(J,mtf_p,300,D)
+ except X:b1h=H_mevcut.get('df_1h_full')if H_mevcut else None
+ try:
+  if b5m is None:b5m=veri_cek(J,ltf_p,300,D)
+ except X:b5m=H_mevcut.get('df_15m_full')if H_mevcut else None
+ if b4h is None or b1h is None or b5m is None:return H_mevcut or{}
+ y4=market_yapisi_ve_fibo_analizi(b4h);y1=market_yapisi_ve_fibo_analizi(b1h);y5=market_yapisi_ve_fibo_analizi(b5m,n=2)
+ rB=tek_yon_4_atli_hesapla(J,b4h,b1h,b5m,y4,y1,y5,'BULLISH')
+ if D=='future':
+  q1c,q5c=(dict(y1),dict(y5));rS=tek_yon_4_atli_hesapla(J,b4h,b1h,b5m,y4,y1,y5,'BEARISH')
+  if rS['skor']>rB['skor']:dQ=rS
+  else:dQ=rB;y1.update(q1c);y5.update(q5c)
+ else:dQ=rB
+ iy=dQ['hedef_yon'];p1,p2,p3,p4=dQ['atli_puanlar'];nO=dQ['skor'];kFlt=dQ.get('konum_meta',{'konum_onay':False,'htf_zorunlu_bolge_onay':False,'saglanan_giris_sart_sayisi':0});kysy_ok=bool(y4.get('kysy_onay',True))
+ htf_bolge_kesin_ok=bool(kFlt.get('htf_zorunlu_bolge_onay',False)and kFlt.get('ltf_herhangi_tetik',False)and kFlt.get('saglanan_giris_sart_sayisi',0)>=1)
+ aU='LONG'if(htf_bolge_kesin_ok and kysy_ok and nO>=MIN_CONFLUENCE_SKORU and iy=='BULLISH'and y4['yon']=='BULLISH')else'SHORT'if(D=='future'and htf_bolge_kesin_ok and kysy_ok and nO>=MIN_CONFLUENCE_SKORU and iy=='BEARISH'and y4['yon']=='BEARISH')else'BEKLE'
+ return{'sembol':J,'piyasa':D,'htf_periyot':htf_p,'mtf_periyot':mtf_p,'ltf_periyot':ltf_p,'mtf_sablonu':mtf_sb,'yon_4h':y4['yon'],'yon_1h':y1['yon'],'yon_5m':y5['yon'],'ana_yon':iy,'skor':nO,'bolge_10p_skor':dQ['bolge_10p_skor'],'giris_modeli':dQ['giris_modeli'],'atli_puanlar':dQ['atli_puanlar'],'sinyal':aU,'giris':dQ['giris']or _f(b5m,'close',-1),'sl':dQ['sl'],'df_4h_full':b4h,'df_1h_full':b1h,'df_15m_full':b5m,'df_4h':b4h,'df_1h':b1h,'df_5m':b5m,'df_15m':b5m,'yapi_4h':y4,'yapi_1h':y1,'yapi_5m':y5,'yapi_15m':y5,'kutular_4h':dQ.get('kutular_4h',[]),'kutular_1h':dQ.get('kutular_1h',[]),'kutular_5m':dQ.get('kutular_15m',[]),'cizim_kutulari_4h':dQ.get('kutular_4h',[]),'cizim_kutulari_1h':dQ.get('kutular_1h',[]),'cizim_kutulari_15m':dQ.get('kutular_15m',[]),'konum_meta':kFlt,'detayli_kurallar':dQ.get('detayli_kurallar',[])}
+def pine_script_uret_4h_1h_5m(O,tf_secim='4h',H_ozel=None):
+ H=H_ozel or analiz_hafizasi.get(O)or analiz_hafizasi.get(str(O).split(':',1)[-1])or{}
+ J=H.get('sembol',str(O).split(':',1)[-1]);D=H.get('piyasa','spot'if str(O).startswith('SPOT:')else'future');tv_sym=J.split(':')[0].replace('/','')+('.P'if D=='future'else'')
+ htf_p,mtf_p,ltf_p,_=_parite_mtf_periyotlarini_bul(O,J,D,H)
+ if tf_secim in('4h',htf_p):
+  tf_secim='4h';gercek_tf=htf_p;df=H.get('df_4h',H.get('df_4h_full'));yp=H.get('yapi_4h',{});kt=H.get('kutular_4h',H.get('cizim_kutulari_4h',[]));tf_lbl=f'{htf_p.upper()} (HTF Ana Yapı & Major Arz/Talep POI)';tv_tf=htf_p
+ elif tf_secim in('1h',mtf_p):
+  tf_secim='1h';gercek_tf=mtf_p;df=H.get('df_1h',H.get('df_1h_full'));yp=H.get('yapi_1h',{});kt=H.get('kutular_1h',H.get('cizim_kutulari_1h',[]));tf_lbl=f'{mtf_p.upper()} (MTF Konum Filtresi & İstasyonlar)';tv_tf=mtf_p
+ else:
+  tf_secim='5m';gercek_tf=ltf_p;df=H.get('df_5m',H.get('df_15m_full'));yp=H.get('yapi_5m',H.get('yapi_15m',{}));kt=H.get('kutular_5m',H.get('cizim_kutulari_15m',[]));tf_lbl=f'{ltf_p} (LTF İcra, Reversal Onay & Giriş/SL/TP)';tv_tf=ltf_p
+ k4h=H.get('kutular_4h',H.get('cizim_kutulari_4h',[]));k1h=H.get('kutular_1h',H.get('cizim_kutulari_1h',[]))
+ sp=F(yp.get('strong_point')or H.get('strong_point')or 0.0);wp=F(yp.get('weak_point')or H.get('weak_point')or 0.0)
+ ist=yp.get('uc_istasyon',H.get('uc_istasyon',{}));fl_m=yp.get('fl_dp_meta',H.get('fl_dp_meta',{}));qm_m=yp.get('qm_meta',H.get('qm_meta',{}))
+ kFlt=H.get('konum_meta',{'konum_onay':True,'konum_durumu':'ONAY','karar_senaryosu':'STANDART'});kysy=yp.get('kysy_meta',{})
+ magic_lvl=F(fl_m.get('magic_line')or ist.get('FL')or 0.0);itz_lvl=F(ist.get('ITZ')or 0.0);fo_lvl=F(ist.get('FO')or 0.0);qml_lvl=F(yp.get('qml_seviyesi')or qm_m.get('qml_seviyesi')or 0.0)
+ sMax=F(yp.get('swing_max',0.0)or 0.0);sMin=F(yp.get('swing_min',0.0)or 0.0)
+ dR=acik_islemler.get(O);aktif_sinyal_var=bool(I(dR,dict)or H.get('sinyal')in('LONG','SHORT'))
+ giris=F(dR['giris']if I(dR,dict)else(H.get('giris')if aktif_sinyal_var else 0.0));sl=F(dR['sl']if I(dR,dict)else(H.get('sl')if aktif_sinyal_var else 0.0))
+ yon_islem=dR['yon']if I(dR,dict)else(H.get('sinyal')if H.get('sinyal')in('LONG','SHORT')else'BEKLE');rk=A(giris-sl)if giris>0 and sl>0 else 0.0;mO=-1.0 if yon_islem=='SHORT'else 1.0
+ tp1=F(dR['tp']if I(dR,dict)else(giris+mO*rk*RISK_ODUL_ORANI if rk>0 else 0.0));tp2=F(dR.get('tp_nihai',tp1)if I(dR,dict)else(giris+mO*rk*M(NIHAI_TP_RR,RISK_ODUL_ORANI+1.0)if rk>0 else 0.0))
+ pnl_u,pnl_y=(0.0,0.0)
+ if I(dR,dict):pnl_u,pnl_y,_,_,_,_,_=islem_kar_zarar_hesapla(O,dR)
+ pnl_etiket=f"{_fmt_pnl(pnl_u)} (%{pnl_y:+.2f})"if I(dR,dict)else"Açık İşlem Yok"
+ p1,p2,p3,p4=H.get('atli_puanlar',(0,0,0,0));skor=H.get('skor',0);sinyal=H.get('sinyal','BEKLE')
+ def _kutu_satirlari(k_list,renk_kodu,etiket_on):
+  satirlar=[]
+  for idx,(ktip,b_idx,lo,hi)in enumerate(k_list[:5],1):
+   satirlar.append(f"    box.new(bar_index - 35, {F(hi):.6f}, bar_index + 8, {F(lo):.6f}, border_color={renk_kodu}, bgcolor=color.new({renk_kodu}, 84), text='{etiket_on} {ktip} [{F(lo):.4f}-{F(hi):.4f}]', text_color=color.white, text_size=size.small)")
+  return"\n".join(satirlar)if satirlar else"    // Bot tarafinda bu katmanda aktif kutu bulunmuyor"
+ bot_kutu_code=_kutu_satirlari(kt,('color.teal'if tf_secim=='4h'else'color.blue'if tf_secim=='1h'else'color.purple'),f'[{tf_secim.upper()} BOT]')
+ htf_overlay_code=_kutu_satirlari(k4h[:3],'color.orange','[4H KONUM POI]')if tf_secim in('1h','5m')else"    // 4H Ana Grafik"
+ mtf_overlay_code=_kutu_satirlari(k1h[:3],'color.aqua','[1H KONUM POI]')if tf_secim=='5m'else"    // 1H Katmani"
+ pine_chk_yorum=_karne_checklist_olustur(H,html_mi=False,yorum_on_eki='// ')
+ pine=f"""//@version=6
+indicator("Alfa Trade Club [{tf_secim.upper()}] — Kırılım Yoksa Swing Yoktur & Konum Filtresi ({tv_sym})", shorttitle="Alfa_{tf_secim.upper()}_PA", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+// ============================================================================
+// PARİTE: {O} ({tv_sym}) | ZAMAN DİLİMİ MODÜLÜ: {tf_lbl}
+// ANLIK İŞLEM KÂR/ZARAR: {pnl_etiket}
+{pine_chk_yorum.rstrip()}
+// KURAL 1: "KIRILIM YOKSA SWING YOKTUR" (No Break No Swing - İç Gürültü Filtresi)
+// KURAL 2: "KONUM (ARZ/TALEP BÖLGESİ) FİLTRESİ" (Bağlamsız Kırılım = Tuzak)
+// KURAL 3: "2 NUMARALI KARAR BÖLGESİ" (Red/Reversal vs İhlal/Flip Devam)
+// ============================================================================
+
+grp1 = "1. Kırılım Yoksa Swing Yoktur & Yapı Ayarları"
+swing_len = input.int({SWING_PENCERE}, "Fraktal Aday Swing Penceresi", minval=1, maxval=10, group=grp1)
+goster_kysy_zigzag = input.bool({'true' if tf_secim == '4h' else 'false'}, "Onaylı Swing ZigZag & BOS/CHoCH Göster (Sadece HTF)", group=grp1)
+goster_elenen_gurultu = input.bool(false, "Elenen İç Yapı (Kırılımsız Gürültü) Noktalarını Göster", group=grp1)
+
+grp2 = "2. Konum (Arz/Talep) Filtresi & İstasyonlar"
+goster_dinamik_poi = input.bool({'true' if tf_secim == '4h' else 'false'}, "Dinamik OB / FVG / Konum Kutularını Çiz (Sadece HTF)", group=grp2)
+goster_bot_kutulari = input.bool({'true' if tf_secim == '4h' else 'false'}, "Python Botun Tespit Ettiği HTF Kutularını Çiz (Sadece HTF)", group=grp2)
+goster_fibo_ote = input.bool({'true' if tf_secim == '4h' else 'false'}, "Sihirli Fibo 0.50 EQ & OTE (0.618-0.786) Göster (Sadece HTF)", group=grp2)
+goster_tuzak_etiket = input.bool({'true' if tf_secim == '4h' else 'false'}, "Bağlamsız Tuzak CHoCH & Konum Hatalarını İşaretle (Sadece HTF)", group=grp2)
+goster_islem_rr = input.bool(true, "Bot Giriş / Stop-Loss (1R) / TP1 (3R) / TP2 (4R) Çiz", group=grp2)
+
+atr_val = ta.atr(14)
+rsi_val = ta.rsi(close, 14)
+
+// --- 4H ve 1H ÜST ZAMAN DİLİMİ KONUM (ARZ/TALEP) BAĞLAMI ---
+[htf_high, htf_low, htf_close] = request.security(syminfo.tickerid, "240", [ta.highest(high, 40), ta.lowest(low, 40), close], lookahead=barmerge.lookahead_off)
+[mtf_high, mtf_low, mtf_close] = request.security(syminfo.tickerid, "60", [ta.highest(high, 40), ta.lowest(low, 40), close], lookahead=barmerge.lookahead_off)
+
+htf_eq = (htf_high + htf_low) / 2.0
+mtf_eq = (mtf_high + mtf_low) / 2.0
+htf_fibo_oran = htf_high > htf_low ? (close - htf_low) / (htf_high - htf_low) : 0.5
+mtf_fibo_oran = mtf_high > mtf_low ? (close - mtf_low) / (mtf_high - mtf_low) : 0.5
+
+discount_konum = htf_fibo_oran <= 0.52 or mtf_fibo_oran <= 0.50
+premium_konum  = htf_fibo_oran >= 0.48 or mtf_fibo_oran >= 0.50
+bull_ote_konum = (htf_fibo_oran >= 0.214 and htf_fibo_oran <= 0.40) or (mtf_fibo_oran >= 0.214 and mtf_fibo_oran <= 0.40)
+bear_ote_konum = (htf_fibo_oran >= 0.60 and htf_fibo_oran <= 0.786) or (mtf_fibo_oran >= 0.60 and mtf_fibo_oran <= 0.786)
+
+// --- KURAL 1: "KIRILIM YOKSA SWING YOKTUR" DURUM MAKİNESİ ---
+ph = ta.pivothigh(high, swing_len, swing_len)
+pl = ta.pivotlow(low, swing_len, swing_len)
+
+var float aktif_sh = high
+var int   aktif_sh_bar = bar_index
+var float aktif_sl = low
+var int   aktif_sl_bar = bar_index
+var int   yapi_yon = 0
+var float onayli_strong_low = low
+var float onayli_strong_high = high
+var int   son_zz_bar = bar_index
+var float son_zz_fiyat = close
+var int   elenen_sayac = 0
+var bool  pb_olustu = true
+
+if not na(ph)
+    p_bar = bar_index - swing_len
+    if yapi_yon == -1
+        pb_olustu := true
+    if yapi_yon == 1 and ph > aktif_sh
+        aktif_sh := ph
+        aktif_sh_bar := p_bar
+    else if ph <= aktif_sh and ph >= aktif_sl
+        elenen_sayac += 1
+        if goster_elenen_gurultu
+            label.new(p_bar, ph, "×", color=color.new(color.gray, 100), textcolor=color.new(color.silver, 35), style=label.style_label_down, size=size.tiny, tooltip="Kırılım Yok -> Swing Yok (İç Yapı Gürültüsü Elendi)")
+
+if not na(pl)
+    p_bar = bar_index - swing_len
+    if yapi_yon == 1
+        pb_olustu := true
+    if yapi_yon == -1 and pl < aktif_sl
+        aktif_sl := pl
+        aktif_sl_bar := p_bar
+    else if pl >= aktif_sl and pl <= aktif_sh
+        elenen_sayac += 1
+        if goster_elenen_gurultu
+            label.new(p_bar, pl, "×", color=color.new(color.gray, 100), textcolor=color.new(color.silver, 35), style=label.style_label_up, size=size.tiny, tooltip="Kırılım Yok -> Swing Yok (İç Yapı Gürültüsü Elendi)")
+
+bull_kirilim = pb_olustu and close > aktif_sh and bar_index > aktif_sh_bar + 1
+bear_kirilim = pb_olustu and close < aktif_sl and bar_index > aktif_sl_bar + 1
+
+var float son_demand_ust = na
+var float son_demand_alt = na
+var float son_supply_ust = na
+var float son_supply_alt = na
+
+if bull_kirilim
+    kirilim_etiket = yapi_yon == 1 ? "BOS (KYSY Onaylı)" : "MSB / Güçlü CHoCH"
+    onayli_strong_low := aktif_sl
+    son_demand_alt := aktif_sl
+    son_demand_ust := aktif_sl + atr_val * 0.65
+    orta_bar_b = int(math.round((aktif_sh_bar + bar_index) / 2.0))
+    if goster_kysy_zigzag
+        line.new(aktif_sh_bar, aktif_sh, bar_index, aktif_sh, color=color.lime, style=line.style_dashed, width=2)
+        label.new(orta_bar_b, aktif_sh, "⚡ " + kirilim_etiket, color=color.new(color.black, 20), textcolor=color.lime, style=label.style_label_down, size=size.small)
+        line.new(son_zz_bar, son_zz_fiyat, aktif_sl_bar, aktif_sl, color=color.new(color.teal, 15), style=line.style_solid, width=2)
+        label.new(aktif_sl_bar, aktif_sl, yapi_yon == 1 ? "HL (Onaylı)" : "LL->Strong Origin", color=color.new(color.teal, 15), textcolor=color.white, style=label.style_label_up, size=size.tiny)
+    if goster_dinamik_poi
+        box.new(aktif_sl_bar, son_demand_ust, bar_index + 12, son_demand_alt, border_color=color.new(color.blue, 20), bgcolor=color.new(color.blue, 85), text="[{tf_secim.upper()}] Onaylı Demand OB", text_color=color.white, text_size=size.tiny)
+    son_zz_bar := aktif_sl_bar
+    son_zz_fiyat := aktif_sl
+    yapi_yon := 1
+    aktif_sh := high
+    aktif_sh_bar := bar_index
+    pb_olustu := false
+
+if bear_kirilim
+    kirilim_etiket = yapi_yon == -1 ? "BOS (KYSY Onaylı)" : "MSB / Güçlü CHoCH"
+    onayli_strong_high := aktif_sh
+    son_supply_ust := aktif_sh
+    son_supply_alt := aktif_sh - atr_val * 0.65
+    orta_bar_s = int(math.round((aktif_sl_bar + bar_index) / 2.0))
+    if goster_kysy_zigzag
+        line.new(aktif_sl_bar, aktif_sl, bar_index, aktif_sl, color=color.red, style=line.style_dashed, width=2)
+        label.new(orta_bar_s, aktif_sl, "⚡ " + kirilim_etiket, color=color.new(color.black, 20), textcolor=color.red, style=label.style_label_up, size=size.small)
+        line.new(son_zz_bar, son_zz_fiyat, aktif_sh_bar, aktif_sh, color=color.new(color.maroon, 15), style=line.style_solid, width=2)
+        label.new(aktif_sh_bar, aktif_sh, yapi_yon == -1 ? "LH (Onaylı)" : "HH->Strong Origin", color=color.new(color.maroon, 15), textcolor=color.white, style=label.style_label_down, size=size.tiny)
+    if goster_dinamik_poi
+        box.new(aktif_sh_bar, son_supply_ust, bar_index + 12, son_supply_alt, border_color=color.new(color.red, 20), bgcolor=color.new(color.red, 85), text="[{tf_secim.upper()}] Onaylı Supply OB", text_color=color.white, text_size=size.tiny)
+    son_zz_bar := aktif_sh_bar
+    son_zz_fiyat := aktif_sh
+    yapi_yon := -1
+    aktif_sl := low
+    aktif_sl_bar := bar_index
+    pb_olustu := false
+
+if yapi_yon == 1 and high > aktif_sh
+    aktif_sh := high
+    aktif_sh_bar := bar_index
+if yapi_yon == -1 and low < aktif_sl
+    aktif_sl := low
+    aktif_sl_bar := bar_index
+
+// --- KURAL 2 & 3: KONUM (ARZ/TALEP BÖLGESİ) FİLTRESİ & HATA/TUZAK TESPİTİ ---
+demand_temas = (not na(son_demand_ust) and low <= son_demand_ust + atr_val * 0.25 and close >= son_demand_alt) or discount_konum
+supply_temas = (not na(son_supply_alt) and high >= son_supply_alt - atr_val * 0.25 and close <= son_supply_ust) or premium_konum
+
+tuzak_bull_choch = bull_kirilim and not demand_temas and htf_fibo_oran > 0.72
+tuzak_bear_choch = bear_kirilim and not supply_temas and htf_fibo_oran < 0.28
+
+if goster_tuzak_etiket and tuzak_bull_choch
+    label.new(bar_index, high + atr_val * 0.3, "❌ TUZAK KIRILIM (Konum Hatası: Premium Tepede/Boşlukta!)", color=color.orange, textcolor=color.black, style=label.style_label_down, size=size.small)
+
+if goster_tuzak_etiket and tuzak_bear_choch
+    label.new(bar_index, low - atr_val * 0.3, "❌ TUZAK KIRILIM (Konum Hatası: Discount Dipte/Boşlukta!)", color=color.orange, textcolor=color.black, style=label.style_label_up, size=size.small)
+
+// --- PYTHON BOTUN HESAPLADIĞI GERÇEK {tf_secim.upper()} SEVİYELERİ VE KUTULARI ---
+var float bot_sp = {sp:.6f}
+var float bot_wp = {wp:.6f}
+var float bot_magic = {magic_lvl:.6f}
+var float bot_itz = {itz_lvl:.6f}
+var float bot_qml = {qml_lvl:.6f}
+var float bot_smax = {sMax:.6f}
+var float bot_smin = {sMin:.6f}
+var float bot_giris = {giris:.6f}
+var float bot_sl = {sl:.6f}
+var float bot_tp1 = {tp1:.6f}
+var float bot_tp2 = {tp2:.6f}
+
+if barstate.islast and goster_bot_kutulari
+{bot_kutu_code}
+{htf_overlay_code}
+{mtf_overlay_code}
+
+if barstate.islast and goster_bot_kutulari
+    if bot_sp > 0.0
+        line.new(bar_index - 40, bot_sp, bar_index + 8, bot_sp, color=color.yellow, style=line.style_dashed, width=2)
+        label.new(bar_index + 8, bot_sp, "🛡️ Strong Origin ({sp:.4f})", color=color.new(color.yellow, 80), textcolor=color.yellow, style=label.style_label_left, size=size.small)
+    if bot_wp > 0.0
+        line.new(bar_index - 40, bot_wp, bar_index + 8, bot_wp, color=color.silver, style=line.style_dotted, width=2)
+        label.new(bar_index + 8, bot_wp, "🎯 Weak Target ({wp:.4f})", color=color.new(color.silver, 80), textcolor=color.white, style=label.style_label_left, size=size.small)
+    if bot_magic > 0.0
+        line.new(bar_index - 30, bot_magic, bar_index + 8, bot_magic, color=color.fuchsia, style=line.style_dashed, width=1)
+        label.new(bar_index + 8, bot_magic, "✨ Magic Line / FL ({magic_lvl:.4f})", color=color.new(color.fuchsia, 80), textcolor=color.fuchsia, style=label.style_label_left, size=size.tiny)
+    if bot_itz > 0.0
+        line.new(bar_index - 30, bot_itz, bar_index + 8, bot_itz, color=color.aqua, style=line.style_dotted, width=1)
+        label.new(bar_index + 8, bot_itz, "🏛️ ITZ ({itz_lvl:.4f})", color=color.new(color.aqua, 80), textcolor=color.aqua, style=label.style_label_left, size=size.tiny)
+    if bot_qml > 0.0
+        line.new(bar_index - 30, bot_qml, bar_index + 8, bot_qml, color=color.purple, style=line.style_dashed, width=1)
+        label.new(bar_index + 8, bot_qml, "👑 QML ({qml_lvl:.4f})", color=color.new(color.purple, 80), textcolor=color.purple, style=label.style_label_left, size=size.tiny)
+
+if barstate.islast and goster_fibo_ote and bot_smax > bot_smin and bot_smin > 0.0
+    eq_f = (bot_smax + bot_smin) / 2.0
+    rng_f = bot_smax - bot_smin
+    ote1 = "{yp.get('yon','BULLISH')}" == "BULLISH" ? bot_smax - rng_f * 0.618 : bot_smin + rng_f * 0.618
+    ote2 = "{yp.get('yon','BULLISH')}" == "BULLISH" ? bot_smax - rng_f * 0.786 : bot_smin + rng_f * 0.786
+    line.new(bar_index - 45, eq_f, bar_index + 8, eq_f, color=color.gray, style=line.style_dashed, width=1)
+    label.new(bar_index + 8, eq_f, "0.50 EQ (" + str.tostring(eq_f, "#.####") + ")", color=color.new(color.gray, 80), textcolor=color.silver, style=label.style_label_left, size=size.tiny)
+    box.new(bar_index - 45, math.max(ote1, ote2), bar_index + 8, math.min(ote1, ote2), border_color=color.new(color.teal, 50), bgcolor=color.new(color.teal, 90), text="Sihirli Fibo OTE (0.618-0.786)", text_color=color.teal, text_size=size.tiny)
+
+if barstate.islast and goster_islem_rr and bot_giris > 0.0 and bot_sl > 0.0
+    box.new(bar_index - 12, math.max(bot_giris, bot_sl), bar_index + 10, math.min(bot_giris, bot_sl), border_color=color.red, bgcolor=color.new(color.red, 86), text="STOP (1R): {sl:.4f}", text_color=color.white, text_size=size.tiny)
+    box.new(bar_index - 12, math.max(bot_giris, bot_tp1), bar_index + 10, math.min(bot_giris, bot_tp1), border_color=color.green, bgcolor=color.new(color.green, 86), text="TP1 (3R %50+BE): {tp1:.4f}", text_color=color.white, text_size=size.tiny)
+    line.new(bar_index - 14, bot_giris, bar_index + 12, bot_giris, color=color.aqua, style=line.style_solid, width=2)
+    line.new(bar_index - 14, bot_tp2, bar_index + 12, bot_tp2, color=color.lime, style=line.style_dotted, width=2)
+
+// --- SAĞ ÜST ALFA TRADE CLUB HATA DENETİM & STRATEJİ KARNESİ TABLOSU ---
+var table panel = table.new(position.top_right, 2, 12, bgcolor=color.rgb(17, 17, 27, 10), border_color=color.rgb(49, 50, 68), border_width=1)
+if barstate.islast
+    table.cell(panel, 0, 0, "🌲 ALFA PA [{tf_secim.upper()}]", text_color=color.aqua, text_size=size.small, bgcolor=color.rgb(24, 24, 37))
+    table.cell(panel, 1, 0, "{O} ({tv_sym})", text_color=color.white, text_size=size.small, bgcolor=color.rgb(24, 24, 37))
+    table.cell(panel, 0, 1, "1. Yön & KYSY Onayı", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 1, "{'✅' if kFlt.get('htf_yon_ok', True) else '⬜'} HTF:{H.get('yon_4h','-')} | MTF:{H.get('yon_1h','-')} | LTF:{yp.get('yon','-')}", text_color={'color.lime' if kFlt.get('htf_yon_ok', True) else 'color.orange'}, text_size=size.tiny)
+    table.cell(panel, 0, 2, "2. HTF Safe Bölge Puanı", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 2, "{kFlt.get('htf_bolge_sayisi', 0)}/8 Bölge | {kFlt.get('htf_safe_derecesi', 'STANDART')} ({kFlt.get('htf_safe_puan', 0)}p)", text_color={'color.lime' if kFlt.get('konum_onay', True) else 'color.red'}, text_size=size.tiny)
+    table.cell(panel, 0, 3, "Check: QML / OTE / OB / Fresh", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 3, "{'✅' if kFlt.get('htf_qml_bolgesinde') else '⬜'}QML {'✅' if kFlt.get('htf_ote_bolgesinde') else '⬜'}OTE {'✅' if kFlt.get('htf_ob_bolgesinde') else '⬜'}OB {'✅' if kFlt.get('htf_arz_talep_bolgesinde') else '⬜'}Fresh", text_color=color.yellow, text_size=size.tiny)
+    table.cell(panel, 0, 4, "Check: CHoCH / BOS / ITZ / Magic", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 4, "{'✅' if kFlt.get('htf_choch_noktasinda') else '⬜'}CHoCH {'✅' if kFlt.get('htf_bos_noktasinda') else '⬜'}BOS {'✅' if kFlt.get('htf_itz_bolgesinde') else '⬜'}ITZ {'✅' if kFlt.get('htf_magic_line_bolgesinde') else '⬜'}Magic", text_color=color.yellow, text_size=size.tiny)
+    table.cell(panel, 0, 5, "3. LTF Reversal Kırılım & Mum", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 5, "{'✅' if kFlt.get('ltf_reversal_kirilim_onay') else '⬜'}Reversal Kırılım | {'✅' if kFlt.get('ltf_reversal_mum_onay') else '⬜'}Reversal Mum", text_color={'color.lime' if kFlt.get('ltf_herhangi_tetik') else 'color.orange'}, text_size=size.tiny)
+    table.cell(panel, 0, 6, "Mahşerin 4 Atlısı Skoru", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 6, "{skor}/100 ({p1}/{p2}/{p3}/{p4}) -> {sinyal}", text_color={'color.lime' if sinyal=='LONG' else 'color.red' if sinyal=='SHORT' else 'color.orange'}, text_size=size.tiny)
+    table.cell(panel, 0, 7, "Bölge Gücü & Wyckoff", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 7, "{H.get('bolge_10p_skor',0)}/10 | {yp.get('wyckoff_fazi','TREND')}", text_color=color.white, text_size=size.tiny)
+    table.cell(panel, 0, 8, "Strong Origin / Weak Target", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 8, "{sp:.4f} / {wp:.4f}", text_color=color.yellow, text_size=size.tiny)
+    table.cell(panel, 0, 9, "Giriş / Stop-Loss (1R)", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 9, "{giris:.4f} / {sl:.4f} ({yon_islem})", text_color=color.aqua, text_size=size.tiny)
+    table.cell(panel, 0, 10, "TP1 (3R %50+BE) / TP2 (4R)", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 10, "{tp1:.4f} / {tp2:.4f}", text_color=color.lime, text_size=size.tiny)
+    table.cell(panel, 0, 11, "Anlık Kâr / Zarar Tutarı", text_color=color.silver, text_size=size.tiny)
+    table.cell(panel, 1, 11, "{pnl_etiket}", text_color={'color.lime' if pnl_u >= 0 else 'color.red'}, text_size=size.tiny)
+"""
+ return pine
+def _arz_talep_ve_imbalance_sablon_hesapla(df_c,ts_arr,bos_list,E,qml_seviye=None):
+ arz_talep_list=[];imbalance_list=[]
+ ct=L(df_c)
+ if ct<6:return(arz_talep_list,imbalance_list)
+ son_kapanis=_f(df_c,'close',-1)
+ eklenen_at=set()
+ # Hem ana HTF kırılımını hem de lokal impulsif kırılımları birleştir (Arz/Talep bölgelerinin eksiksiz görünmesi için)
+ tum_bos=list(bos_list or[])
+ try:
+  _,_,ltf_m=_kysy_ltf_swing_analizi(df_c,3,False)
+  for b_i,lvl,o_i,o_v,yon_b,ktip in ltf_m.get('bos_list',[])[-10:]:
+   if 0<=o_i<ct and 0<=b_i<ct:
+    tum_bos.append({'orig_idx':int(o_i),'idx2':int(b_i),'yon':yon_b,'tip':ktip})
+ except X:pass
+ for idx_b,b in enumerate(tum_bos):
+  oi=M(0,N(ct-3,int(b.get('orig_idx',b.get('idx1',0)))))
+  bi=M(oi+1,N(ct-1,int(b.get('idx2',ct-1))))
+  yon_b=b.get('yon','BULLISH')
+  ktip=str(b.get('tip','BOS'))
+  rev_mi='MSB'in ktip or'CHOCH'in ktip or idx_b==0
+  if yon_b=='BULLISH':
+   lo=N(_f(df_c,'low',oi),_f(df_c,'low',M(0,oi-1)))
+   base_ust=_f(df_c,'open',oi)
+   for j in G(M(0,oi-1),N(ct-1,oi+3)):
+    oj,cj,hj,lj=(_f(df_c,'open',j),_f(df_c,'close',j),_f(df_c,'high',j),_f(df_c,'low',j))
+    if cj<oj:base_ust=M(base_ust,oj,hj if(hj-lo)<=E*1.35 else oj)
+    elif cj>oj and(cj-oj)>=E*0.45:
+     base_ust=M(base_ust,oj);break
+   if idx_b==0 and qml_seviye and lo<qml_seviye<=lo+E*2.5:
+    hi=F(qml_seviye)
+   else:
+    hi=M(lo+E*0.25,N(base_ust,lo+E*1.35))
+   kirildi=False;test_sayisi=0;kirilma_idx=None
+   for m in G(bi+1,ct):
+    cm,lm=(_f(df_c,'close',m),_f(df_c,'low',m))
+    if cm<lo-E*0.05:kirildi=True;kirilma_idx=m;break
+    if lm<=hi and cm>=lo:test_sayisi+=1
+   anahtar=('DEMAND',R(lo,2))
+   if not kirildi and anahtar not in eklenen_at:
+    eklenen_at.add(anahtar)
+    durum='Taze'if test_sayisi==0 else f'{test_sayisi}x Test'
+    kalip='Fresh Talep Noktası (QML+OB)'if idx_b==0 else('Talep OB (DBR)'if rev_mi else'Valid Talep (RBR)')
+    arz_talep_list.append({'tur':'TALEP','alt_tur':'REVERSAL_OB'if rev_mi else'VALID_DEMAND','idx1':int(oi),'t1':ts_arr[oi],'lo':F(lo),'hi':F(hi),'eq':F((lo+hi)/2.0),'taze':test_sayisi==0,'test':test_sayisi,'etiket':f'{kalip} [{durum}]'})
+   elif kirildi and kirilma_idx is not None and kirilma_idx<ct-2:
+    hala_altinda=all((_f(df_c,'close',m)<=hi+E*0.1 for m in G(kirilma_idx+1,ct)))
+    if hala_altinda and A(son_kapanis-hi)<=E*6.0 and anahtar not in eklenen_at:
+     eklenen_at.add(anahtar)
+     arz_talep_list.append({'tur':'ARZ','alt_tur':'FLIP_ARZ','idx1':int(kirilma_idx),'t1':ts_arr[kirilma_idx],'lo':F(lo),'hi':F(hi),'eq':F((lo+hi)/2.0),'taze':True,'test':0,'etiket':'Flip Arz (Breaker)'})
+  else:
+   hi=M(_f(df_c,'high',oi),_f(df_c,'high',M(0,oi-1)))
+   base_alt=_f(df_c,'open',oi)
+   for j in G(M(0,oi-1),N(ct-1,oi+3)):
+    oj,cj,hj,lj=(_f(df_c,'open',j),_f(df_c,'close',j),_f(df_c,'high',j),_f(df_c,'low',j))
+    if cj>oj:base_alt=N(base_alt,oj,lj if(hi-lj)<=E*1.35 else oj)
+    elif cj<oj and(oj-cj)>=E*0.45:
+     base_alt=N(base_alt,oj);break
+   if idx_b==0 and qml_seviye and hi-E*2.5<=qml_seviye<hi:
+    lo=F(qml_seviye)
+   else:
+    lo=N(hi-E*0.25,M(base_alt,hi-E*1.35))
+   kirildi=False;test_sayisi=0;kirilma_idx=None
+   for m in G(bi+1,ct):
+    cm,hm=(_f(df_c,'close',m),_f(df_c,'high',m))
+    if cm>hi+E*0.05:kirildi=True;kirilma_idx=m;break
+    if hm>=lo and cm<=hi:test_sayisi+=1
+   anahtar=('SUPPLY',R(hi,2))
+   if not kirildi and anahtar not in eklenen_at:
+    eklenen_at.add(anahtar)
+    durum='Taze'if test_sayisi==0 else f'{test_sayisi}x Test'
+    kalip='Fresh Arz Noktası (QML+OB)'if idx_b==0 else('Arz OB (RBD)'if rev_mi else'Valid Arz (DBD)')
+    arz_talep_list.append({'tur':'ARZ','alt_tur':'REVERSAL_OB'if rev_mi else'VALID_SUPPLY','idx1':int(oi),'t1':ts_arr[oi],'lo':F(lo),'hi':F(hi),'eq':F((lo+hi)/2.0),'taze':test_sayisi==0,'test':test_sayisi,'etiket':f'{kalip} [{durum}]'})
+   elif kirildi and kirilma_idx is not None and kirilma_idx<ct-2:
+    hala_ustunde=all((_f(df_c,'close',m)>=lo-E*0.1 for m in G(kirilma_idx+1,ct)))
+    if hala_ustunde and A(son_kapanis-lo)<=E*6.0 and anahtar not in eklenen_at:
+     eklenen_at.add(anahtar)
+     arz_talep_list.append({'tur':'TALEP','alt_tur':'FLIP_TALEP','idx1':int(kirilma_idx),'t1':ts_arr[kirilma_idx],'lo':F(lo),'hi':F(hi),'eq':F((lo+hi)/2.0),'taze':True,'test':0,'etiket':'Flip Talep (Breaker)'})
+ arz_talep_list=arz_talep_list[:2]+arz_talep_list[-8:]if L(arz_talep_list)>10 else arz_talep_list
+ eklenen_imb=set()
+ for i in G(1,ct-1):
+  h0,l0,o0,c0=(_f(df_c,'high',i-1),_f(df_c,'low',i-1),_f(df_c,'open',i-1),_f(df_c,'close',i-1))
+  h1,l1,o1,c1=(_f(df_c,'high',i),_f(df_c,'low',i),_f(df_c,'open',i),_f(df_c,'close',i))
+  h2,l2,o2,c2=(_f(df_c,'high',i+1),_f(df_c,'low',i+1),_f(df_c,'open',i+1),_f(df_c,'close',i+1))
+  govde1=c1-o1
+  if l2>h0 and govde1>=E*0.32 and(l2-h0)>=E*0.08:
+   alt_fvg,ust_fvg=(h0,l2);gap_boy=ust_fvg-alt_fvg;kok=N(l0,l1)
+   kirildi=False;min_low=ust_fvg;k_idx=None
+   for m in G(i+2,ct):
+    cm,lm=(_f(df_c,'close',m),_f(df_c,'low',m))
+    if cm<alt_fvg:kirildi=True;k_idx=m;break
+    if lm<min_low:min_low=lm
+   if not kirildi:
+    aktif_ust=M(alt_fvg,N(ust_fvg,min_low))
+    if(aktif_ust-alt_fvg)>=gap_boy*0.22:
+     durum='Taze'if min_low>=ust_fvg else'Kısmi'
+     anahtar=('BISI',R(alt_fvg,4),R(aktif_ust,4))
+     if anahtar not in eklenen_imb:
+      eklenen_imb.add(anahtar)
+      imbalance_list.append({'tip':'BISI_FVG','yon':'BULL','idx1':int(i-1),'t1':ts_arr[i-1],'lo':F(alt_fvg),'hi':F(aktif_ust),'ce':F((alt_fvg+aktif_ust)/2.0),'kok':F(kok),'taze':min_low>=ust_fvg,'etiket':f'BISI FVG ({durum})'})
+   elif k_idx is not None and k_idx>=ct-45:
+    if all((_f(df_c,'close',m)<=ust_fvg+E*0.1 for m in G(k_idx+1,ct)))and A(son_kapanis-ust_fvg)<=E*4.5:
+     anahtar=('IFVG_BEAR',R(alt_fvg,4),R(ust_fvg,4))
+     if anahtar not in eklenen_imb:
+      eklenen_imb.add(anahtar)
+      imbalance_list.append({'tip':'IFVG','yon':'BEAR','idx1':int(k_idx),'t1':ts_arr[k_idx],'lo':F(alt_fvg),'hi':F(ust_fvg),'ce':F((alt_fvg+ust_fvg)/2.0),'kok':F(ust_fvg),'taze':True,'etiket':'Bear IFVG (Flip)'})
+  elif l0>h2 and(-govde1)>=E*0.32 and(l0-h2)>=E*0.08:
+   alt_fvg,ust_fvg=(h2,l0);gap_boy=ust_fvg-alt_fvg;kok=M(h0,h1)
+   kirildi=False;max_high=alt_fvg;k_idx=None
+   for m in G(i+2,ct):
+    cm,hm=(_f(df_c,'close',m),_f(df_c,'high',m))
+    if cm>ust_fvg:kirildi=True;k_idx=m;break
+    if hm>max_high:max_high=hm
+   if not kirildi:
+    aktif_alt=N(ust_fvg,M(alt_fvg,max_high))
+    if(ust_fvg-aktif_alt)>=gap_boy*0.22:
+     durum='Taze'if max_high<=alt_fvg else'Kısmi'
+     anahtar=('SIBI',R(aktif_alt,4),R(ust_fvg,4))
+     if anahtar not in eklenen_imb:
+      eklenen_imb.add(anahtar)
+      imbalance_list.append({'tip':'SIBI_FVG','yon':'BEAR','idx1':int(i-1),'t1':ts_arr[i-1],'lo':F(aktif_alt),'hi':F(ust_fvg),'ce':F((aktif_alt+ust_fvg)/2.0),'kok':F(kok),'taze':max_high<=alt_fvg,'etiket':f'SIBI FVG ({durum})'})
+   elif k_idx is not None and k_idx>=ct-45:
+    if all((_f(df_c,'close',m)>=alt_fvg-E*0.1 for m in G(k_idx+1,ct)))and A(son_kapanis-alt_fvg)<=E*4.5:
+     anahtar=('IFVG_BULL',R(alt_fvg,4),R(ust_fvg,4))
+     if anahtar not in eklenen_imb:
+      eklenen_imb.add(anahtar)
+      imbalance_list.append({'tip':'IFVG','yon':'BULL','idx1':int(k_idx),'t1':ts_arr[k_idx],'lo':F(alt_fvg),'hi':F(ust_fvg),'ce':F((alt_fvg+ust_fvg)/2.0),'kok':F(alt_fvg),'taze':True,'etiket':'Bull IFVG (Flip)'})
+  if i>=ct-60 and A(o1-c0)>=E*0.12:
+   v_lo,v_hi=(N(c0,o1),M(c0,o1))
+   if c1>o1 and o1>c0:
+    dolduruldu=any((_f(df_c,'low',m)<=v_lo for m in G(i+1,ct)))
+    if not dolduruldu:
+     imbalance_list.append({'tip':'VIB','yon':'BULL','idx1':int(i-1),'t1':ts_arr[i-1],'lo':F(v_lo),'hi':F(v_hi),'ce':F((v_lo+v_hi)/2.0),'kok':F(v_lo),'taze':True,'etiket':'Bull VIB/Gap'})
+   elif c1<o1 and o1<c0:
+    dolduruldu=any((_f(df_c,'high',m)>=v_hi for m in G(i+1,ct)))
+    if not dolduruldu:
+     imbalance_list.append({'tip':'VIB','yon':'BEAR','idx1':int(i-1),'t1':ts_arr[i-1],'lo':F(v_lo),'hi':F(v_hi),'ce':F((v_lo+v_hi)/2.0),'kok':F(v_hi),'taze':True,'etiket':'Bear VIB/Gap'})
+ imbalance_list=imbalance_list[-12:]
+ return(arz_talep_list,imbalance_list)
+def _df_to_tv_json(df,yp,kt):
+ mum_list=[];zz_list=[];elenen_list=[];bos_list=[];kutu_list=[];arz_talep_list=[];imbalance_list=[];liq_list=[];sfp_list=[]
+ if df is None or L(df)<5:return{'mumlar':mum_list,'zigzag':zz_list,'elenen':elenen_list,'bos':bos_list,'kutular':kutu_list,'arz_talep':arz_talep_list,'imbalance':imbalance_list,'likidite':liq_list,'sfp':sfp_list}
+ oc=M(0,L(df)-300)
+ df_c=df.iloc[oc:].reset_index(drop=True)
+ ct=L(df_c)
+ ts_arr=[]
+ son_t=0
+ for idx,r in df_c.iterrows():
+  ts_s=int(F(r['timestamp'])/1000)if'timestamp'in df_c.columns and F(r['timestamp'])>0 else(1700000000+int(idx)*300)
+  if ts_s<=son_t:ts_s=son_t+60
+  son_t=ts_s;ts_arr.append(ts_s)
+  mum_list.append({'time':ts_s,'idx':int(idx),'open':F(r['open']),'high':F(r['high']),'low':F(r['low']),'close':F(r['close'])})
+ E=M(_f(df_c,'atr',-2)if'atr'in df_c.columns else _f(df_c,'close',-1)*0.003,_f(df_c,'close',-1)*0.001)
+ try:
+  n_sw=2 if I(yp,dict)and yp.get('internal_choch')is not None and L(df_c)<=300 and'internal_yon'in yp and L(yp.get('highs',[]))>8 else SWING_PENCERE
+  uH,uL,kysy_m=kirilim_yoksa_swing_yoktur_analizi(df_c,n_sw)
+  zz_raw=sorted([(i,v,'H')for i,v in uH]+[(i,v,'L')for i,v in uL],key=lambda x:x[0])
+  prev_h=None;prev_l=None
+  for idx_z,(i,v,tip)in enumerate(zz_raw):
+   if 0<=i<L(ts_arr):
+    if tip=='H':lbl='HH'if prev_h is None or v>=prev_h else'LH';prev_h=v
+    else:
+     if prev_l is None:lbl='LL'if(idx_z>0 and zz_raw[idx_z-1][2]=='H')else'HL'
+     else:lbl='HL'if v>=prev_l else'LL'
+     prev_l=v
+    zz_list.append({'time':ts_arr[i],'idx':int(i),'value':F(v),'tip':tip,'lbl':lbl})
+  for b_i,lvl,o_i,o_v,yon_b,ktip in kysy_m.get('bos_list',[]):
+   if 0<=b_i<L(ts_arr):
+    s_i=M(0,N(L(ts_arr)-1,int(o_i)))
+    bos_list.append({'t1':ts_arr[s_i],'t2':ts_arr[b_i],'idx1':int(s_i),'idx2':int(b_i),'price':F(lvl),'yon':yon_b,'tip':ktip,'orig_idx':int(s_i),'orig_val':F(o_v)})
+ except X:pass
+ try:
+  arz_talep_list,imbalance_list=_arz_talep_ve_imbalance_sablon_hesapla(df_c,ts_arr,bos_list,E,kysy_m.get('qml_seviyesi'))
+ except X:pass
+ for ktip,b_idx,lo,hi in(kt or[])[:6]:
+  ns=M(0,N(ct-4,int(b_idx)-oc))if I(b_idx,(int,np.integer))else M(0,ct-35)
+  kutu_list.append({'tip':str(ktip),'idx1':int(ns),'t1':ts_arr[ns],'lo':F(lo),'hi':F(hi)})
+ try:
+  jn,jo=swing_noktalarini_bul(df_c,2,False,False)
+  for k in G(L(jn)-1):
+   (i1,h1),(i2,h2)=(jn[k],jn[k+1])
+   if A(h2-h1)/M(h1,1e-09)<=0.0045 and 0<=i1<ct and 0<=i2<ct:
+    gR=(h1+h2)/2.0
+    liq_list.append({'tip':'$$$ EQH (BSL)','idx1':int(i1),'idx2':int(i2),'t1':ts_arr[i1],'t2':ts_arr[i2],'p1':F(gR),'p2':F(gR),'renk':'#fbbf24'})
+  for k in G(L(jo)-1):
+   (i1,l1),(i2,l2)=(jo[k],jo[k+1])
+   if A(l2-l1)/M(l1,1e-09)<=0.0045 and 0<=i1<ct and 0<=i2<ct:
+    gT=(l1+l2)/2.0
+    liq_list.append({'tip':'$$$ EQL (SSL)','idx1':int(i1),'idx2':int(i2),'t1':ts_arr[i1],'t2':ts_arr[i2],'p1':F(gT),'p2':F(gT),'renk':'#38bdf8'})
+  for oI,rF in[(jn,'#f59e0b'),(jo,'#38bdf8')]:
+   if L(oI)>=3:
+    (x1,y1),(x2,y2),(x3,y3)=(oI[-3],oI[-2],oI[-1])
+    if(y1>y2>y3 or y1<y2<y3)and 0<=x1<ct and 0<=x3<ct:
+     liq_list.append({'tip':'📐 Trendline Liq ($$$)','idx1':int(x1),'idx2':int(x3),'t1':ts_arr[x1],'t2':ts_arr[x3],'p1':F(y1),'p2':F(y3),'renk':rF})
+  if L(jn)>=1 and L(jo)>=1:
+   ij,rR=jn[-2]if L(jn)>=2 else jn[-1];ik,rS=jo[-2]if L(jo)>=2 else jo[-1]
+   for kT in G(M(ij+1,ct-15),ct):
+    rb=df_c.iloc[kT]
+    if F(rb['high'])>rR and F(rb['close'])<rR:
+     sfp_list.append({'tip':'▼ Bear SFP','idx':int(kT),'time':ts_arr[kT],'price':F(rb['high']),'yon':'BEAR'});break
+   for kT in G(M(ik+1,ct-15),ct):
+    rb=df_c.iloc[kT]
+    if F(rb['low'])<rS and F(rb['close'])>rS:
+     sfp_list.append({'tip':'▲ Bull SFP','idx':int(kT),'time':ts_arr[kT],'price':F(rb['low']),'yon':'BULL'});break
+ except X:pass
+ q_idx_tv=kysy_m.get('qml_idx')if'kysy_m'in locals()else None
+ q_t1_tv=ts_arr[int(q_idx_tv)]if q_idx_tv is not None and 0<=int(q_idx_tv)<L(ts_arr)else None
+ q_val_tv=F(kysy_m.get('qml_seviyesi')or 0.0)if'kysy_m'in locals()else 0.0
+ return{'mumlar':mum_list,'zigzag':zz_list,'elenen':elenen_list,'bos':bos_list,'kutular':kutu_list,'arz_talep':arz_talep_list,'imbalance':imbalance_list,'likidite':liq_list,'sfp':sfp_list,'qml':q_val_tv,'qml_t1':q_t1_tv,'qml_idx':int(q_idx_tv)if q_idx_tv is not None else None}
+def tradingview_kopyala_yapistirsiz_html_ac(O,tf_secim='5m',H_ozel=None):
+ from pathlib import Path
+ H=H_ozel or analiz_hafizasi.get(O)or analiz_hafizasi.get(str(O).split(':',1)[-1])or{}
+ J=H.get('sembol',str(O).split(':',1)[-1]);D=H.get('piyasa','spot'if str(O).startswith('SPOT:')else'future')
+ htf_p,mtf_p,ltf_p,mtf_sb=_parite_mtf_periyotlarini_bul(O,J,D,H)
+ if not H or'df_5m'not in H or'df_4h'not in H or H.get('htf_periyot')!=htf_p or H.get('mtf_periyot')!=mtf_p or H.get('ltf_periyot')!=ltf_p:
+  try:H=pine_icin_4h_1h_5m_veri_hazirla(J,D,H,O)
+  except X:pass
+ if tf_secim==htf_p:tf_secim='4h'
+ elif tf_secim==mtf_p:tf_secim='1h'
+ elif tf_secim not in('4h','1h','5m'):tf_secim='5m'
+ raw_sym=J.split(':')[0].replace('/','').upper()
+ tv_sym=raw_sym+('.P'if D=='future'else'')
+ tf_data={}
+ for t_k,df_k,yp_k,kt_k in[('4h','df_4h','yapi_4h','kutular_4h'),('1h','df_1h','yapi_1h','kutular_1h'),('5m','df_5m','yapi_5m','kutular_5m')]:
+  df_t=H.get(df_k,H.get('df_4h_full'if t_k=='4h'else'df_1h_full'if t_k=='1h'else'df_15m_full'))
+  yp_t=H.get(yp_k,H.get('yapi_15m'if t_k=='5m'else yp_k,{}))
+  kt_t=H.get(kt_k,H.get('cizim_kutulari_4h'if t_k=='4h'else'cizim_kutulari_1h'if t_k=='1h'else'cizim_kutulari_15m',[]))
+  tf_data[t_k]=_df_to_tv_json(df_t,yp_t,kt_t)
+  tf_data[t_k]['pine']=pine_script_uret_4h_1h_5m(O,t_k,H)
+  tf_data[t_k]['yon']=yp_t.get('yon','-')
+  tf_data[t_k]['kirilim_tipi']=yp_t.get('kirilim_tipi','-')
+  tf_data[t_k]['fibo_oran']=F(yp_t.get('fibo_oran',0.5)or 0.5)
+  tf_data[t_k]['wyckoff']=yp_t.get('wyckoff_fazi','TREND')
+  tf_data[t_k]['sp']=F(yp_t.get('strong_point')or H.get('strong_point')or 0.0)
+  tf_data[t_k]['wp']=F(yp_t.get('weak_point')or H.get('weak_point')or 0.0)
+  ist_t=yp_t.get('uc_istasyon',H.get('uc_istasyon',{}));fl_t=yp_t.get('fl_dp_meta',H.get('fl_dp_meta',{}));qm_t=yp_t.get('qm_meta',H.get('qm_meta',{}))
+  tf_data[t_k]['magic']=F(fl_t.get('magic_line')or ist_t.get('FL')or 0.0)
+  tf_data[t_k]['fl_turu']=str(fl_t.get('fl_turu','FL'))
+  tf_data[t_k]['dp_turu']=str(fl_t.get('dp_turu','DP'))
+  tf_data[t_k]['itz']=F(ist_t.get('ITZ')or 0.0)
+  tf_data[t_k]['qml']=F(tf_data[t_k].get('qml')or yp_t.get('qml_seviyesi')or qm_t.get('qml_seviyesi')or 0.0)
+  tf_data[t_k]['qm_tipi']=str(qm_t.get('qm_tipi','QML'))
+  tf_data[t_k]['smax']=F(yp_t.get('swing_max')or 0.0)
+  tf_data[t_k]['smin']=F(yp_t.get('swing_min')or 0.0)
+  kysy_t=yp_t.get('kysy_meta',{})
+  tf_data[t_k]['kysy_onay']=bool(kysy_t.get('kysy_onay',True))
+  tf_data[t_k]['elenen_sayi']=int(kysy_t.get('elenen_sayi',0))
+ dR=acik_islemler.get(O)
+ aktif_sinyal_var=bool(I(dR,dict)or H.get('sinyal')in('LONG','SHORT'))
+ giris=F(dR['giris']if I(dR,dict)else(H.get('giris')if aktif_sinyal_var else 0.0))
+ sl=F(dR['sl']if I(dR,dict)else(H.get('sl')if aktif_sinyal_var else 0.0))
+ yon_islem=dR['yon']if I(dR,dict)else(H.get('sinyal')if H.get('sinyal')in('LONG','SHORT')else'BEKLE (Bölge Dışı)')
+ rk=A(giris-sl)if giris>0 and sl>0 else 0.0;mO=-1.0 if yon_islem=='SHORT'else 1.0
+ tp1=F(dR['tp']if I(dR,dict)else(giris+mO*rk*RISK_ODUL_ORANI if rk>0 else 0.0))
+ tp2=F(dR.get('tp_nihai',tp1)if I(dR,dict)else(giris+mO*rk*M(NIHAI_TP_RR,RISK_ODUL_ORANI+1.0)if rk>0 else 0.0))
+ pnl_u,pnl_y=(0.0,0.0)
+ if I(dR,dict):pnl_u,pnl_y,_,_,_,_,_=islem_kar_zarar_hesapla(O,dR)
+ pnl_html=f"{_fmt_pnl(pnl_u)} (%{pnl_y:+.2f})"if I(dR,dict)else"Açık İşlem Yok (Analiz Modu)"
+ pnl_renk="#4ade80"if pnl_u>=0 else"#f87171"
+ kFlt=H.get('konum_meta',{'konum_onay':True,'konum_durumu':'ONAY','karar_senaryosu':'STANDART'})
+ p1,p2,p3,p4=H.get('atli_puanlar',(0,0,0,0));skor=H.get('skor',0);sinyal=H.get('sinyal','BEKLE')
+ bolge_guc=H.get('bolge_10p_skor',0)
+ pine_kodu=tf_data.get(tf_secim,tf_data['5m'])['pine']
+ checklist_html=_karne_checklist_olustur(H,html_mi=True)
+ html_icerik=f"""<!DOCTYPE html>
+<html lang="tr">
+<head>
+<meta charset="utf-8">
+<title>TradingView Canlı PA & Pine v6 Çizim Şablonları — {O} [{tf_secim.upper()}]</title>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<script src="https://s3.tradingview.com/tv.js"></script>
+<style>
+body {{ margin:0; padding:0; background:#0f172a; color:#f8fafc; font-family:'Segoe UI',sans-serif; display:flex; flex-direction:column; height:100vh; overflow:hidden; }}
+.topbar {{ background:#1e293b; padding:6px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #334155; flex-wrap:wrap; gap:6px; z-index:40; }}
+.badge {{ padding:3px 8px; border-radius:6px; font-weight:bold; font-size:11.5px; margin-right:3px; display:inline-block; }}
+.btn {{ background:#10b981; color:#fff; border:none; padding:5px 10px; border-radius:6px; font-weight:bold; cursor:pointer; text-decoration:none; font-size:11.5px; margin-left:3px; transition:0.15s; }}
+.btn:hover {{ opacity:0.92; }}
+.btn.active {{ outline:2px solid #fde047; }}
+.layerbar {{ background:#131722; padding:5px 12px; display:flex; align-items:center; justify-content:space-between; border-bottom:1px solid #2a2e39; flex-wrap:wrap; gap:8px; font-size:11.5px; z-index:35; }}
+.chk-group {{ display:flex; align-items:center; flex-wrap:wrap; gap:8px; }}
+.chk-lbl {{ cursor:pointer; user-select:none; display:inline-flex; align-items:center; gap:4px; background:#1e222d; border:1px solid #334155; padding:3px 8px; border-radius:5px; color:#e2e8f0; font-weight:600; }}
+.chk-lbl:hover {{ border-color:#38bdf8; }}
+.chk-lbl input {{ accent-color:#10b981; width:14px; height:14px; cursor:pointer; margin:0; }}
+.main {{ display:flex; flex:1; overflow:hidden; position:relative; }}
+.tv-left-bar {{ width:38px; background:#131722; border-right:1px solid #2a2e39; display:flex; flex-direction:column; align-items:center; padding-top:8px; gap:8px; z-index:30; user-select:none; }}
+.tv-tool-icon {{ width:28px; height:28px; border-radius:5px; display:flex; align-items:center; justify-content:center; color:#cbd5e1; font-size:13px; cursor:pointer; background:#1e222d; border:1px solid #2a2e39; }}
+.tv-tool-icon:hover, .tv-tool-icon.active {{ color:#38bdf8; border-color:#38bdf8; background:#1e293b; }}
+.chart-area {{ flex:7; height:100%; display:flex; flex-direction:column; position:relative; background:#131722; overflow:hidden; }}
+.chart-stage {{ flex:1; position:relative; width:100%; overflow:hidden; background:#131722; }}
+#tv_chart {{ width:100%; height:100%; position:absolute; top:0; left:0; z-index:2; }}
+#pine_canvas {{ width:100%; height:100%; position:absolute; top:0; left:0; z-index:6; pointer-events:none; }}
+#rsi_pane {{ height:110px; width:100%; border-top:1px solid #2a2e39; background:#131722; position:relative; display:none; z-index:5; }}
+#rsi_pane.show {{ display:block; }}
+.side {{ flex:3; min-width:320px; max-width:400px; background:#11111b; border-left:1px solid #334155; padding:9px; display:flex; flex-direction:column; overflow-y:auto; z-index:30; }}
+.card {{ background:#181825; border:1px solid #313244; border-radius:8px; padding:8px; margin-bottom:7px; font-size:11.5px; line-height:1.48; }}
+textarea {{ width:100%; flex:1; min-height:175px; background:#090d16; color:#38bdf8; border:1px solid #334155; border-radius:6px; padding:7px; font-family:Consolas,monospace; font-size:10.5px; resize:none; box-sizing:border-box; }}
+</style>
+</head>
+<body>
+<div class="topbar">
+  <div>
+    <span class="badge" style="background:#2563eb;">🌲 ALFA PA — CANLI TRADINGVIEW</span>
+    <span class="badge" style="background:#0d9488;" id="lbl_parite">{O} ({tv_sym}) | {tf_secim.upper()}</span>
+    <span class="badge" style="background:#059669;" id="lbl_anlik_fiyat">⚡ Anlık: Yükleniyor...</span>
+    <span class="badge" style="background:{'#10b981' if sinyal=='LONG' else '#ef4444' if sinyal=='SHORT' else '#f59e0b'};">{sinyal} ({skor}/100)</span>
+    <span class="badge" style="background:#1e1e2e;border:1px solid {pnl_renk};color:{pnl_renk};">💰 K/Z: {pnl_html}</span>
+  </div>
+  <div style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;">
+    <span style="font-size:11.5px;font-weight:bold;color:#a78bfa;">⏱️ MTF Şablon:</span>
+    <select id="sel_mtf_sablon" onchange="mtfSablonDegistirJS(this.value)" style="background:#4c1d95;color:#fff;border:1px solid #7c3aed;border-radius:6px;padding:4px 7px;font-size:11.5px;font-weight:bold;cursor:pointer;">
+      <option value="4h,1h,15m" {'selected' if (htf_p,mtf_p,ltf_p)==('4h','1h','15m') else ''}>4h / 1h / 15m (Swing)</option>
+      <option value="4h,1h,5m" {'selected' if (htf_p,mtf_p,ltf_p)==('4h','1h','5m') else ''}>4h / 1h / 5m (Alfa Pine MTF)</option>
+      <option value="4h,30m,3m" {'selected' if (htf_p,mtf_p,ltf_p)==('4h','30m','3m') else ''}>4h / 30m / 3m (Sniper)</option>
+      <option value="1d,2h,15m" {'selected' if (htf_p,mtf_p,ltf_p)==('1d','2h','15m') else ''}>1d / 2h / 15m (Pozisyon)</option>
+      <option value="1d,1h,5m" {'selected' if (htf_p,mtf_p,ltf_p)==('1d','1h','5m') else ''}>1d / 1h / 5m (Günlük MTF)</option>
+      <option value="1M,2h,15m" {'selected' if (htf_p,mtf_p,ltf_p)==('1M','2h','15m') else ''}>1M / 2h / 15m (Aylık Macro)</option>
+      <option value="1d,4h,1h" {'selected' if (htf_p,mtf_p,ltf_p)==('1d','4h','1h') else ''}>1d / 4h / 1h (Pozisyon)</option>
+      <option value="2h,30m,5m" {'selected' if (htf_p,mtf_p,ltf_p)==('2h','30m','5m') else ''}>2h / 30m / 5m (Gün İçi)</option>
+      <option value="1h,15m,5m" {'selected' if (htf_p,mtf_p,ltf_p)==('1h','15m','5m') else ''}>1h / 15m / 5m (Intraday)</option>
+      <option value="15m,5m,1m" {'selected' if (htf_p,mtf_p,ltf_p)==('15m','5m','1m') else ''}>15m / 5m / 1m (Scalp)</option>
+    </select>
+    <button class="btn" id="btn_4h" style="background:#2563eb;" onclick="periyotDegistir('4h')">🏛️ HTF ({htf_p.upper()})</button>
+    <button class="btn" id="btn_1h" style="background:#7c3aed;" onclick="periyotDegistir('1h')">🧭 MTF ({mtf_p.upper()})</button>
+    <button class="btn" id="btn_5m" style="background:#0d9488;" onclick="periyotDegistir('5m')">🎯 LTF ({ltf_p})</button>
+    <button class="btn" id="btn_mod" style="background:#8b5cf6;" onclick="gorunumDegistir()">🌐 Canlı TV Widget Göster</button>
+    <button class="btn" style="background:#0284c7;" onclick="anlikGrafigeOdaklan()">🎯 Anlık Muma Git</button>
+    <button class="btn" style="background:#eab308;color:#111;" onclick="kopyalaPine()">📋 Kopyala</button>
+  </div>
+</div>
+<div class="layerbar">
+  <div class="chk-group">
+    <span style="color:#38bdf8;font-weight:bold;">🎨 Çizim Şablonları (İsteğe Göre Ekle):</span>
+    <label class="chk-lbl"><input type="checkbox" id="chk_zz" onchange="katmanlariSimdiGuncelle()">Swing / BOS & QML</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_arztalep" onchange="katmanlariSimdiGuncelle()">Arz / Talep Bölgeleri</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_kutu" onchange="katmanlariSimdiGuncelle()">Imbalance & FVG</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_ist" onchange="katmanlariSimdiGuncelle()">İstasyonlar / Magic Line</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_fibo" onchange="katmanlariSimdiGuncelle()">Sihirli Fibo / OTE</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_liq" onchange="katmanlariSimdiGuncelle()">Likidite / SFP</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_rr" onchange="katmanlariSimdiGuncelle()">İşlem & R:R</label>
+    <label class="chk-lbl"><input type="checkbox" id="chk_rsi" onchange="rsiPanelToggle()">RSI(14)</label>
+  </div>
+  <div style="font-size:11px;color:#94a3b8;" id="durum_cubugu">🟢 Canlı Binance Akışı Aktif</div>
+</div>
+<div class="main">
+  <div class="tv-left-bar" id="tv_left_bar">
+    <div class="tv-tool-icon active" title="Artı İşareti (Crosshair)">✜</div>
+    <div class="tv-tool-icon" id="ico_zz" title="Swing / BOS" onclick="katmanToggle('zz')">📐</div>
+    <div class="tv-tool-icon" id="ico_arztalep" title="Arz / Talep Bölgeleri (OB / RBR / DBD / Flip)" onclick="katmanToggle('arztalep')">🧱</div>
+    <div class="tv-tool-icon" id="ico_kutu" title="Imbalance & FVG (BISI / SIBI / IFVG / VIB)" onclick="katmanToggle('kutu')">▭</div>
+    <div class="tv-tool-icon" id="ico_ist" title="İstasyonlar / Magic Line" onclick="katmanToggle('ist')">🏛</div>
+    <div class="tv-tool-icon" id="ico_fibo" title="Sihirli Fibo / OTE" onclick="katmanToggle('fibo')">☰</div>
+    <div class="tv-tool-icon" id="ico_liq" title="Likidite / SFP" onclick="katmanToggle('liq')">💧</div>
+    <div class="tv-tool-icon" id="ico_rr" title="İşlem & R:R" onclick="katmanToggle('rr')">🎯</div>
+  </div>
+  <div class="chart-area">
+    <div class="chart-stage" id="chart_stage">
+      <div id="tv_chart"></div>
+      <canvas id="pine_canvas"></canvas>
+    </div>
+    <div id="rsi_pane"></div>
+  </div>
+  <div class="side">
+    <div class="card">
+      <div style="color:#38bdf8;font-weight:bold;font-size:13px;margin-bottom:4px;" id="karne_baslik">📊 {O} [{tf_secim.upper()}] — Strateji & Seviye Karnesi</div>
+      <div style="background:#11111b;padding:5px 8px;border-radius:6px;margin-bottom:5px;border-left:3px solid {pnl_renk};">
+        <b>💰 Anlık İşlem Kâr/Zarar:</b> <span style="color:{pnl_renk};font-weight:bold;font-size:12.5px;">{pnl_html}</span>
+      </div>
+      {checklist_html}
+      <div id="kysy_satir">• <b>Kırılım Yoksa Swing Yoktur:</b> ONAYLI</div>
+      <div>• <b>HTF Safe Bölge Durumu:</b> {kFlt.get('konum_durumu','ONAY')}</div>
+      <div>• <b>Safe Derecesi & Senaryo:</b> {kFlt.get('karar_senaryosu','STANDART')}</div>
+      <div id="yon_satir">• <b>{htf_p.upper()} / {mtf_p.upper()} / {ltf_p} Yapı Yönü:</b> {H.get('yon_4h','-')} / {H.get('yon_1h','-')} / {H.get('yon_5m',H.get('yapi_15m',{}).get('yon','-'))}</div>
+      <div>• <b>4 Atlı Puanları:</b> {p1}/25 | {p2}/25 | {p3}/25 | {p4}/25 (Toplam: {skor}/100)</div>
+      <hr style="border-color:#313244;margin:5px 0;">
+      <div>• <b style="color:#38bdf8;">Giriş Fiyatı ({yon_islem}):</b> {_fmt_f(giris)}</div>
+      <div>• <b style="color:#f87171;">Stop-Loss (1R):</b> {_fmt_f(sl)}</div>
+      <div>• <b style="color:#4ade80;">TP1 ({RISK_ODUL_ORANI}R %50+BE):</b> {_fmt_f(tp1)}</div>
+      <div>• <b style="color:#a3e635;">Nihai TP ({NIHAI_TP_RR}R):</b> {_fmt_f(tp2)}</div>
+      <div id="sp_wp_satir">• <b style="color:#eab308;">Strong Origin / Weak Target:</b> -</div>
+      <div id="ist_satir">• <b style="color:#f472b6;">Magic Line (FL) / ITZ / QML:</b> -</div>
+    </div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <span style="font-weight:bold;color:#fde047;font-size:11.5px;" id="pine_baslik">📜 Aktif Pine Script v6 Kodu ({tf_secim.upper()}):</span>
+      <button class="btn" style="background:#0d9488;padding:3px 7px;font-size:10.5px;" onclick="pineKodunuSimdiUygula()">🔄 Kodu Uygula</button>
+    </div>
+    <textarea id="pine_box" oninput="pineKodunuSimdiUygula()">{pine_kodu}</textarea>
+  </div>
+</div>
+<script>
+const TUM_VERI = {json.dumps(tf_data)};
+const RAW_SYM = "{raw_sym}";
+const IS_FUT = {'true' if D=='future' else 'false'};
+const TV_SYM = "{tv_sym}";
+const PARITE_ETIKET = "{O}";
+let GIRIS = {giris:.8f};
+let SL = {sl:.8f};
+let TP1 = {tp1:.8f};
+let TP2 = {tp2:.8f};
+const YON_ISLEM = "{yon_islem}";
+let aktifTf = "{tf_secim}";
+const TF_GERCEK_HARITA = {{ '4h': "{htf_p}", '1h': "{mtf_p}", '5m': "{ltf_p}" }};
+let widgetModu = false;
+let aktifMumlar = [];
+let parseEdilenPine = {{ kutular: [], sp: 0, wp: 0, magic: 0, itz: 0, qml: 0, smax: 0, smin: 0, giris: GIRIS, sl: SL, tp1: TP1, tp2: TP2 }};
+let wsBaglanti = null;
+let fiyatTimer = null;
+
+const stageEl = document.getElementById('chart_stage');
+const container = document.getElementById('tv_chart');
+const pineCanvas = document.getElementById('pine_canvas');
+const rsiContainer = document.getElementById('rsi_pane');
+
+const chart = LightweightCharts.createChart(container, {{
+  layout: {{ background: {{ type: 'solid', color: '#131722' }}, textColor: '#d1d4dc' }},
+  grid: {{ vertLines: {{ color: 'rgba(30,34,45,0.85)' }}, horzLines: {{ color: 'rgba(30,34,45,0.85)' }} }},
+  crosshair: {{ mode: LightweightCharts.CrosshairMode.Normal }},
+  rightPriceScale: {{ borderColor: '#2a2e39', autoScale: true, scaleMargins: {{ top: 0.08, bottom: 0.10 }} }},
+  timeScale: {{ borderColor: '#2a2e39', timeVisible: true, secondsVisible: false, rightOffset: 10, barSpacing: 5.5 }}
+}});
+
+const rsiChart = LightweightCharts.createChart(rsiContainer, {{
+  layout: {{ background: {{ type: 'solid', color: '#131722' }}, textColor: '#94a3b8' }},
+  grid: {{ vertLines: {{ color: '#1e222d' }}, horzLines: {{ color: '#1e222d' }} }},
+  rightPriceScale: {{ borderColor: '#2a2e39' }},
+  timeScale: {{ borderColor: '#2a2e39', timeVisible: true, visible: false }}
+}});
+const rsiSeries = rsiChart.addLineSeries({{ color: '#a78bfa', lineWidth: 2, title: 'RSI(14)' }});
+rsiSeries.createPriceLine({{ price: 70, color: '#f87171', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false, title: '' }});
+rsiSeries.createPriceLine({{ price: 50, color: '#64748b', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, axisLabelVisible: false, title: '' }});
+rsiSeries.createPriceLine({{ price: 30, color: '#4ade80', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dotted, axisLabelVisible: false, title: '' }});
+
+let candleSeries = null;
+let zzSeries = null;
+let bosSerileri = [];
+let aktifPriceLines = [];
+
+function fiyatFormatla(v) {{
+  const n = Number(v || 0);
+  const a = Math.abs(n);
+  if (a > 0 && a < 1) return n.toFixed(6);
+  if (a < 100) return n.toFixed(4);
+  return n.toFixed(2);
+}}
+
+function pineKodunuParseEt(pineText, fallbackVeri) {{
+  const sonuc = {{
+    kutular: [],
+    sp: fallbackVeri.sp || 0,
+    wp: fallbackVeri.wp || 0,
+    magic: fallbackVeri.magic || 0,
+    itz: fallbackVeri.itz || 0,
+    qml: fallbackVeri.qml || 0,
+    smax: fallbackVeri.smax || 0,
+    smin: fallbackVeri.smin || 0,
+    giris: GIRIS,
+    sl: SL,
+    tp1: TP1,
+    tp2: TP2
+  }};
+  if (fallbackVeri.kutular && fallbackVeri.kutular.length > 0) {{
+    fallbackVeri.kutular.forEach(k => {{
+      sonuc.kutular.push({{
+        tip: k.tip,
+        idx1: typeof k.idx1 === 'number' ? k.idx1 : null,
+        t1: k.t1 || null,
+        solOffset: 32,
+        sagOffset: 8,
+        hi: k.hi,
+        lo: k.lo
+      }});
+    }});
+  }}
+  if (!pineText) return sonuc;
+  const flt = (rx, defVal) => {{
+    const m = pineText.match(rx);
+    return m ? parseFloat(m[1]) : defVal;
+  }};
+  sonuc.sp = flt(/var\s+float\s+bot_sp\s*=\s*([0-9.]+)/, sonuc.sp);
+  sonuc.wp = flt(/var\s+float\s+bot_wp\s*=\s*([0-9.]+)/, sonuc.wp);
+  sonuc.magic = flt(/var\s+float\s+bot_magic\s*=\s*([0-9.]+)/, sonuc.magic);
+  sonuc.itz = flt(/var\s+float\s+bot_itz\s*=\s*([0-9.]+)/, sonuc.itz);
+  sonuc.qml = flt(/var\s+float\s+bot_qml\s*=\s*([0-9.]+)/, sonuc.qml);
+  sonuc.smax = flt(/var\s+float\s+bot_smax\s*=\s*([0-9.]+)/, sonuc.smax);
+  sonuc.smin = flt(/var\s+float\s+bot_smin\s*=\s*([0-9.]+)/, sonuc.smin);
+  sonuc.giris = flt(/var\s+float\s+bot_giris\s*=\s*([0-9.]+)/, sonuc.giris);
+  sonuc.sl = flt(/var\s+float\s+bot_sl\s*=\s*([0-9.]+)/, sonuc.sl);
+  sonuc.tp1 = flt(/var\s+float\s+bot_tp1\s*=\s*([0-9.]+)/, sonuc.tp1);
+  sonuc.tp2 = flt(/var\s+float\s+bot_tp2\s*=\s*([0-9.]+)/, sonuc.tp2);
+  return sonuc;
+}}
+
+function arzTalepStilCoz(z) {{
+  const tur = String(z.tur || 'TALEP');
+  const alt = String(z.alt_tur || '');
+  if (tur === 'TALEP') {{
+    if (alt.includes('FLIP')) return ['rgba(20,184,166,0.16)', '#14b8a6', z.etiket || 'Flip Talep'];
+    if (z.taze) return ['rgba(16,185,129,0.18)', '#10b981', z.etiket || 'Talep OB (Taze)'];
+    return ['rgba(59,130,246,0.15)', '#3b82f6', z.etiket || 'Talep Bölgesi'];
+  }} else {{
+    if (alt.includes('FLIP')) return ['rgba(244,63,94,0.16)', '#f43f5e', z.etiket || 'Flip Arz'];
+    if (z.taze) return ['rgba(239,68,68,0.18)', '#ef4444', z.etiket || 'Arz OB (Taze)'];
+    return ['rgba(249,115,22,0.15)', '#f97316', z.etiket || 'Arz Bölgesi'];
+  }}
+}}
+
+function imbalanceStilCoz(im) {{
+  const t = String(im.tip || 'FVG');
+  if (t.includes('BISI')) return ['rgba(245,158,11,0.17)', '#f59e0b', im.etiket || 'BISI FVG'];
+  if (t.includes('SIBI')) return ['rgba(168,85,247,0.17)', '#a855f7', im.etiket || 'SIBI FVG'];
+  if (t.includes('IFVG')) return ['rgba(20,184,166,0.17)', '#14b8a6', im.etiket || 'IFVG Flip'];
+  if (t.includes('VIB')) return ['rgba(250,204,21,0.18)', '#eab308', im.etiket || 'VIB/Gap'];
+  return ['rgba(6,182,212,0.15)', '#06b6d4', im.etiket || 'Imbalance'];
+}}
+
+function fiyatCizgileriniTemizle() {{
+  if (!candleSeries) return;
+  aktifPriceLines.forEach(pl => {{
+    try {{ candleSeries.removePriceLine(pl); }} catch (e) {{}}
+  }});
+  aktifPriceLines = [];
+}}
+
+function seriKatmanlariniGuncelle() {{
+  if (!candleSeries) return;
+  const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
+  const isHTF = (aktifTf === '4h');
+  const gosterZz  = document.getElementById('chk_zz').checked;
+  const gosterIst = document.getElementById('chk_ist').checked;
+  const gosterFibo = document.getElementById('chk_fibo').checked;
+  const gosterRr  = document.getElementById('chk_rr').checked;
+  const gosterLiq = document.getElementById('chk_liq').checked;
+
+  ['zz','arztalep','kutu','ist','fibo','liq','rr'].forEach(k => {{
+    const ic = document.getElementById('ico_' + k);
+    const ch = document.getElementById('chk_' + k);
+    if (ic && ch) ic.classList.toggle('active', ch.checked);
+  }});
+
+  if (zzSeries) {{ try {{ chart.removeSeries(zzSeries); }} catch(e){{}} zzSeries = null; }}
+  bosSerileri.forEach(s => {{ try {{ chart.removeSeries(s); }} catch(e){{}} }});
+  bosSerileri = [];
+
+  const markers = [];
+  if (gosterZz && veri.zigzag && veri.zigzag.length > 1) {{
+    zzSeries = chart.addLineSeries({{ color: '#cbd5e1', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }});
+    zzSeries.setData(veri.zigzag.map(z => ({{ time: z.time, value: z.value }})));
+    veri.zigzag.forEach(z => {{
+      const renkM = z.lbl === 'HH' ? '#4ade80' : z.lbl === 'LH' ? '#fb7185' : z.lbl === 'HL' ? '#38bdf8' : '#f97316';
+      markers.push({{
+        time: z.time,
+        position: z.tip === 'H' ? 'aboveBar' : 'belowBar',
+        color: renkM,
+        shape: z.tip === 'H' ? 'arrowDown' : 'arrowUp',
+        text: z.lbl
+      }});
+    }});
+  }}
+  if (gosterLiq && veri.sfp && veri.sfp.length > 0) {{
+    veri.sfp.forEach(sf => {{
+      markers.push({{
+        time: sf.time,
+        position: sf.yon === 'BULL' ? 'belowBar' : 'aboveBar',
+        color: sf.yon === 'BULL' ? '#10b981' : '#f43f5e',
+        shape: sf.yon === 'BULL' ? 'arrowUp' : 'arrowDown',
+        text: sf.yon === 'BULL' ? 'SFP▲' : 'SFP▼'
+      }});
+    }});
+  }}
+  markers.sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(markers);
+
+  if (gosterZz && veri.bos && veri.bos.length > 0) {{
+    veri.bos.forEach(b => {{
+      if (b.t1 < b.t2) {{
+        const bs = chart.addLineSeries({{
+          color: b.yon === 'BULLISH' ? '#22c55e' : '#f43f5e',
+          lineWidth: 1.5,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false
+        }});
+        bs.setData([{{ time: b.t1, value: b.price }}, {{ time: b.t2, value: b.price }}]);
+        bosSerileri.push(bs);
+      }}
+    }});
+  }}
+
+  fiyatCizgileriniTemizle();
+  function seviyeEkle(fiyat, baslik, renk, stil, kalinlik=1) {{
+    if (fiyat && fiyat > 0) {{
+      const pl = candleSeries.createPriceLine({{ price: fiyat, color: renk, lineWidth: kalinlik, lineStyle: stil, axisLabelVisible: true, title: baslik }});
+      aktifPriceLines.push(pl);
+    }}
+  }}
+  if (gosterRr) {{
+    seviyeEkle(parseEdilenPine.giris, 'Giriş', '#38bdf8', LightweightCharts.LineStyle.Dashed, 2);
+    seviyeEkle(parseEdilenPine.sl, 'SL(1R)', '#ef4444', LightweightCharts.LineStyle.Solid, 2);
+    seviyeEkle(parseEdilenPine.tp1, 'TP1(3R)', '#10b981', LightweightCharts.LineStyle.Solid, 2);
+    seviyeEkle(parseEdilenPine.tp2, 'TP2(4R)', '#a3e635', LightweightCharts.LineStyle.Dotted, 1);
+  }}
+  if (gosterIst) {{
+    seviyeEkle(parseEdilenPine.sp, 'Origin', '#eab308', LightweightCharts.LineStyle.Dashed, 1);
+    seviyeEkle(parseEdilenPine.wp, 'Weak', '#94a3b8', LightweightCharts.LineStyle.Dotted, 1);
+    seviyeEkle(parseEdilenPine.magic, 'Magic/FL', '#ec4899', LightweightCharts.LineStyle.Dashed, 1);
+    seviyeEkle(parseEdilenPine.itz, 'ITZ', '#06b6d4', LightweightCharts.LineStyle.Dotted, 1);
+  }}
+  if (gosterZz || gosterIst) {{
+    const qmlPl = (veri.qml && veri.qml > 0) ? veri.qml : (parseEdilenPine.qml || 0);
+    seviyeEkle(qmlPl, 'QML', '#c084fc', LightweightCharts.LineStyle.Dashed, 1);
+  }}
+  if (gosterFibo && parseEdilenPine.smax > parseEdilenPine.smin && parseEdilenPine.smin > 0) {{
+    const eq = (parseEdilenPine.smax + parseEdilenPine.smin) / 2.0;
+    seviyeEkle(eq, '0.50 EQ', '#64748b', LightweightCharts.LineStyle.Dashed, 1);
+  }}
+}}
+
+function cizPineGostergeKatmani() {{
+  if (!pineCanvas || !candleSeries || aktifMumlar.length < 3) return;
+  const rect = stageEl.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  pineCanvas.width = Math.floor(rect.width * dpr);
+  pineCanvas.height = Math.floor(rect.height * dpr);
+  const ctx = pineCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  const isHTF = (aktifTf === '4h');
+  const gosterArzTalep = document.getElementById('chk_arztalep') ? document.getElementById('chk_arztalep').checked : false;
+  const gosterKutu = document.getElementById('chk_kutu').checked;
+  const gosterFibo = document.getElementById('chk_fibo').checked;
+  const gosterIst  = document.getElementById('chk_ist').checked;
+  const gosterRr   = document.getElementById('chk_rr').checked;
+  const gosterZz   = document.getElementById('chk_zz').checked;
+  const gosterLiq  = document.getElementById('chk_liq').checked;
+
+  const sonIdx = aktifMumlar.length - 1;
+  const tSon = chart.timeScale().timeToCoordinate(aktifMumlar[sonIdx].time);
+  const tOnceki = chart.timeScale().timeToCoordinate(aktifMumlar[Math.max(0, sonIdx - 10)].time);
+  const barGenislik = (tSon !== null && tOnceki !== null && sonIdx >= 10) ? Math.max(3.5, (tSon - tOnceki) / 10.0) : 6.5;
+
+  function timeOrIdxToX(tVal, idxVal) {{
+    if (tVal) {{
+      const xt = chart.timeScale().timeToCoordinate(tVal);
+      if (xt !== null) return xt;
+    }}
+    if (typeof idxVal === 'number' && idxVal >= 0 && idxVal <= sonIdx) {{
+      const xi = chart.timeScale().timeToCoordinate(aktifMumlar[idxVal].time);
+      if (xi !== null) return xi;
+    }}
+    const rel = (typeof idxVal === 'number') ? (idxVal - sonIdx) : -25;
+    if (tSon !== null) return tSon + rel * barGenislik;
+    return rect.width - 110 + rel * barGenislik;
+  }}
+
+  function barIndexToX(relOffset) {{
+    return timeOrIdxToX(null, sonIdx + relOffset);
+  }}
+
+  function gelismisKutuCiz(x1, x2, fUst, fAlt, bgRenk, kenarRenk, kisaEtiket, metinRenk='#ffffff', solDikCizgi=true, ortaCizgiFiyat=null, kesikliKenar=false) {{
+    if (!fUst || !fAlt || fUst <= 0 || fAlt <= 0) return;
+    const y1 = candleSeries.priceToCoordinate(Math.max(fUst, fAlt));
+    const y2 = candleSeries.priceToCoordinate(Math.min(fUst, fAlt));
+    if (y1 === null || y2 === null) return;
+    const left = Math.max(4, Math.min(x1, x2));
+    const right = Math.min(rect.width - 70, Math.max(x1, x2));
+    if (right <= left + 4) return;
+    const top = Math.min(y1, y2);
+    const h = Math.max(4, Math.abs(y2 - y1));
+    ctx.save();
+    ctx.fillStyle = bgRenk;
+    ctx.fillRect(left, top, right - left, h);
+    ctx.strokeStyle = kenarRenk;
+    ctx.lineWidth = 1.15;
+    if (kesikliKenar) ctx.setLineDash([4, 3]);
+    ctx.strokeRect(left, top, right - left, h);
+    ctx.setLineDash([]);
+    if (solDikCizgi) {{
+      ctx.beginPath();
+      ctx.moveTo(left, top);
+      ctx.lineTo(left, top + h);
+      ctx.lineWidth = 3.0;
+      ctx.strokeStyle = kenarRenk;
+      ctx.stroke();
+    }}
+    if (ortaCizgiFiyat && ortaCizgiFiyat > 0 && h >= 10) {{
+      const yOrta = candleSeries.priceToCoordinate(ortaCizgiFiyat);
+      if (yOrta !== null && yOrta > top + 2 && yOrta < top + h - 2) {{
+        ctx.beginPath();
+        ctx.setLineDash([3, 3]);
+        ctx.moveTo(left + 2, yOrta);
+        ctx.lineTo(right - 2, yOrta);
+        ctx.lineWidth = 0.9;
+        ctx.strokeStyle = kenarRenk;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }}
+    }}
+    if (kisaEtiket) {{
+      ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+      ctx.fillStyle = metinRenk;
+      ctx.textAlign = 'right';
+      ctx.fillText(kisaEtiket, right - 5, top + Math.min(11, h - 2));
+    }}
+    ctx.restore();
+  }}
+
+  const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
+
+  // 1. Sihirli Fibo / Ters Yönde OTE Bölgesi (-0.236, 0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1) & 4H QML Çizgisi
+  if (gosterFibo && parseEdilenPine.smax > parseEdilenPine.smin && parseEdilenPine.smin > 0) {{
+    const i4 = parseEdilenPine.smax;
+    const i5 = parseEdilenPine.smin;
+    const dK = i4 - i5;
+    const lA = (veri.yon || 'BULLISH') !== 'BEARISH';
+    const xFiboBas = veri.fibo_t1 ? timeOrIdxToX(veri.fibo_t1, null) : barIndexToX(-140);
+    const xFiboBit = barIndexToX(8);
+    const fibSeviyeler = [
+      {{ r: -0.236, c: '#cbd5e1', lbl: '-0.236' }},
+      {{ r: 0.0,    c: '#22c55e', lbl: '0' }},
+      {{ r: 0.236,  c: '#ef4444', lbl: '0.236' }},
+      {{ r: 0.382,  c: '#3b82f6', lbl: '0.382' }},
+      {{ r: 0.5,    c: '#06b6d4', lbl: '0.5' }},
+      {{ r: 0.618,  c: '#10b981', lbl: '0.618' }},
+      {{ r: 0.705,  c: '#4ade80', lbl: '0.705' }},
+      {{ r: 0.786,  c: '#60a5fa', lbl: '0.786' }},
+      {{ r: 1.0,    c: '#f43f5e', lbl: '1' }}
+    ];
+    fibSeviyeler.forEach(fb => {{
+      const fVal = lA ? (i4 - dK * fb.r) : (i5 + dK * fb.r);
+      const yF = candleSeries.priceToCoordinate(fVal);
+      if (yF !== null && yF > 4 && yF < rect.height - 4) {{
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(Math.max(4, xFiboBas), yF);
+        ctx.lineTo(Math.min(rect.width - 72, xFiboBit), yF);
+        ctx.strokeStyle = fb.c;
+        ctx.lineWidth = (fb.r === 0 || fb.r === 1) ? 1.5 : 1.05;
+        ctx.stroke();
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        ctx.fillStyle = fb.c;
+        ctx.textAlign = 'left';
+        ctx.fillText(`${{fb.lbl}} (${{fiyatFormatla(fVal)}})`, Math.min(rect.width - 145, xFiboBit - 65), yF - 3);
+        ctx.restore();
+      }}
+    }});
+    const ote1 = lA ? i4 - dK * 0.618 : i5 + dK * 0.618;
+    const ote705 = lA ? i4 - dK * 0.705 : i5 + dK * 0.705;
+    const ote2 = lA ? i4 - dK * 0.786 : i5 + dK * 0.786;
+    const oteBg = lA ? 'rgba(244,63,94,0.16)' : 'rgba(59,130,246,0.16)';
+    const oteBrd = lA ? '#fb7185' : '#60a5fa';
+    const oteLbl = lA ? 'Bullish OTE (0.618-0.786)' : 'Bearish OTE (0.618-0.786)';
+    gelismisKutuCiz(Math.max(xFiboBas + 30, barIndexToX(-95)), xFiboBit, ote1, ote2, oteBg, oteBrd, oteLbl, '#3b82f6', false, ote705, false);
+  }}
+  const aktifQmlFiyat = (veri.qml && veri.qml > 0) ? veri.qml : (parseEdilenPine.qml || 0);
+  if (isHTF && (gosterZz || gosterIst || gosterFibo) && aktifQmlFiyat > 0) {{
+    const yQml = candleSeries.priceToCoordinate(aktifQmlFiyat);
+    const xQmlBas = (veri.qml_t1 || typeof veri.qml_idx === 'number') ? timeOrIdxToX(veri.qml_t1, veri.qml_idx) : barIndexToX(-160);
+    const xQmlBit = barIndexToX(8);
+    if (yQml !== null && yQml >= 2 && yQml <= rect.height - 2) {{
+      const x1Q = Math.max(6, Math.min(rect.width - 120, xQmlBas));
+      const x2Q = Math.min(rect.width - 70, Math.max(x1Q + 30, xQmlBit));
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x1Q, yQml);
+      ctx.lineTo(x2Q, yQml);
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x1Q, yQml, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#fde047';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#ef4444';
+      ctx.stroke();
+      ctx.font = 'bold 11px Segoe UI, sans-serif';
+      ctx.fillStyle = '#fde047';
+      ctx.textAlign = 'left';
+      ctx.fillText('QML', x1Q + 7, Math.max(13, yQml - 6));
+      ctx.fillStyle = '#38bdf8';
+      ctx.textAlign = 'right';
+      ctx.fillText(`QML (${{fiyatFormatla(aktifQmlFiyat)}})`, x2Q - 4, Math.max(13, yQml - 6));
+      ctx.restore();
+    }}
+  }}
+
+  // 2. YENİ ARZ / TALEP BÖLGELERİ ÇİZİM ŞABLONU (Talep OB / Valid RBR-DBR / Arz OB / Valid RBD-DBD / Flip Breaker + %50 EQ)
+  if (gosterArzTalep && veri.arz_talep && veri.arz_talep.length > 0) {{
+    veri.arz_talep.forEach(z => {{
+      const [bg, brd, et] = arzTalepStilCoz(z);
+      const xStart = timeOrIdxToX(z.t1, z.idx1);
+      const xEnd = barIndexToX(7);
+      const eqFiyat = z.eq || ((z.lo + z.hi) / 2.0);
+      gelismisKutuCiz(xStart, xEnd, z.hi, z.lo, bg, brd, et, brd, true, eqFiyat, !z.taze);
+    }});
+  }}
+
+  // 3. GÜNCELLENMİŞ IMBALANCE & FVG ÇİZİM ŞABLONU (BISI FVG, SIBI FVG, Kısmi FVG, IFVG Flip, VIB/Gap + %50 CE)
+  if (gosterKutu && veri.imbalance && veri.imbalance.length > 0) {{
+    veri.imbalance.forEach(im => {{
+      const [bg, brd, et] = imbalanceStilCoz(im);
+      const xStart = timeOrIdxToX(im.t1, im.idx1);
+      const xEnd = barIndexToX(6);
+      const ceFiyat = im.ce || ((im.lo + im.hi) / 2.0);
+      gelismisKutuCiz(xStart, xEnd, im.hi, im.lo, bg, brd, et, brd, true, ceFiyat, im.tip === 'IFVG' || !im.taze);
+    }});
+  }}
+
+  // 4. Likidite & SFP Çizgileri (EQH / EQL / Trendline Liq)
+  if (gosterLiq && veri.likidite && veri.likidite.length > 0) {{
+    veri.likidite.forEach(lq => {{
+      const x1 = timeOrIdxToX(lq.t1, lq.idx1);
+      const x2 = timeOrIdxToX(lq.t2, lq.idx2);
+      const y1 = candleSeries.priceToCoordinate(lq.p1);
+      const y2 = candleSeries.priceToCoordinate(lq.p2);
+      if (x1 !== null && x2 !== null && y1 !== null && y2 !== null) {{
+        ctx.save();
+        ctx.beginPath();
+        ctx.setLineDash([4, 3]);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = lq.renk || '#fbbf24';
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        ctx.fillStyle = lq.renk || '#fbbf24';
+        ctx.fillText(lq.tip.replace(' (BSL)','').replace(' (SSL)','').replace(' ($$$)',''), (x1 + x2) / 2 - 18, (y1 + y2) / 2 - 4);
+        ctx.restore();
+      }}
+    }});
+  }}
+
+  // 5. İşlem & R:R Kutuları (Giriş - SL - TP1: MTF Geçişlerinde Sabit Fiyat Eksenine Kilitli)
+  const rrGiris = GIRIS > 0 ? GIRIS : (parseEdilenPine.giris || 0);
+  const rrSl    = SL > 0 ? SL : (parseEdilenPine.sl || 0);
+  const rrTp1   = TP1 > 0 ? TP1 : (parseEdilenPine.tp1 || 0);
+  if (gosterRr && rrGiris > 0 && rrSl > 0) {{
+    const yG = candleSeries.priceToCoordinate(rrGiris);
+    const yS = candleSeries.priceToCoordinate(rrSl);
+    const yT = rrTp1 > 0 ? candleSeries.priceToCoordinate(rrTp1) : null;
+    const xL = Math.max(8, barIndexToX(-10));
+    const xR = Math.min(rect.width - 70, Math.max(xL + 36, barIndexToX(6)));
+    if (yG !== null && yS !== null && xR > xL + 4) {{
+      ctx.save();
+      const topR = Math.min(yG, yS), hR = Math.max(2, Math.abs(yS - yG));
+      ctx.fillStyle = 'rgba(239,68,68,0.15)';
+      ctx.fillRect(xL, topR, xR - xL, hR);
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(xL, topR, xR - xL, hR);
+      if (hR >= 10) {{
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        ctx.fillStyle = '#fca5a5';
+        ctx.textAlign = 'right';
+        ctx.fillText('1R Risk', xR - 5, yS > yG ? (yS - 4) : (topR + 11));
+      }}
+      if (yT !== null) {{
+        const topT = Math.min(yG, yT), hT = Math.max(2, Math.abs(yT - yG));
+        ctx.fillStyle = 'rgba(16,185,129,0.14)';
+        ctx.fillRect(xL, topT, xR - xL, hT);
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(xL, topT, xR - xL, hT);
+        if (hT >= 10) {{
+          ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+          ctx.fillStyle = '#86efac';
+          ctx.textAlign = 'right';
+          ctx.fillText('Hedef TP1', xR - 5, yT < yG ? (topT + 11) : (yT - 4));
+        }}
+      }}
+      ctx.beginPath();
+      ctx.moveTo(xL, yG);
+      ctx.lineTo(xR, yG);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+      ctx.restore();
+    }}
+  }}
+
+  // 6. BOS / CHoCH Kısa Etiketleri
+  if (gosterZz && veri.bos && veri.bos.length > 0) {{
+    veri.bos.forEach(b => {{
+      const x1 = chart.timeScale().timeToCoordinate(b.t1);
+      const x2 = chart.timeScale().timeToCoordinate(b.t2);
+      const y = candleSeries.priceToCoordinate(b.price);
+      if (x1 !== null && x2 !== null && y !== null) {{
+        const ortaX = (x1 + x2) / 2.0;
+        const renk = b.yon === 'BULLISH' ? '#4ade80' : '#f87171';
+        ctx.save();
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        const lbl = b.tip && b.tip.includes('CHOCH') ? 'CHoCH' : 'BOS';
+        ctx.fillStyle = renk;
+        ctx.textAlign = 'center';
+        ctx.fillText(lbl, ortaX, y - 4);
+        ctx.restore();
+      }}
+    }});
+  }}
+}}
+
+function katmanlariSimdiGuncelle() {{
+  seriKatmanlariniGuncelle();
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+}}
+
+function katmanToggle(tip) {{
+  const map = {{ arztalep: 'chk_arztalep', kutu: 'chk_kutu', zz: 'chk_zz', ist: 'chk_ist', fibo: 'chk_fibo', liq: 'chk_liq', rr: 'chk_rr' }};
+  const el = document.getElementById(map[tip]);
+  if (el) {{
+    el.checked = !el.checked;
+    katmanlariSimdiGuncelle();
+  }}
+}}
+
+function rsiHesapla(mumlar, periyot=14) {{
+  const out = [];
+  if (!mumlar || mumlar.length < periyot + 1) return out;
+  let kazanc = 0, kayip = 0;
+  for (let i = 1; i <= periyot; i++) {{
+    const f = mumlar[i].close - mumlar[i - 1].close;
+    if (f >= 0) kazanc += f; else kayip -= f;
+  }}
+  let ortKazanc = kazanc / periyot;
+  let ortKayip = kayip / periyot;
+  for (let i = periyot; i < mumlar.length; i++) {{
+    if (i > periyot) {{
+      const f = mumlar[i].close - mumlar[i - 1].close;
+      ortKazanc = (ortKazanc * (periyot - 1) + (f > 0 ? f : 0)) / periyot;
+      ortKayip = (ortKayip * (periyot - 1) + (f < 0 ? -f : 0)) / periyot;
+    }}
+    const rs = ortKayip === 0 ? 100 : ortKazanc / ortKayip;
+    const rsi = 100 - (100 / (1 + rs));
+    out.push({{ time: mumlar[i].time, value: rsi }});
+  }}
+  return out;
+}}
+
+function arzTalepVeImbalanceHesaplaJS(mumlar, bosList, E) {{
+  const arzTalep = [], imbalance = [];
+  const ct = mumlar ? mumlar.length : 0;
+  if (ct < 6) return {{ arz_talep: arzTalep, imbalance: imbalance }};
+  const sonKapanis = mumlar[ct - 1].close;
+  const eklenenAt = new Set();
+
+  (bosList || []).forEach(b => {{
+    const oi = Math.max(0, Math.min(ct - 3, b.orig_idx !== undefined ? b.orig_idx : b.idx1));
+    const bi = Math.max(oi + 1, Math.min(ct - 1, b.idx2 !== undefined ? b.idx2 : ct - 1));
+    const revMi = String(b.tip || '').includes('MSB') || String(b.tip || '').includes('CHOCH');
+    if (b.yon === 'BULLISH') {{
+      const lo = Math.min(mumlar[oi].low, mumlar[Math.max(0, oi - 1)].low);
+      let baseUst = mumlar[oi].open;
+      for (let j = Math.max(0, oi - 1); j <= Math.min(ct - 1, oi + 2); j++) {{
+        const mj = mumlar[j];
+        if (mj.close < mj.open) baseUst = Math.max(baseUst, mj.open, (mj.high - lo) <= E * 1.35 ? mj.high : mj.open);
+        else if (mj.close > mj.open && (mj.close - mj.open) >= E * 0.45) {{ baseUst = Math.max(baseUst, mj.open); break; }}
+      }}
+      const hi = Math.max(lo + E * 0.25, Math.min(baseUst, lo + E * 1.35));
+      let kirildi = false, testSayisi = 0, kIdx = null;
+      for (let m = bi + 1; m < ct; m++) {{
+        if (mumlar[m].close < lo - E * 0.05) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].low <= hi && mumlar[m].close >= lo) testSayisi++;
+      }}
+      const key = 'D_' + lo.toFixed(4) + '_' + hi.toFixed(4);
+      if (!kirildi && !eklenenAt.has(key)) {{
+        eklenenAt.add(key);
+        const durum = testSayisi === 0 ? 'Taze' : `${{testSayisi}}x Test`;
+        const kalip = revMi ? 'Talep OB (DBR)' : 'Valid Talep (RBR)';
+        arzTalep.push({{ tur: 'TALEP', alt_tur: revMi ? 'REVERSAL_OB' : 'VALID_DEMAND', idx1: oi, t1: mumlar[oi].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: testSayisi === 0, test: testSayisi, etiket: `${{kalip}} [${{durum}}]` }});
+      }} else if (kirildi && kIdx !== null && kIdx < ct - 2) {{
+        let halaAltinda = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close > hi + E * 0.1) halaAltinda = false;
+        if (halaAltinda && Math.abs(sonKapanis - hi) <= E * 6.0 && !eklenenAt.has(key)) {{
+          eklenenAt.add(key);
+          arzTalep.push({{ tur: 'ARZ', alt_tur: 'FLIP_ARZ', idx1: kIdx, t1: mumlar[kIdx].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: true, test: 0, etiket: 'Flip Arz (Breaker)' }});
+        }}
+      }}
+    }} else {{
+      const hi = Math.max(mumlar[oi].high, mumlar[Math.max(0, oi - 1)].high);
+      let baseAlt = mumlar[oi].open;
+      for (let j = Math.max(0, oi - 1); j <= Math.min(ct - 1, oi + 2); j++) {{
+        const mj = mumlar[j];
+        if (mj.close > mj.open) baseAlt = Math.min(baseAlt, mj.open, (hi - mj.low) <= E * 1.35 ? mj.low : mj.open);
+        else if (mj.close < mj.open && (mj.open - mj.close) >= E * 0.45) {{ baseAlt = Math.min(baseAlt, mj.open); break; }}
+      }}
+      const lo = Math.min(hi - E * 0.25, Math.max(baseAlt, hi - E * 1.35));
+      let kirildi = false, testSayisi = 0, kIdx = null;
+      for (let m = bi + 1; m < ct; m++) {{
+        if (mumlar[m].close > hi + E * 0.05) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].high >= lo && mumlar[m].close <= hi) testSayisi++;
+      }}
+      const key = 'S_' + lo.toFixed(4) + '_' + hi.toFixed(4);
+      if (!kirildi && !eklenenAt.has(key)) {{
+        eklenenAt.add(key);
+        const durum = testSayisi === 0 ? 'Taze' : `${{testSayisi}}x Test`;
+        const kalip = revMi ? 'Arz OB (RBD)' : 'Valid Arz (DBD)';
+        arzTalep.push({{ tur: 'ARZ', alt_tur: revMi ? 'REVERSAL_OB' : 'VALID_SUPPLY', idx1: oi, t1: mumlar[oi].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: testSayisi === 0, test: testSayisi, etiket: `${{kalip}} [${{durum}}]` }});
+      }} else if (kirildi && kIdx !== null && kIdx < ct - 2) {{
+        let halaUstunde = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close < lo - E * 0.1) halaUstunde = false;
+        if (halaUstunde && Math.abs(sonKapanis - lo) <= E * 6.0 && !eklenenAt.has(key)) {{
+          eklenenAt.add(key);
+          arzTalep.push({{ tur: 'TALEP', alt_tur: 'FLIP_TALEP', idx1: kIdx, t1: mumlar[kIdx].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: true, test: 0, etiket: 'Flip Talep (Breaker)' }});
+        }}
+      }}
+    }}
+  }});
+
+  const eklenenImb = new Set();
+  for (let i = 1; i < ct - 1; i++) {{
+    const m0 = mumlar[i - 1], m1 = mumlar[i], m2 = mumlar[i + 1];
+    const govde1 = m1.close - m1.open;
+    if (m2.low > m0.high && govde1 >= E * 0.32 && (m2.low - m0.high) >= E * 0.08) {{
+      const altFvg = m0.high, ustFvg = m2.low, gapBoy = ustFvg - altFvg;
+      let kirildi = false, minLow = ustFvg, kIdx = null;
+      for (let m = i + 2; m < ct; m++) {{
+        if (mumlar[m].close < altFvg) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].low < minLow) minLow = mumlar[m].low;
+      }}
+      if (!kirildi) {{
+        const aktifUst = Math.max(altFvg, Math.min(ustFvg, minLow));
+        if ((aktifUst - altFvg) >= gapBoy * 0.22) {{
+          const durum = minLow >= ustFvg ? 'Taze' : 'Kısmi';
+          const key = 'BISI_' + altFvg.toFixed(4) + '_' + aktifUst.toFixed(4);
+          if (!eklenenImb.has(key)) {{
+            eklenenImb.add(key);
+            imbalance.push({{ tip: 'BISI_FVG', yon: 'BULL', idx1: i - 1, t1: m0.time, lo: altFvg, hi: aktifUst, ce: (altFvg + aktifUst) / 2.0, taze: minLow >= ustFvg, etiket: `BISI FVG (${{durum}})` }});
+          }}
+        }}
+      }} else if (kIdx !== null && kIdx >= ct - 45) {{
+        let altinda = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close > ustFvg + E * 0.1) altinda = false;
+        if (altinda && Math.abs(sonKapanis - ustFvg) <= E * 4.5) {{
+          imbalance.push({{ tip: 'IFVG', yon: 'BEAR', idx1: kIdx, t1: mumlar[kIdx].time, lo: altFvg, hi: ustFvg, ce: (altFvg + ustFvg) / 2.0, taze: true, etiket: 'Bear IFVG (Flip)' }});
+        }}
+      }}
+    }} else if (m0.low > m2.high && (-govde1) >= E * 0.32 && (m0.low - m2.high) >= E * 0.08) {{
+      const altFvg = m2.high, ustFvg = m0.low, gapBoy = ustFvg - altFvg;
+      let kirildi = false, maxHigh = altFvg, kIdx = null;
+      for (let m = i + 2; m < ct; m++) {{
+        if (mumlar[m].close > ustFvg) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].high > maxHigh) maxHigh = mumlar[m].high;
+      }}
+      if (!kirildi) {{
+        const aktifAlt = Math.min(ustFvg, Math.max(altFvg, maxHigh));
+        if ((ustFvg - aktifAlt) >= gapBoy * 0.22) {{
+          const durum = maxHigh <= altFvg ? 'Taze' : 'Kısmi';
+          const key = 'SIBI_' + aktifAlt.toFixed(4) + '_' + ustFvg.toFixed(4);
+          if (!eklenenImb.has(key)) {{
+            eklenenImb.add(key);
+            imbalance.push({{ tip: 'SIBI_FVG', yon: 'BEAR', idx1: i - 1, t1: m0.time, lo: aktifAlt, hi: ustFvg, ce: (aktifAlt + ustFvg) / 2.0, taze: maxHigh <= altFvg, etiket: `SIBI FVG (${{durum}})` }});
+          }}
+        }}
+      }} else if (kIdx !== null && kIdx >= ct - 45) {{
+        let ustunde = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close < altFvg - E * 0.1) ustunde = false;
+        if (ustunde && Math.abs(sonKapanis - altFvg) <= E * 4.5) {{
+          imbalance.push({{ tip: 'IFVG', yon: 'BULL', idx1: kIdx, t1: mumlar[kIdx].time, lo: altFvg, hi: ustFvg, ce: (altFvg + ustFvg) / 2.0, taze: true, etiket: 'Bull IFVG (Flip)' }});
+        }}
+      }}
+    }}
+    if (i >= ct - 60 && Math.abs(m1.open - m0.close) >= E * 0.12) {{
+      const vLo = Math.min(m0.close, m1.open), vHi = Math.max(m0.close, m1.open);
+      if (m1.close > m1.open && m1.open > m0.close) {{
+        let doldu = false;
+        for (let m = i + 1; m < ct; m++) if (mumlar[m].low <= vLo) doldu = true;
+        if (!doldu) imbalance.push({{ tip: 'VIB', yon: 'BULL', idx1: i - 1, t1: m0.time, lo: vLo, hi: vHi, ce: (vLo + vHi) / 2.0, taze: true, etiket: 'Bull VIB/Gap' }});
+      }} else if (m1.close < m1.open && m1.open < m0.close) {{
+        let doldu = false;
+        for (let m = i + 1; m < ct; m++) if (mumlar[m].high >= vHi) doldu = true;
+        if (!doldu) imbalance.push({{ tip: 'VIB', yon: 'BEAR', idx1: i - 1, t1: m0.time, lo: vLo, hi: vHi, ce: (vLo + vHi) / 2.0, taze: true, etiket: 'Bear VIB/Gap' }});
+      }}
+    }}
+  }}
+  return {{ arz_talep: arzTalep.slice(-10), imbalance: imbalance.slice(-12) }};
+}}
+
+function kysySwingHesaplaJS(mumlar, n=2, tf='4h') {{
+  const out = {{ zigzag: [], bos: [], arz_talep: [], imbalance: [], yon: 'BULLISH', smax: 0, smin: 0, sp: 0, wp: 0, qml: 0, qml_t1: null, fibo_t1: null, elenen_sayi: 0 }};
+  if (!mumlar || mumlar.length < 10) return out;
+  let atrSum = 0;
+  for (let i = 1; i < mumlar.length; i++) {{
+    atrSum += Math.max(mumlar[i].high - mumlar[i].low, Math.abs(mumlar[i].high - mumlar[i-1].close), Math.abs(mumlar[i].low - mumlar[i-1].close));
+  }}
+  const E = Math.max(atrSum / Math.max(1, mumlar.length - 1), mumlar[mumlar.length - 1].close * 0.001);
+  const ct = mumlar.length;
+  const nPiv = n >= 4 ? 3 : Math.max(1, n);
+  function tepeOnayliMi(i) {{
+    const m = mumlar[i];
+    const gUst = Math.max(m.open, m.close), govde = Math.abs(m.close - m.open), uIgne = m.high - gUst;
+    if (uIgne <= Math.max(govde * 1.8, E * 1.1)) return true;
+    const esik = gUst + uIgne * 0.45;
+    for (let j = Math.max(0, i - 3); j <= Math.min(ct - 1, i + 3); j++) {{
+      if (j !== i && mumlar[j].close >= esik) return true;
+    }}
+    return false;
+  }}
+  function dipOnayliMi(i) {{
+    const m = mumlar[i];
+    const gAlt = Math.min(m.open, m.close), govde = Math.abs(m.close - m.open), aIgne = gAlt - m.low;
+    if (aIgne <= Math.max(govde * 1.8, E * 1.1)) return true;
+    const esik = gAlt - aIgne * 0.45;
+    for (let j = Math.max(0, i - 3); j <= Math.min(ct - 1, i + 3); j++) {{
+      if (j !== i && mumlar[j].close <= esik) return true;
+    }}
+    return false;
+  }}
+  function netSertTepeMi(i) {{
+    if (!tepeOnayliMi(i)) return false;
+    if (n <= 1) return true;
+    const w = Math.max(3, nPiv + 1);
+    const b1 = Math.max(0, i - w), b2 = Math.min(ct - 1, i + w);
+    let minSol = mumlar[i].low, minSag = mumlar[i].low;
+    for (let j = b1; j <= i; j++) if (mumlar[j].low < minSol) minSol = mumlar[j].low;
+    for (let j = i; j <= b2; j++) if (mumlar[j].low < minSag) minSag = mumlar[j].low;
+    const esik = E * (n >= 4 ? 1.55 : 1.1);
+    const sagEsik = i >= ct - 3 ? esik * 0.5 : esik;
+    return (mumlar[i].high - minSol) >= esik && (mumlar[i].high - minSag) >= sagEsik;
+  }}
+  function netSertDipMi(i) {{
+    if (!dipOnayliMi(i)) return false;
+    if (n <= 1) return true;
+    const w = Math.max(3, nPiv + 1);
+    const b1 = Math.max(0, i - w), b2 = Math.min(ct - 1, i + w);
+    let maxSol = mumlar[i].high, maxSag = mumlar[i].high;
+    for (let j = b1; j <= i; j++) if (mumlar[j].high > maxSol) maxSol = mumlar[j].high;
+    for (let j = i; j <= b2; j++) if (mumlar[j].high > maxSag) maxSag = mumlar[j].high;
+    const esik = E * (n >= 4 ? 1.55 : 1.1);
+    const sagEsik = i >= ct - 3 ? esik * 0.5 : esik;
+    return (maxSol - mumlar[i].low) >= esik && (maxSag - mumlar[i].low) >= sagEsik;
+  }}
+  function aralikTepeBul(bas, bit) {{
+    const b1 = Math.max(0, bas), b2 = Math.min(ct - 1, bit);
+    let enI = null, enV = -1e18;
+    for (let j = b1; j <= b2; j++) {{
+      if (tepeOnayliMi(j) && mumlar[j].high > enV) {{ enI = j; enV = mumlar[j].high; }}
+    }}
+    if (enI === null) {{
+      for (let j = b1; j <= b2; j++) {{
+        const bj = Math.max(mumlar[j].open, mumlar[j].close);
+        if (bj > enV) {{ enI = j; enV = mumlar[j].high; }}
+      }}
+    }}
+    return [enI !== null ? enI : b1, enI !== null ? enV : mumlar[b1].high];
+  }}
+  function aralikDipBul(bas, bit) {{
+    const b1 = Math.max(0, bas), b2 = Math.min(ct - 1, bit);
+    let enI = null, enV = 1e18;
+    for (let j = b1; j <= b2; j++) {{
+      if (dipOnayliMi(j) && mumlar[j].low < enV) {{ enI = j; enV = mumlar[j].low; }}
+    }}
+    if (enI === null) {{
+      for (let j = b1; j <= b2; j++) {{
+        const bj = Math.min(mumlar[j].open, mumlar[j].close);
+        if (bj < enV) {{ enI = j; enV = mumlar[j].low; }}
+      }}
+    }}
+    return [enI !== null ? enI : b1, enI !== null ? enV : mumlar[b1].low];
+  }}
+
+  const rH = [], rL = [], rHMap = new Set(), rLMap = new Set();
+  for (let i = nPiv; i < ct - nPiv; i++) {{
+    let isH = true, isL = true;
+    for (let j = i - nPiv; j <= i + nPiv; j++) {{
+      if (mumlar[j].high > mumlar[i].high) isH = false;
+      if (mumlar[j].low < mumlar[i].low) isL = false;
+    }}
+    if (isH && netSertTepeMi(i)) {{ rH.push([i, mumlar[i].high]); rHMap.add(i); }}
+    if (isL && netSertDipMi(i)) {{ rL.push([i, mumlar[i].low]); rLMap.add(i); }}
+  }}
+  if (rH.length < 2 || rL.length < 2) {{
+    rH.length = 0; rL.length = 0; rHMap.clear(); rLMap.clear();
+    for (let i = nPiv; i < ct - nPiv; i++) {{
+      let isH = true, isL = true;
+      for (let j = i - nPiv; j <= i + nPiv; j++) {{
+        if (mumlar[j].high > mumlar[i].high) isH = false;
+        if (mumlar[j].low < mumlar[i].low) isL = false;
+      }}
+      if (isH && tepeOnayliMi(i)) {{ rH.push([i, mumlar[i].high]); rHMap.add(i); }}
+      if (isL && dipOnayliMi(i)) {{ rL.push([i, mumlar[i].low]); rLMap.add(i); }}
+    }}
+  }}
+  if (rH.length === 0 || rL.length === 0) return out;
+
+  const minPb = E * (n >= 4 ? 1.85 : 1.3);
+  const minBar = n >= 4 ? 3 : 2;
+  if (rH[0][0] >= minBar) {{
+    const [i0L, v0L] = aralikDipBul(0, rH[0][0] - 1);
+    if ((rH[0][1] - v0L) >= minPb * 0.85 && (rL.length === 0 || i0L < rL[0][0])) rL.unshift([i0L, v0L]);
+  }}
+  if (rL[0][0] >= minBar) {{
+    const [i0H, v0H] = aralikTepeBul(0, rL[0][0] - 1);
+    if ((v0H - rL[0][1]) >= minPb * 0.85 && (rH.length === 0 || i0H < rH[0][0])) rH.unshift([i0H, v0H]);
+  }}
+
+  function sertSalinimOnayliMi(basI, basV, bitI, bitV, anaBacak=0) {{
+    const genlik = Math.abs(bitV - basV);
+    const barFark = Math.max(1, Math.abs(bitI - basI));
+    if (genlik < minPb) return false;
+    if (anaBacak > E * 3.2 && genlik < Math.min(anaBacak * 0.18, E * 2.6)) return false;
+    if (barFark < minBar && genlik < minPb * 1.75) return false;
+    const b1 = Math.max(0, Math.min(basI, bitI)), b2 = Math.min(ct - 1, Math.max(basI, bitI));
+    const dususMu = bitV < basV;
+    let zitSay = 0, maxMum = 0;
+    for (let j = b1 + 1; j <= b2; j++) {{
+      if (dususMu ? (mumlar[j].close < mumlar[j].open) : (mumlar[j].close > mumlar[j].open)) zitSay++;
+      const g = Math.abs(mumlar[j].close - mumlar[j].open);
+      if (g > maxMum) maxMum = g;
+    }}
+    if (n >= 4 && zitSay < 2 && genlik < minPb * 1.55) return false;
+    return maxMum >= E * 0.42 || genlik >= minPb * 1.3;
+  }}
+
+  function qmlYapisiBulJS(uHList, uLList, hedefYon) {{
+    const zz = [];
+    uHList.forEach(([i, v]) => zz.push([i, v, 'H']));
+    uLList.forEach(([i, v]) => zz.push([i, v, 'L']));
+    zz.sort((a, b) => a[0] - b[0]);
+    const temiz = [];
+    zz.forEach(item => {{
+      if (temiz.length === 0 || temiz[temiz.length - 1][2] !== item[2]) temiz.push(item);
+      else {{
+        if (item[2] === 'H' && item[1] >= temiz[temiz.length - 1][1]) temiz[temiz.length - 1] = item;
+        else if (item[2] === 'L' && item[1] <= temiz[temiz.length - 1][1]) temiz[temiz.length - 1] = item;
+      }}
+    }});
+    // QML olması için onaylı ZigZag üzerinde en az 3 salınım (4 onaylı nokta: p0 -> p1 -> p2 -> p3 ve p0 gerçek swing) şarttır!
+    if (temiz.length < 4) return null;
+    let bullQml = null, bearQml = null, bullAny = null, bearAny = null;
+    for (let m = temiz.length - 1; m >= 3; m--) {{
+      const p0 = temiz[m - 3], p1 = temiz[m - 2], p2 = temiz[m - 1], p3 = temiz[m];
+      if (p0[0] <= 0 && m === 3) continue;
+      if (p0[2] === 'L' && p1[2] === 'H' && p2[2] === 'L' && p3[2] === 'H') {{
+        if (p2[1] < p0[1] && p3[1] > p1[1] && p1[1] > p0[1]) {{
+          const cand = {{ qmlIdx: p0[0], qmlVal: p0[1], headIdx: p2[0], headVal: p2[1], bosIdx: p1[0], bosVal: p1[1], hhIdx: p3[0], hhVal: p3[1], yon: 'BULLISH' }};
+          if (!bullAny) bullAny = cand;
+          let bozuldu = false;
+          for (let k = p3[0]; k < ct; k++) if (mumlar[k].low < p2[1]) {{ bozuldu = true; break; }}
+          if (!bullQml && !bozuldu) bullQml = cand;
+        }}
+      }}
+      if (p0[2] === 'H' && p1[2] === 'L' && p2[2] === 'H' && p3[2] === 'L') {{
+        if (p2[1] > p0[1] && p3[1] < p1[1] && p0[1] > p1[1]) {{
+          const cand = {{ qmlIdx: p0[0], qmlVal: p0[1], headIdx: p2[0], headVal: p2[1], bosIdx: p1[0], bosVal: p1[1], hhIdx: p3[0], hhVal: p3[1], yon: 'BEARISH' }};
+          if (!bearAny) bearAny = cand;
+          let bozuldu = false;
+          for (let k = p3[0]; k < ct; k++) if (mumlar[k].high > p2[1]) {{ bozuldu = true; break; }}
+          if (!bearQml && !bozuldu) bearQml = cand;
+        }}
+      }}
+    }}
+    if (bullQml && bearQml) return bullQml.hhIdx >= bearQml.hhIdx ? bullQml : bearQml;
+    if (bullQml || bearQml) return bullQml || bearQml;
+    const bSec = bullAny, brSec = bearAny;
+    if (hedefYon === 'BULLISH') return bSec || brSec;
+    if (hedefYon === 'BEARISH') return brSec || bSec;
+    if (bSec && brSec) return bSec.hhIdx >= brSec.hhIdx ? bSec : brSec;
+    return bSec || brSec;
+  }}
+
+  let hi = rH[0][0], hv = rH[0][1], li = rL[0][0], lv = rL[0][1], tr = 0;
+  let oH = [], oL = [], bL = [], kilitH = false, kilitL = false;
+  const sI = Math.max(1, Math.min(hi, li) + 1);
+  for (let k = sI; k < ct; k++) {{
+    const cl = mumlar[k].close, ch = mumlar[k].high, clw = mumlar[k].low;
+    const tOk = tepeOnayliMi(k), dOk = dipOnayliMi(k);
+    const aktifLeg = Math.abs(hv - lv);
+    if (tr === 0) {{
+      if (k > hi + minBar && cl > hv + E * 0.12 && tOk) {{
+        const [mI, mV] = aralikDipBul(hi + 1, k - 1);
+        if ((hv - mV) >= minPb * 0.85 && (mI - hi) >= minBar) {{
+          const [bI, bV] = hi >= minBar ? aralikDipBul(0, Math.max(0, hi - 1)) : [mI, mV];
+          const yv = tOk ? ch : cl;
+          if (hi >= minBar && bI < hi && (hv - bV) >= minPb * 0.85) {{
+            if (mV >= bV - E * 0.2) {{
+              oL = [[bI, bV], [mI, mV]]; oH = [[hi, hv], [k, yv]];
+              bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: mI, orig_val: mV, price: hv, yon: 'BULLISH', tip: 'BULL_BOS' }});
+            }} else {{
+              const [tI, tV] = bI >= minBar ? aralikTepeBul(0, Math.max(0, bI - 1)) : [hi, hv];
+              if (bI >= minBar && tI < bI && (tV - bV) >= minPb * 0.85 && tV > hv) {{
+                oH = [[tI, tV], [hi, hv], [k, yv]]; oL = [[bI, bV], [mI, mV]];
+                bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: mI, orig_val: mV, price: hv, yon: 'BULLISH', tip: 'BULL_MSB_CHOCH' }});
+              }} else {{
+                oH = [[hi, hv], [k, yv]]; oL = [[mI, mV]];
+              }}
+            }}
+          }} else {{
+            oH = [[hi, hv], [k, yv]]; oL = [[mI, mV]];
+          }}
+          li = mI; lv = mV; hi = k; hv = yv; tr = 1; kilitH = false;
+        }} else if (ch > hv) {{
+          hi = k; hv = ch;
+        }}
+      }} else if (k > li + minBar && cl < lv - E * 0.12 && dOk) {{
+        const [xI, xV] = aralikTepeBul(li + 1, k - 1);
+        if ((xV - lv) >= minPb * 0.85 && (xI - li) >= minBar) {{
+          const [tI, tV] = li >= minBar ? aralikTepeBul(0, Math.max(0, li - 1)) : [xI, xV];
+          const yv = dOk ? clw : cl;
+          if (li >= minBar && tI < li && (tV - lv) >= minPb * 0.85) {{
+            if (xV <= tV + E * 0.2) {{
+              oH = [[tI, tV], [xI, xV]]; oL = [[li, lv], [k, yv]];
+              bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: xI, orig_val: xV, price: lv, yon: 'BEARISH', tip: 'BEAR_BOS' }});
+            }} else {{
+              const [bI, bV] = tI >= minBar ? aralikDipBul(0, Math.max(0, tI - 1)) : [li, lv];
+              if (tI >= minBar && bI < tI && (tV - bV) >= minPb * 0.85 && bV < lv) {{
+                oL = [[bI, bV], [li, lv], [k, yv]]; oH = [[tI, tV], [xI, xV]];
+                bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: xI, orig_val: xV, price: lv, yon: 'BEARISH', tip: 'BEAR_MSB_CHOCH' }});
+              }} else {{
+                oL = [[li, lv], [k, yv]]; oH = [[xI, xV]];
+              }}
+            }}
+          }} else {{
+            oL = [[li, lv], [k, yv]]; oH = [[xI, xV]];
+          }}
+          hi = xI; hv = xV; li = k; lv = yv; tr = -1; kilitL = false;
+        }} else if (clw < lv) {{
+          li = k; lv = clw;
+        }}
+      }} else {{
+        if (rHMap.has(k) && ch > hv && k <= li + nPiv * 4) {{ hi = k; hv = ch; }}
+        if (rLMap.has(k) && clw < lv && k <= hi + nPiv * 4) {{ li = k; lv = clw; }}
+      }}
+    }} else if (tr === 1) {{
+      if (!kilitH) {{
+        if (ch >= hv) {{
+          hi = k; hv = ch;
+          if (oH.length > 0) oH[oH.length - 1] = [hi, hv];
+        }} else if ((rLMap.has(k - nPiv) && (k - nPiv) >= hi + minBar && sertSalinimOnayliMi(hi, hv, k - nPiv, mumlar[k - nPiv].low, aktifLeg)) || (k >= hi + minBar && sertSalinimOnayliMi(hi, hv, k, clw, aktifLeg))) {{
+          kilitH = true;
+        }}
+      }}
+      if (kilitH && k > hi + minBar && cl > hv + E * 0.10 && tOk) {{
+        const [mI, mV] = aralikDipBul(hi + 1, k - 1);
+        if (sertSalinimOnayliMi(hi, hv, mI, mV, aktifLeg) && (ch - mV) >= minPb && (mI - hi) >= minBar && (k - mI) >= 2) {{
+          if (oL.length === 0 || oL[oL.length - 1][0] !== mI) oL.push([mI, mV]);
+          li = mI; lv = mV;
+          const yv = tOk ? ch : cl;
+          bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: mI, orig_val: mV, price: hv, yon: 'BULLISH', tip: 'BULL_BOS' }});
+          hi = k; hv = yv; oH.push([hi, hv]); kilitH = false;
+        }} else if (ch >= hv) {{
+          hi = k; hv = ch;
+          if (oH.length > 0) oH[oH.length - 1] = [hi, hv];
+          kilitH = false;
+        }}
+      }} else if (kilitH && ch > hv && !(cl > hv + E * 0.10 && tOk)) {{
+        const [mI, mV] = aralikDipBul(hi + 1, k - 1);
+        if (!(sertSalinimOnayliMi(hi, hv, mI, mV, aktifLeg) && (mI - hi) >= minBar)) {{
+          hi = k; hv = ch;
+          if (oH.length > 0) oH[oH.length - 1] = [hi, hv];
+          kilitH = false;
+        }}
+      }} else if (k > li + minBar && cl < lv - E * 0.12 && dOk) {{
+        const [xI, xV] = k - 1 >= li + 1 ? aralikTepeBul(li + 1, k - 1) : [hi, hv];
+        if (sertSalinimOnayliMi(xI, xV, k, clw)) {{
+          if (!kilitH && oH.length > 0) {{
+            hi = xI; hv = xV; oH[oH.length - 1] = [hi, hv];
+          }}
+          const yv = dOk ? clw : cl;
+          const chochOk = oH.length >= 2 && oL.length >= 2 && (oH[oH.length - 1][1] > oH[oH.length - 2][1] || oL[oL.length - 1][1] > oL[oL.length - 2][1]);
+          bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: hi, orig_val: hv, price: lv, yon: 'BEARISH', tip: chochOk ? 'BEAR_MSB_CHOCH' : 'BEAR_BOS' }});
+          li = k; lv = yv; oL.push([li, lv]); tr = -1; kilitL = false;
+        }}
+      }}
+    }} else if (tr === -1) {{
+      if (!kilitL) {{
+        if (clw <= lv) {{
+          li = k; lv = clw;
+          if (oL.length > 0) oL[oL.length - 1] = [li, lv];
+        }} else if ((rHMap.has(k - nPiv) && (k - nPiv) >= li + minBar && sertSalinimOnayliMi(li, lv, k - nPiv, mumlar[k - nPiv].high, aktifLeg)) || (k >= li + minBar && sertSalinimOnayliMi(li, lv, k, ch, aktifLeg))) {{
+          kilitL = true;
+        }}
+      }}
+      if (kilitL && k > li + minBar && cl < lv - E * 0.10 && dOk) {{
+        const [xI, xV] = aralikTepeBul(li + 1, k - 1);
+        if (sertSalinimOnayliMi(li, lv, xI, xV, aktifLeg) && (xV - clw) >= minPb && (xI - li) >= minBar && (k - xI) >= 2) {{
+          if (oH.length === 0 || oH[oH.length - 1][0] !== xI) oH.push([xI, xV]);
+          hi = xI; hv = xV;
+          const yv = dOk ? clw : cl;
+          bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: xI, orig_val: xV, price: lv, yon: 'BEARISH', tip: 'BEAR_BOS' }});
+          li = k; lv = yv; oL.push([li, lv]); kilitL = false;
+        }} else if (clw <= lv) {{
+          li = k; lv = clw;
+          if (oL.length > 0) oL[oL.length - 1] = [li, lv];
+          kilitL = false;
+        }}
+      }} else if (kilitL && clw < lv && !(cl < lv - E * 0.10 && dOk)) {{
+        const [xI, xV] = aralikTepeBul(li + 1, k - 1);
+        if (!(sertSalinimOnayliMi(li, lv, xI, xV, aktifLeg) && (xI - li) >= minBar)) {{
+          li = k; lv = clw;
+          if (oL.length > 0) oL[oL.length - 1] = [li, lv];
+          kilitL = false;
+        }}
+      }} else if (k > hi + minBar && cl > hv + E * 0.12 && tOk) {{
+        const [mI, mV] = k - 1 >= hi + 1 ? aralikDipBul(hi + 1, k - 1) : [li, lv];
+        if (sertSalinimOnayliMi(mI, mV, k, ch)) {{
+          if (!kilitL && oL.length > 0) {{
+            li = mI; lv = mV; oL[oL.length - 1] = [li, lv];
+          }}
+          const yv = dOk ? ch : cl;
+          const chochOk = oH.length >= 2 && oL.length >= 2 && (oL[oL.length - 1][1] < oL[oL.length - 2][1] || oH[oH.length - 1][1] < oH[oH.length - 2][1]);
+          bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: li, orig_val: lv, price: hv, yon: 'BULLISH', tip: chochOk ? 'BULL_MSB_CHOCH' : 'BULL_BOS' }});
+          hi = k; hv = yv; oH.push([hi, hv]); tr = 1; kilitH = false;
+        }}
+      }}
+    }}
+  }}
+
+  // Kırılım Yoksa Swing Yoktur: Onaylı swinglerden piyasa yönü ve QML (en az 3 salınım) hesabı
+  out.bos = bL;
+  out.elenen_sayi = Math.max(0, (rH.length + rL.length) - (oH.length + oL.length));
+  if (oH.length > 0 && oL.length > 0) {{
+    const [lastHI, lastHV] = oH[oH.length - 1];
+    const [prevHI, prevHV] = oH.length >= 2 ? oH[oH.length - 2] : [lastHI, lastHV];
+    const [lastLI, lastLV] = oL[oL.length - 1];
+    const [prevLI, prevLV] = oL.length >= 2 ? oL[oL.length - 2] : [lastLI, lastLV];
+    const sonClose = mumlar[ct - 1].close;
+    let yonBelirle = bL.length > 0 ? bL[bL.length - 1].yon : ((lastHI > lastLI && lastHV >= prevHV) ? 'BULLISH' : 'BEARISH');
+    if (yonBelirle === 'BULLISH' && sonClose < lastLV && lastHV < prevHV) yonBelirle = 'BEARISH';
+    else if (yonBelirle === 'BEARISH' && sonClose > lastHV && lastLV > prevLV) yonBelirle = 'BULLISH';
+    out.yon = yonBelirle;
+    out.smax = Math.max(lastHV, prevHV);
+    out.smin = Math.min(lastLV, prevLV);
+    const qmFound = qmlYapisiBulJS(oH, oL, out.yon);
+    out.qml = qmFound ? qmFound.qmlVal : 0;
+    out.qml_t1 = qmFound ? mumlar[qmFound.qmlIdx].time : null;
+    out.qml_idx = qmFound ? qmFound.qmlIdx : null;
+    if (out.yon === 'BULLISH') {{
+      out.sp = lastLV;
+      out.wp = lastHV;
+      out.fibo_t1 = mumlar[lastLI].time;
+    }} else {{
+      out.sp = lastHV;
+      out.wp = lastLV;
+      out.fibo_t1 = mumlar[lastHI].time;
+    }}
+  }}
+
+  const rawZz = [];
+  oH.forEach(([i, v]) => rawZz.push([i, v, 'H']));
+  oL.forEach(([i, v]) => rawZz.push([i, v, 'L']));
+  rawZz.sort((a, b) => a[0] - b[0]);
+  const darZz = [];
+  rawZz.forEach(item => {{
+    if (darZz.length === 0 || darZz[darZz.length - 1][2] !== item[2]) darZz.push(item);
+    else {{
+      if (item[2] === 'H' && item[1] >= darZz[darZz.length - 1][1]) darZz[darZz.length - 1] = item;
+      else if (item[2] === 'L' && item[1] <= darZz[darZz.length - 1][1]) darZz[darZz.length - 1] = item;
+    }}
+  }});
+  let prevH = null, prevL = null;
+  darZz.forEach(([i, v, tip], idxZ) => {{
+    if (i >= 0 && i < mumlar.length) {{
+      let lbl = '';
+      if (tip === 'H') {{ lbl = (prevH === null || v >= prevH) ? 'HH' : 'LH'; prevH = v; }}
+      else {{
+        if (prevL === null) lbl = (idxZ > 0 && darZz[idxZ - 1][2] === 'H') ? 'LL' : 'HL';
+        else lbl = (v >= prevL) ? 'HL' : 'LL';
+        prevL = v;
+      }}
+      out.zigzag.push({{ time: mumlar[i].time, idx: i, value: v, tip: tip, lbl: lbl }});
+    }}
+  }});
+  const tumBosForAt = (out.bos || []).concat(bL.slice(-10));
+  const sablonlar = arzTalepVeImbalanceHesaplaJS(mumlar, tumBosForAt, E);
+  if (out.qml > 0 && out.smin > 0 && out.yon === 'BULLISH' && out.qml > out.smin && (out.qml - out.smin) <= E * 3.0) {{
+    if (sablonlar.arz_talep.length > 0 && sablonlar.arz_talep[0].tur === 'TALEP') {{
+      sablonlar.arz_talep[0].lo = out.smin;
+      sablonlar.arz_talep[0].hi = out.qml;
+      sablonlar.arz_talep[0].eq = (out.smin + out.qml) / 2.0;
+      sablonlar.arz_talep[0].etiket = 'Fresh Talep Noktası (QML+OB)';
+    }}
+  }}
+  out.arz_talep = sablonlar.arz_talep;
+  out.imbalance = sablonlar.imbalance;
+  return out;
+}}
+async function binanceMumCek(tf) {{
+  const gercekTf = (typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[tf]) ? TF_GERCEK_HARITA[tf] : tf;
+  const urls = IS_FUT
+    ? [`https://fapi.binance.com/fapi/v1/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`, `https://api.binance.com/api/v3/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`]
+    : [`https://api.binance.com/api/v3/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`, `https://fapi.binance.com/fapi/v1/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`];
+  for (const url of urls) {{
+    try {{
+      const r = await fetch(url);
+      const d = await r.json();
+      if (Array.isArray(d) && d.length > 5) {{
+        return d.map((k, idx) => ({{
+          time: Math.floor(Number(k[0]) / 1000),
+          idx: idx,
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4]),
+          volume: parseFloat(k[5] || 0)
+        }}));
+      }}
+    }} catch (e) {{}}
+  }}
+  return [];
+}}
+
+async function anlikFiyatPolling() {{
+  const urls = IS_FUT
+    ? [`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${{RAW_SYM}}`, `https://api.binance.com/api/v3/ticker/price?symbol=${{RAW_SYM}}`]
+    : [`https://api.binance.com/api/v3/ticker/price?symbol=${{RAW_SYM}}`, `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${{RAW_SYM}}`];
+  for (const u of urls) {{
+    try {{
+      const r = await fetch(u);
+      const j = await r.json();
+      const p = parseFloat(j.price || 0);
+      if (p > 0 && candleSeries && aktifMumlar.length > 0) {{
+        const son = Object.assign({{}}, aktifMumlar[aktifMumlar.length - 1]);
+        son.close = p;
+        if (p > son.high) son.high = p;
+        if (p < son.low) son.low = p;
+        aktifMumlar[aktifMumlar.length - 1] = son;
+        candleSeries.update(son);
+        const lbl = document.getElementById('lbl_anlik_fiyat');
+        if (lbl) lbl.innerText = `⚡ Anlık: ${{fiyatFormatla(p)}}`;
+        requestAnimationFrame(() => cizPineGostergeKatmani());
+        break;
+      }}
+    }} catch (e) {{}}
+  }}
+}}
+
+function canliWebSocketBaslat(tf) {{
+  if (wsBaglanti) {{
+    try {{ wsBaglanti.close(); }} catch (e) {{}}
+    wsBaglanti = null;
+  }}
+  if (fiyatTimer) clearInterval(fiyatTimer);
+  fiyatTimer = setInterval(anlikFiyatPolling, 1500);
+  try {{
+    const gercekWsTf = (typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[tf]) ? TF_GERCEK_HARITA[tf] : tf;
+    const wsUrl = IS_FUT
+      ? `wss://fstream.binance.com/ws/${{RAW_SYM.toLowerCase()}}@kline_${{gercekWsTf}}`
+      : `wss://stream.binance.com:9443/ws/${{RAW_SYM.toLowerCase()}}@kline_${{gercekWsTf}}`;
+    wsBaglanti = new WebSocket(wsUrl);
+    wsBaglanti.onmessage = (ev) => {{
+      try {{
+        const msg = JSON.parse(ev.data);
+        if (msg && msg.k && candleSeries) {{
+          const k = msg.k;
+          const yeniMum = {{
+            time: Math.floor(Number(k.t) / 1000),
+            idx: Math.max(0, aktifMumlar.length - 1),
+            open: parseFloat(k.o),
+            high: parseFloat(k.h),
+            low: parseFloat(k.l),
+            close: parseFloat(k.c)
+          }};
+          candleSeries.update(yeniMum);
+          if (aktifMumlar.length > 0 && aktifMumlar[aktifMumlar.length - 1].time === yeniMum.time) {{
+            aktifMumlar[aktifMumlar.length - 1] = yeniMum;
+          }} else if (aktifMumlar.length === 0 || yeniMum.time > aktifMumlar[aktifMumlar.length - 1].time) {{
+            yeniMum.idx = aktifMumlar.length;
+            aktifMumlar.push(yeniMum);
+          }}
+          const lbl = document.getElementById('lbl_anlik_fiyat');
+          if (lbl) lbl.innerText = `⚡ Anlık: ${{fiyatFormatla(yeniMum.close)}}`;
+          requestAnimationFrame(() => cizPineGostergeKatmani());
+        }}
+      }} catch (err) {{}}
+    }};
+  }} catch (e) {{}}
+}}
+
+function anlikGrafigeOdaklan() {{
+  chart.timeScale().scrollToRealTime();
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+}}
+
+function pineKodunuSimdiUygula() {{
+  const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
+  const pineText = document.getElementById('pine_box').value;
+  parseEdilenPine = pineKodunuParseEt(pineText, veri);
+  katmanlariSimdiGuncelle();
+}}
+
+async function periyotDegistir(tf) {{
+  aktifTf = tf;
+  ['4h','1h','5m'].forEach(k => {{
+    const b = document.getElementById('btn_' + k);
+    if (b) b.classList.toggle('active', k === tf);
+  }});
+  const veri = TUM_VERI[tf] || TUM_VERI['5m'];
+  const gTfAd = ((typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[tf]) ? TF_GERCEK_HARITA[tf] : tf).toUpperCase();
+  const aktSblStr = `${{(TF_GERCEK_HARITA['4h'] || '4h').toUpperCase()}}/${{(TF_GERCEK_HARITA['1h'] || '1h').toUpperCase()}}/${{TF_GERCEK_HARITA['5m'] || '5m'}}`;
+  document.getElementById('lbl_parite').innerText = `{O} (${{TV_SYM}}) | ${{gTfAd}} (Şablon: ${{aktSblStr}})`;
+  document.getElementById('karne_baslik').innerText = `📊 {O} [${{gTfAd}}] — Strateji & Seviye Karnesi`;
+  document.getElementById('pine_baslik').innerText = `📜 Aktif Pine Script v6 Kodu (${{gTfAd}}):`;
+  document.getElementById('pine_box').value = veri.pine || '';
+  document.getElementById('kysy_satir').innerHTML = `• <b>Kırılım Yoksa Swing Yoktur:</b> ${{veri.kysy_onay ? '<span style="color:#4ade80">ONAYLI</span>' : '<span style="color:#f59e0b">KIRILIM YOK</span>'}} (Elenen Gürültü: ${{veri.elenen_sayi}})`;
+  document.getElementById('sp_wp_satir').innerHTML = `• <b style="color:#eab308;">Strong Origin / Weak Target:</b> ${{veri.sp ? veri.sp.toFixed(4) : '-'}} / ${{veri.wp ? veri.wp.toFixed(4) : '-'}}`;
+  document.getElementById('ist_satir').innerHTML = `• <b style="color:#f472b6;">Magic Line (FL) / ITZ / QML:</b> ${{veri.magic ? veri.magic.toFixed(4) : '-'}} / ${{veri.itz ? veri.itz.toFixed(4) : '-'}} / ${{veri.qml ? veri.qml.toFixed(4) : '-'}}`;
+
+  parseEdilenPine = pineKodunuParseEt(veri.pine || '', veri);
+
+  if (candleSeries) {{ try {{ chart.removeSeries(candleSeries); }} catch(e){{}} }}
+  candleSeries = chart.addCandlestickSeries({{
+    upColor: '#22c55e', downColor: '#ef4444', borderVisible: false, wickUpColor: '#4ade80', wickDownColor: '#f87171'
+  }});
+
+  if (veri.mumlar && veri.mumlar.length > 0) {{
+    aktifMumlar = veri.mumlar.slice();
+    const ilkKysy = kysySwingHesaplaJS(aktifMumlar, tf === '5m' ? 2 : 5, tf);
+    veri.zigzag = ilkKysy.zigzag;
+    veri.bos = ilkKysy.bos;
+    veri.arz_talep = ilkKysy.arz_talep;
+    veri.imbalance = ilkKysy.imbalance;
+    if (ilkKysy.qml > 0) {{ veri.qml = ilkKysy.qml; parseEdilenPine.qml = ilkKysy.qml; veri.qml_t1 = ilkKysy.qml_t1; veri.qml_idx = ilkKysy.qml_idx; }} else if (veri.qml > 0) {{ parseEdilenPine.qml = veri.qml; }}
+    if (ilkKysy.smax > ilkKysy.smin && ilkKysy.smin > 0) {{
+      veri.yon = ilkKysy.yon; veri.smax = ilkKysy.smax; veri.smin = ilkKysy.smin;
+      veri.sp = ilkKysy.sp; veri.wp = ilkKysy.wp;
+      veri.fibo_t1 = ilkKysy.fibo_t1;
+      parseEdilenPine.smax = ilkKysy.smax; parseEdilenPine.smin = ilkKysy.smin;
+      parseEdilenPine.sp = ilkKysy.sp; parseEdilenPine.wp = ilkKysy.wp;
+    }}
+    candleSeries.setData(aktifMumlar);
+    const sonF = aktifMumlar[aktifMumlar.length - 1].close;
+    document.getElementById('lbl_anlik_fiyat').innerText = `⚡ Anlık: ${{fiyatFormatla(sonF)}}`;
+  }}
+
+  seriKatmanlariniGuncelle();
+  chart.timeScale().fitContent();
+  chart.timeScale().scrollToRealTime();
+  setTimeout(boyutlariEsitle, 40);
+
+  const canliMumlar = await binanceMumCek(tf);
+  if (canliMumlar && canliMumlar.length > 5 && aktifTf === tf) {{
+    const birlesikMap = new Map();
+    (veri.mumlar || []).forEach(m => birlesikMap.set(m.time, m));
+    canliMumlar.forEach(m => birlesikMap.set(m.time, m));
+    const sirali = Array.from(birlesikMap.values()).sort((a, b) => a.time - b.time).slice(-350);
+    sirali.forEach((m, i) => {{ m.idx = i; }});
+    aktifMumlar = sirali;
+    const yeniKysy = kysySwingHesaplaJS(aktifMumlar, tf === '5m' ? 2 : 5, tf);
+    veri.zigzag = yeniKysy.zigzag;
+    veri.bos = yeniKysy.bos;
+    veri.arz_talep = yeniKysy.arz_talep;
+    veri.imbalance = yeniKysy.imbalance;
+    veri.elenen = [];
+    if (yeniKysy.qml > 0) {{ veri.qml = yeniKysy.qml; parseEdilenPine.qml = yeniKysy.qml; veri.qml_t1 = yeniKysy.qml_t1; veri.qml_idx = yeniKysy.qml_idx; }} else if (veri.qml > 0) {{ parseEdilenPine.qml = veri.qml; }}
+    if (yeniKysy.smax > yeniKysy.smin && yeniKysy.smin > 0) {{
+      veri.yon = yeniKysy.yon;
+      veri.smax = yeniKysy.smax;
+      veri.smin = yeniKysy.smin;
+      veri.sp = yeniKysy.sp;
+      veri.wp = yeniKysy.wp;
+      veri.fibo_t1 = yeniKysy.fibo_t1;
+      parseEdilenPine.smax = yeniKysy.smax;
+      parseEdilenPine.smin = yeniKysy.smin;
+      parseEdilenPine.sp = yeniKysy.sp;
+      parseEdilenPine.wp = yeniKysy.wp;
+      if (GIRIS > 0) parseEdilenPine.giris = GIRIS;
+      if (SL > 0) parseEdilenPine.sl = SL;
+      if (TP1 > 0) parseEdilenPine.tp1 = TP1;
+      if (TP2 > 0) parseEdilenPine.tp2 = TP2;
+      document.getElementById('sp_wp_satir').innerHTML = `• <b style="color:#eab308;">Strong Origin (HTF Dip/Tepe) / Weak Target:</b> ${{veri.sp ? veri.sp.toFixed(2) : '-'}} / ${{veri.wp ? veri.wp.toFixed(2) : '-'}}`;
+      document.getElementById('ist_satir').innerHTML = `• <b style="color:#f472b6;">Magic Line (FL) / ITZ / 4H QML:</b> ${{veri.magic ? veri.magic.toFixed(2) : '-'}} / ${{veri.itz ? veri.itz.toFixed(2) : '-'}} / ${{veri.qml ? veri.qml.toFixed(2) : '-'}}`;
+    }}
+    candleSeries.setData(aktifMumlar);
+    rsiSeries.setData(rsiHesapla(aktifMumlar, 14));
+    const sonCanli = aktifMumlar[aktifMumlar.length - 1].close;
+    document.getElementById('lbl_anlik_fiyat').innerText = `⚡ Anlık: ${{fiyatFormatla(sonCanli)}}`;
+    seriKatmanlariniGuncelle();
+    chart.timeScale().setVisibleLogicalRange({{ from: Math.max(0, aktifMumlar.length - 180), to: aktifMumlar.length + 8 }});
+    requestAnimationFrame(() => cizPineGostergeKatmani());
+    setTimeout(() => cizPineGostergeKatmani(), 60);
+    setTimeout(() => cizPineGostergeKatmani(), 180);
+  }} else if (aktifMumlar.length > 0) {{
+    rsiSeries.setData(rsiHesapla(aktifMumlar, 14));
+    setTimeout(() => cizPineGostergeKatmani(), 60);
+  }}
+
+  canliWebSocketBaslat(tf);
+  anlikFiyatPolling();
+}}
+
+function mtfSablonDegistirJS(deger) {{
+  if (!deger) return;
+  const parcalar = String(deger).split(',');
+  if (parcalar.length === 3) {{
+    TF_GERCEK_HARITA['4h'] = parcalar[0].trim();
+    TF_GERCEK_HARITA['1h'] = parcalar[1].trim();
+    TF_GERCEK_HARITA['5m'] = parcalar[2].trim();
+    const b4 = document.getElementById('btn_4h');
+    const b1 = document.getElementById('btn_1h');
+    const b5 = document.getElementById('btn_5m');
+    if (b4) b4.innerText = `🏛️ HTF (${{TF_GERCEK_HARITA['4h'].toUpperCase()}})`;
+    if (b1) b1.innerText = `🧭 MTF (${{TF_GERCEK_HARITA['1h'].toUpperCase()}})`;
+    if (b5) b5.innerText = `🎯 LTF (${{TF_GERCEK_HARITA['5m']}})`;
+    periyotDegistir(aktifTf);
+  }}
+}}
+
+function rsiPanelToggle() {{
+  const rp = document.getElementById('rsi_pane');
+  const ch = document.getElementById('chk_rsi');
+  if (ch) rp.classList.toggle('show', ch.checked);
+  else rp.classList.toggle('show');
+  setTimeout(boyutlariEsitle, 30);
+}}
+
+function boyutlariEsitle() {{
+  const r = stageEl.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0) {{
+    chart.applyOptions({{ width: r.width, height: r.height }});
+  }}
+  const rp = document.getElementById('rsi_pane');
+  if (rp && rp.classList.contains('show')) {{
+    const rr = rp.getBoundingClientRect();
+    if (rr.width > 0 && rr.height > 0) {{
+      rsiChart.applyOptions({{ width: rr.width, height: rr.height }});
+    }}
+  }}
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+}}
+
+function gorunumDegistir() {{
+  widgetModu = !widgetModu;
+  const btn = document.getElementById('btn_mod');
+  if (widgetModu) {{
+    btn.innerText = '🌲 Standart Görünüm';
+    btn.classList.add('active');
+    chart.applyOptions({{
+      layout: {{ background: {{ type: 'solid', color: '#0b0e14' }}, textColor: '#e2e8f0' }},
+      grid: {{ vertLines: {{ color: 'rgba(42,46,57,0.65)' }}, horzLines: {{ color: 'rgba(42,46,57,0.65)' }} }}
+    }});
+  }} else {{
+    btn.innerText = '🌐 Canlı TV Widget Göster';
+    btn.classList.remove('active');
+    chart.applyOptions({{
+      layout: {{ background: {{ type: 'solid', color: '#131722' }}, textColor: '#d1d4dc' }},
+      grid: {{ vertLines: {{ color: 'rgba(30,34,45,0.85)' }}, horzLines: {{ color: 'rgba(30,34,45,0.85)' }} }}
+    }});
+  }}
+  boyutlariEsitle();
+  anlikGrafigeOdaklan();
+}}
+
+function kopyalaPine() {{
+  const el = document.getElementById('pine_box');
+  el.select();
+  document.execCommand('copy');
+}}
+
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => {{
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+  const lr = chart.timeScale().getVisibleLogicalRange();
+  if (lr) rsiChart.timeScale().setVisibleLogicalRange(lr);
+}});
+chart.subscribeCrosshairMove(() => requestAnimationFrame(() => cizPineGostergeKatmani()));
+window.addEventListener('resize', boyutlariEsitle);
+periyotDegistir(aktifTf);
+</script>
+</body>
+</html>"""
+ dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(':','_').replace('/','_')}_{tf_secim}.html")
+ with open(dosya_yolu,'w',encoding='utf-8')as f:f.write(html_icerik)
+ try:
+  if os.name=='nt':os.startfile(dosya_yolu)
+  else:webbrowser.open(Path(dosya_yolu).as_uri())
+ except X:
+  try:webbrowser.open(Path(dosya_yolu).as_uri())
+  except X:webbrowser.open('file://'+dosya_yolu)
+ return(dosya_yolu,pine_kodu)
+
+
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+
+GITHUB_REPO_ADRESI = "emrhozbr/bot"
+GITHUB_TOKEN = ""
+BULUT_SENK_AKTIF = True
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+
+def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
+    """botv4.0.2.py (CustomTkinter) dosyasindan masaustu GUI kismini otomatik kesip saf strateji motorunu cikarir."""
+    satirlar = kaynak_kod.splitlines()
+    cikti = []
+    for s in satirlar:
+        st = s.strip()
+        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
+            break
+        if any(yasak in s for yasak in ("import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk", "FigureCanvasTkAgg")):
+            continue
+        # Dosya yollarini koru
+        if "bd='binance_api_config.json'" in s:
+            continue
+        if "_api_yukle();_ig_yukle();_ak_yukle();" in s:
+            continue
+        cikti.append(s)
+    metin = "\n".join(cikti)
+    if "ANDROID_VERI_DIZINI" in globals():
+        metin = metin.replace(
+            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
+            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
+        )
+    return metin
+
+def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
+    """GitHub'daki botv4.0.2.py veya main.py dosyasini cekip masaustu kodunu otomatik mobil stratejiye donusturur ve aninda canliya alir."""
+    global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
+    hdr = {"Accept": "application/vnd.github.v3+json", "User-Agent": "AlfaTradeBot-OTA"}
+    if hedef_token:
+        hdr["Authorization"] = f"token {hedef_token}"
+    kaynak_kod = None
+    kaynak_adi = ""
+    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
+        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
+            kaynak_kod = f.read()
+        kaynak_adi = os.path.basename(yerel_dosya_yolu)
+    else:
+        # Once botv4.0.2.py dosyasini, yoksa main.py dosyasini dene
+        for dosya in ("botv4.0.3.py", "botv4.0.2.py", "main.py"):
+            try:
+                api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya}"
+                r = _HTTP_SES.get(api_url, headers=hdr, timeout=10)
+                if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                    kaynak_kod = _b64.b64decode(r.json()["content"]).decode("utf-8")
+                    kaynak_adi = f"{hedef_repo}/{dosya} (API)"
+                    break
+                raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya}"
+                r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=10)
+                if r2.status_code == 200 and len(r2.text) > 1000:
+                    kaynak_kod = r2.text
+                    kaynak_adi = f"{hedef_repo}/{dosya} (Raw)"
+                    break
+            except Exception:
+                pass
+    if not kaynak_kod or len(kaynak_kod) < 500:
+        return (False, "⚠️ GitHub üzerinden botv4.0.2.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan GitHub Token girin.")
+    try:
+        # Mevcut canli durumu (acik islemler, bakiye, API) yedekle
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU)
+        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
+        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+            f.write(cekirdek_kod)
+        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+        # Canli durumu geri yukle
+        acik_islemler.clear()
+        acik_islemler.update(yedek_acik)
+        globals()["S"] = yedek_s
+        globals()["W"] = yedek_w
+        globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"], globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"] = yedek_api
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        return (True, f"✅ OTA Güncelleme Başarılı! ({kaynak_adi}) -> Masaüstü strateji kodları otomatik dönüştürüldü ve yeniden başlatmaya gerek kalmadan canlıya alındı!")
+    except Exception as ex:
+        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
+
+def _kayitli_ota_varsa_yukle():
+    try:
+        if os.path.exists(_OTA_YEREL_CEKIRDEK):
+            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
+                kod = f.read()
+            if len(kod) > 500:
+                yedek_acik = dict(acik_islemler)
+                yedek_s, yedek_w = F(S), F(W)
+                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+                acik_islemler.update(yedek_acik)
+                globals()["S"], globals()["W"] = yedek_s, yedek_w
+    except Exception:
+        pass
+
+def bulut_durum_gonder(zorla=False):
+    """Acik islemleri, bakiyeyi ve islem gecmisini GitHub uzerindeki senkron_durum.json dosyasina yazar."""
+    global _SON_BULUT_YAZMA_HASH
+    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        return False
+    try:
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        veri = {
+            "guncelleme_ts": time.time(),
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "ANDROID_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "acik_islemler": nQ,
+            "demo_vadeli_bakiye": F(S),
+            "gerceklesen_pnl": F(W),
+            "islem_gecmisi": ah[:150]
+        }
+        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
+        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
+            return True
+        _SON_BULUT_YAZMA_HASH = ozet_str
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+        hdr = {"Authorization": f"token {GITHUB_TOKEN.strip()}", "Accept": "application/vnd.github.v3+json"}
+        mevcut_sha = None
+        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+            mevcut_sha = r_get.json().get("sha")
+        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"Sync: {veri['guncelleyen_cihaz']} ({datetime.now().strftime('%H:%M:%S')})",
+            "content": icerik_b64
+        }
+        if mevcut_sha:
+            payload["sha"] = mevcut_sha
+        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
+        return r_put.status_code in (200, 201)
+    except Exception:
+        return False
+
+def bulut_durum_cek(zorla=False):
+    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder."""
+    global _SON_BULUT_OKUMA_TS, S, W, ah
+    simdi = time.time()
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+        return False
+    _SON_BULUT_OKUMA_TS = simdi
+    degisti = False
+    # 1. GitHub Bulut Senkronizasyonu (Hem Demo/Testnet hem Mainnet icin tum strateji detaylarini esitler)
+    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
+        try:
+            hdr = {"Accept": "application/vnd.github.v3+json"}
+            if GITHUB_TOKEN:
+                hdr["Authorization"] = f"token {GITHUB_TOKEN.strip()}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
+                if I(d, dict):
+                    uzak_acik = d.get("acik_islemler")
+                    if I(uzak_acik, dict):
+                        # Uzak cihazda acilan yeni islemleri ekle veya kapananlari senkronize et
+                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
+                        if mevcut_anahtarlar != uzak_anahtarlar:
+                            acik_islemler.clear()
+                            acik_islemler.update(uzak_acik)
+                            degisti = True
+                        else:
+                            for k_u, v_u in uzak_acik.items():
+                                if I(v_u, dict) and I(acik_islemler.get(k_u), dict):
+                                    if v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                        acik_islemler[k_u].update(v_u)
+                                        degisti = True
+                    if "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01:
+                        S = F(d["demo_vadeli_bakiye"])
+                        degisti = True
+                    if "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01:
+                        W = F(d["gerceklesen_pnl"])
+                        degisti = True
+                    uzak_ig = d.get("islem_gecmisi")
+                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
+                        ah = uzak_ig
+                        degisti = True
+        except Exception:
+            pass
+    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu (API uzerinden acik vadeli islemleri otomatik tanima)
+    if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
+        try:
+            if hasattr(ao, "_signed_req"):
+                acc = ao._signed_req("GET", "/fapi/v2/account")
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            elif hasattr(ao, "fapiPrivateV2GetAccount"):
+                acc = ao.fapiPrivateV2GetAccount()
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            else:
+                positions = []
+            for p in positions:
+                amt = F(p.get("positionAmt") or 0.0)
+                if A(amt) > 0:
+                    raw_sym = str(p.get("symbol", ""))
+                    if raw_sym.endswith("USDT"):
+                        sem = f"{raw_sym[:-4]}/USDT"
+                        O_key = f"FUT:{sem}"
+                        if not I(acik_islemler.get(O_key), dict):
+                            ep = F(p.get("entryPrice") or 0.0)
+                            lev = int(F(p.get("leverage") or KALDIRAC))
+                            yon_p = "LONG" if amt > 0 else "SHORT"
+                            mO = -1.0 if yon_p == "SHORT" else 1.0
+                            sl_p = R(ep * (1.0 - mO * 0.01), 6)
+                            tp_p = R(ep * (1.0 + mO * 0.01 * RISK_ODUL_ORANI), 6)
+                            acik_islemler[O_key] = {
+                                "sembol": sem, "yon": yon_p, "piyasa": "future", "simule": False,
+                                "kaldirac": lev, "giris": ep, "anlik": ep,
+                                "pnl_usdt": F(p.get("unrealizedProfit") or 0.0), "pnl_yuzde": 0.0,
+                                "marjin_usdt": R((A(amt) * ep) / M(lev, 1), 2),
+                                "sl": sl_p, "ilk_sl": sl_p, "tp": tp_p, "tp_nihai": tp_p,
+                                "miktar": A(amt), "risk_usdt": ISLEM_BASI_RISK_USDT,
+                                "kismi_tp_alindi": False, "ozet": "[Diğer Cihazdan / Borsadan Senkronize]"
+                            }
+                            degisti = True
+        except Exception:
+            pass
+    return degisti
+
+
+# ==============================================================================
+# YEREL HTTP GRAFİK SUNUCUSU (ANDROID TARAYICIDA CANLI TV HTML GRAFİĞİ AÇMAK İÇİN)
+# ==============================================================================
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+_YEREL_SUNUCU_PORT = None
+
+def yerel_grafik_sunucusu_baslat():
+    global _YEREL_SUNUCU_PORT
+    if _YEREL_SUNUCU_PORT is not None:
+        return _YEREL_SUNUCU_PORT
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+
+        class SessizHandler(SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=ANDROID_VERI_DIZINI, **kwargs)
+            def log_message(self, format, *args):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", port), SessizHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        _YEREL_SUNUCU_PORT = port
+        return port
+    except Exception:
+        return None
+
+
+# ==============================================================================
+# ÇEKİRDEK BOT MOTORU VE İŞLEM YÖNETİCİSİ (BAĞIMSIZ ARKA PLAN YÖNETİMİ)
+# ==============================================================================
+class AlfaMobileBotEngine:
+    def __init__(self, ui_callback=None):
+        self._kapaniyor = False
+        self._acilis_ts = time.time()
+        self._bot_baslangic_ts = None
+        self._acilis_realize_w = F(W)
+        self._bot_baslangic_w = F(W)
+        self._log_q = []
+        self._durum_metni = "Durum: Beklemede ⏸"
+        self._durum_renk = "#f59e0b"
+        self._senk_calisiyor = False
+        self._tg_son_update_id = 0
+        self.ui_callback = ui_callback
+        _ak_yukle()
+        self._acilis_realize_w = F(W)
+        self._bot_baslangic_w = F(W)
+
+    def log_yaz(self, fs):
+        satir = f"[{datetime.now().strftime('%H:%M:%S')}] {fs}"
+        self._log_q.append(satir)
+        if L(self._log_q) > 350:
+            del self._log_q[:100]
+        if self.ui_callback:
+            try:
+                self.ui_callback("log")
+            except Exception:
+                pass
+
+    def durum_guncelle(self, mM, f8="#4ade80"):
+        self._durum_metni = mM
+        self._durum_renk = f8
+        if self.ui_callback:
+            try:
+                self.ui_callback("durum")
+            except Exception:
+                pass
+
+    def arayuzu_guncelle(self):
+        if self.ui_callback:
+            try:
+                self.ui_callback("all")
+            except Exception:
+                pass
+
+    def oturum_pnl_hesapla(self, kU_ozel=None):
+        if kU_ozel is None:
+            kU_ozel = sum((islem_kar_zarar_hesapla(O, bq)[0] for O, bq in list(acik_islemler.items()) if I(bq, dict)))
+        aktif_ts = self._bot_baslangic_ts if self._bot_baslangic_ts is not None else self._acilis_ts
+        ref_w = self._bot_baslangic_w if self._bot_baslangic_ts is not None else self._acilis_realize_w
+        gecen_sn = int(M(0, time.time() - aktif_ts))
+        saat, kalan = divmod(gecen_sn, 3600)
+        dk, sn = divmod(kalan, 60)
+        sure_str = f"{saat:02d}:{dk:02d}:{sn:02d}"
+        bas_tarih_str = datetime.fromtimestamp(aktif_ts).strftime("%H:%M:%S")
+        oturum_kapanan = F(W) - F(ref_w)
+        oturum_toplam = oturum_kapanan + F(kU_ozel)
+        return (oturum_toplam, oturum_kapanan, F(kU_ozel), sure_str, bas_tarih_str)
+
+    def oturum_sayaci_sifirla(self):
+        self._bot_baslangic_ts = time.time()
+        self._acilis_ts = time.time()
+        self._bot_baslangic_w = F(W)
+        self._acilis_realize_w = F(W)
+        self.arayuzu_guncelle()
+
+    def botu_baslat(self):
+        global bot_calisiyor
+        if not bot_calisiyor:
+            if self._bot_baslangic_ts is None:
+                self._bot_baslangic_ts = time.time()
+                self._bot_baslangic_w = F(W)
+            bot_calisiyor = True
+            i9 = "SPOT+VADELİ" if PIYASA_MODU == "her_ikisi" else PIYASA_MODU.upper()
+            self.durum_guncelle(f"Çalışıyor ({i9}) 🟢", "#4ade80")
+            self.log_yaz(f"🚀 Alfa Trade Club Mobil [{i9} | MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Kaldıraç: {KALDIRAC}x | Min Skor: {MIN_CONFLUENCE_SKORU}] başlatıldı.")
+            threading.Thread(target=self.bot_ana_dongu, daemon=True).start()
+            self.arayuzu_guncelle()
+
+    def botu_durdur(self):
+        global bot_calisiyor
+        bot_calisiyor = False
+        self.durum_guncelle("Durduruldu 🔴", "#f87171")
+        self.log_yaz("⏹ Bot kullanıcı tarafından durduruldu.")
+        self.arayuzu_guncelle()
+
+    def _emir_kapat(self, J, D, bt, Y, e5):
+        if e5:
+            return
+        a9 = emir_ist(D)
+        try:
+            a9.cancel_all_orders(J)
+        except Exception:
+            pass
+        try:
+            if D == "future":
+                if bt == "LONG":
+                    a9.create_market_sell_order(J, Y, {"reduceOnly": True})
+                else:
+                    a9.create_market_buy_order(J, Y, {"reduceOnly": True})
+            else:
+                a9.create_market_sell_order(J, Y)
+        except Exception:
+            pass
+
+    def poz_kapat(self, O, dl="MANUEL KAPATMA", pJ=True):
+        global W, S
+        try:
+            bq = acik_islemler.get(O)
+            if not I(bq, dict):
+                return
+            J, b0, ig = (bq.get("sembol", O.split(":", 1)[-1]), bq.get("piyasa", "future"), bq.get("simule", False))
+            Y, bZ, bt = (bq["miktar"], bq["giris"], bq.get("yon", "LONG"))
+            bM = anlik_fiyat_getir(J, b0)
+            self.log_yaz(f"⏳ {O} ({bt}) pozisyonu market fiyatından kapatılıyor...")
+            self._emir_kapat(J, b0, bt, Y, ig)
+            kz = (bZ - bM if bt == "SHORT" else bM - bZ) * Y
+            W += kz
+            if ig and b0 == "future":
+                S += kz
+            nf = (bZ - bM if bt == "SHORT" else bM - bZ) / M(bZ, 1e-9) * 100 * bq.get("kaldirac", 1)
+            _ig_kaydet(J, b0, bt, bZ, bM, Y, kz, nf, dl, bq.get("ozet", ""))
+            acik_islemler[O] = None
+            _ak_kaydet()
+            self.log_yaz(f"✅ {O} ({bt}) [{dl}] kapatıldı! Net Sonuç: {kz:+.2f} USDT")
+            tg_bildir(f"🖐 <b>{dl} ({O} - {bt})</b>\nSonuç: {kz:+.2f} USDT")
+            if pJ:
+                self.pozisyonlari_senkronize_et()
+            self.arayuzu_guncelle()
+        except Exception as e:
+            self.log_yaz(f"⚠️ {O} kapatılırken hata oluştu: {e}")
+
+    def pozisyonlari_senkronize_et(self):
+        global acik_islemler, V, T, W, S
+        if self._senk_calisiyor:
+            return
+        self._senk_calisiyor = True
+        try:
+            try:
+                bulut_durum_cek(zorla=False)
+            except Exception:
+                pass
+            for O, bq in list(acik_islemler.items()):
+                if not I(bq, dict):
+                    continue
+                J, b0, ig = (bq.get("sembol", O.split(":", 1)[-1]), bq.get("piyasa", "future"), bq.get("simule", False))
+                ja = veri_ist(b0)
+                try:
+                    bM = anlik_fiyat_getir(J, b0)
+                except Exception:
+                    continue
+                if O in a1:
+                    a1[O]["fiyat"] = bM
+                bq["anlik"] = bM
+                gW, nD, bZ, _, fk, k1, _ = islem_kar_zarar_hesapla(O, bq)
+                bt, sl, tp = (bq.get("yon", "LONG"), bq["sl"], bq["tp"])
+                oN, Y, gX = (bq.get("tp_nihai", tp), bq["miktar"], bq.get("kismi_tp_alindi", False))
+                nt = bt == "SHORT"
+                nu = nD
+                nv = bM >= sl if nt else bM <= sl
+                kV = bM <= tp if nt else bM >= tp
+                gM = bM <= (oN if gX else tp) if nt else bM >= (oN if gX else tp)
+                if nv:
+                    self.log_yaz(f"🛑 [STOP-LOSS / BE] {O} ({bt}) stop seviyesine ({sl}) ulaştı, kapatılıyor...")
+                    self._emir_kapat(J, b0, bt, Y, ig)
+                    eB = (bZ - bM if nt else bM - bZ) * Y
+                    W += eB
+                    if ig and b0 == "future":
+                        S += eB
+                    _ig_kaydet(J, b0, bt, bZ, bM, Y, eB, nu, "STOP-LOSS / BE" if bq.get("kismi_tp_alindi") else "STOP-LOSS", bq.get("ozet", ""))
+                    acik_islemler[O] = None
+                    _ak_kaydet()
+                    tg_bildir(f"🛑 <b>POZİSYON KAPANDI (STOP-LOSS / BE)</b>\n📌 <b>Parite:</b> {O} ({bt})\n📉 <b>Sonuç:</b> {eB:+.2f} USDT")
+                    continue
+                if KISMI_KAR_AL_AKTIF and (not gX) and kV:
+                    try:
+                        fe = F(ja.amount_to_precision(J, Y * 0.5))
+                        jA = F(ja.amount_to_precision(J, Y - fe))
+                    except Exception:
+                        fe = R(Y * 0.5, 6)
+                        jA = R(Y - fe, 6)
+                    if fe > 0 and jA > 0:
+                        self.log_yaz(f"🎯 [3R KISMİ KÂR AL] {O} ({bt}) {tp} hedefine ulaştı! %50 ({fe}) kapatılıyor ve SL girişe (BE) çekiliyor...")
+                        self._emir_kapat(J, b0, bt, fe, ig)
+                        try:
+                            rU = F(ja.price_to_precision(J, bZ))
+                        except Exception:
+                            rU = bZ
+                        ip = A(bM - bZ) * fe
+                        W += ip
+                        if ig and b0 == "future":
+                            S += ip
+                        _ig_kaydet(J, b0, bt, bZ, bM, fe, ip, nu, "3R %50 KISMİ KÂR AL", bq.get("ozet", ""))
+                        bq.update({"miktar": jA, "sl": rU, "tp": oN, "risk_usdt": 0.0, "kismi_tp_alindi": True})
+                        _ak_kaydet()
+                        tg_bildir(f"🎯 <b>3R KISMİ TAKE-PROFIT (%50) & BREAK-EVEN!</b>\n📌 <b>Parite:</b> {O} ({bt})\n💰 <b>Realize Kâr:</b> +{ip:.2f} USDT (%{nu:+.2f})\n🛡️ <b>Yeni SL:</b> {rU} (0 Risk) | 🎯 <b>Yeni Hedef:</b> {oN}")
+                        continue
+                if gM:
+                    self.log_yaz(f"🏆 [TAKE-PROFIT] {O} ({bt}) hedefe ulaştı! Pozisyon kapatılıyor...")
+                    self._emir_kapat(J, b0, bt, Y, ig)
+                    ip = A(bM - bZ) * Y
+                    W += ip
+                    if ig and b0 == "future":
+                        S += ip
+                    _ig_kaydet(J, b0, bt, bZ, bM, Y, ip, nu, "NİHAİ TAKE-PROFIT", bq.get("ozet", ""))
+                    acik_islemler[O] = None
+                    _ak_kaydet()
+                    tg_bildir(f"🏆 <b>TAKE-PROFIT ({b0.upper()}) GERÇEKLEŞTİ!</b>\n📌 <b>Parite:</b> {O} ({bt})\n💵 <b>Giriş:</b> {bZ} | 🚀 <b>Çıkış:</b> {bM}\n💰 <b>Net Kâr:</b> +{ip:.2f} USDT (%{nu:+.2f})")
+            V, T = bakiye_getir()
+            _ak_kaydet()
+            self.arayuzu_guncelle()
+        except Exception as e:
+            self.log_yaz(f"⚠️ Senkronizasyon hatası: {e}")
+        finally:
+            self._senk_calisiyor = False
+
+    def isleme_gir(self, J, aU, P, al, mN=0, bG="", K=None, D=None):
+        global acik_islemler, V, T
+        hd = D if D else "spot" if PIYASA_MODU == "spot" else "future"
+        ja, jb = (veri_ist(hd), emir_ist(hd))
+        O = anahtar_yap(J, hd)
+        if acik_islemler.get(O) is not None or aU not in ("LONG", "SHORT") or (hd == "spot" and aU == "SHORT"):
+            return
+        if sum((1 for v in acik_islemler.values() if I(v, dict))) >= a4:
+            return
+        H_kontrol = analiz_hafizasi.get(O) or analiz_hafizasi.get(J) or {}
+        kFlt_kontrol = H_kontrol.get("konum_meta", {})
+        if not kFlt_kontrol.get("htf_zorunlu_bolge_onay", False) or not kFlt_kontrol.get("ltf_herhangi_tetik", False) or kFlt_kontrol.get("saglanan_giris_sart_sayisi", 0) < 1:
+            return
+        try:
+            eO = anlik_fiyat_getir(J, hd)
+            P = eO if eO else P
+        except Exception:
+            pass
+        if (aU == "LONG" and al >= P) or (aU == "SHORT" and al <= P):
+            return
+        Y, fk, kF = dinamik_miktar_hesapla(J, P, al, hd, mN)
+        if not Y or Y <= 0:
+            return
+        mO = -1.0 if aU == "SHORT" else 1.0
+        try:
+            f2 = F(ja.price_to_precision(J, al))
+        except Exception:
+            f2 = R(al, 6)
+        iU_gercek = M(A(P - f2), P * aW)
+        Y, fk, kF = dinamik_miktar_hesapla(J, P, f2, hd, mN)
+        if not Y or Y <= 0:
+            return
+        pK = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
+        try:
+            eo = F(ja.price_to_precision(J, M(1e-06, P + mO * iU_gercek * RISK_ODUL_ORANI)))
+            gb = F(ja.price_to_precision(J, M(1e-06, P + mO * iU_gercek * pK)))
+        except Exception:
+            eo = R(M(1e-06, P + mO * iU_gercek * RISK_ODUL_ORANI), 6)
+            gb = R(M(1e-06, P + mO * iU_gercek * pK), 6)
+        mP = False
+        try:
+            if hd == "future":
+                if TESTNET_AKTIF:
+                    mP = True
+                else:
+                    for fn in [lambda: jb.set_leverage(KALDIRAC, J), lambda: jb.set_margin_mode(MARJIN_TIPI, J)]:
+                        try:
+                            fn()
+                        except Exception:
+                            pass
+                    if aU == "LONG":
+                        jb.create_market_buy_order(J, Y)
+                        try:
+                            jb.create_order(J, "STOP_MARKET", "sell", Y, None, {"stopPrice": f2, "reduceOnly": True})
+                        except Exception:
+                            pass
+                    else:
+                        jb.create_market_sell_order(J, Y)
+                        try:
+                            jb.create_order(J, "STOP_MARKET", "buy", Y, None, {"stopPrice": f2, "reduceOnly": True})
+                        except Exception:
+                            pass
+            else:
+                try:
+                    jb.create_market_buy_order(J, Y)
+                    try:
+                        jb.create_order(J, "STOP_LOSS_LIMIT", "sell", Y, F(ja.price_to_precision(J, f2 * 0.998)), {"stopPrice": f2})
+                    except Exception:
+                        pass
+                except Exception as qG:
+                    if TESTNET_AKTIF:
+                        mP = True
+                    else:
+                        raise qG
+            u_ana = int(kFlt_kontrol.get("htf_bolge_sayisi", kFlt_kontrol.get("saglanan_giris_sart_sayisi", 1)))
+            u_alt = int(kFlt_kontrol.get("htf_safe_puan", 80))
+            k_uyum_kisa = f"Safe:{u_ana}/8 ({u_alt}p)"
+            bG_kural = f"[{k_uyum_kisa}] {bG}" if k_uyum_kisa not in str(bG) else bG
+            acik_islemler[O] = {
+                "sembol": J, "yon": aU, "piyasa": hd, "simule": mP,
+                "kaldirac": KALDIRAC if hd == "future" else 1,
+                "giris": P, "anlik": P, "pnl_usdt": 0.0, "pnl_yuzde": 0.0,
+                "marjin_usdt": R(fk, 2), "sl": f2, "ilk_sl": f2, "tp": eo, "tp_nihai": gb,
+                "miktar": Y, "risk_usdt": kF, "kismi_tp_alindi": False,
+                "ozet": bG_kural, "giris_kurallari": K or [],
+                "uygun_kural_sayisi": u_ana, "uygun_alt_kural_sayisi": u_alt,
+                "kural_uyum_kisa": k_uyum_kisa, "risk_seviyesi": AKTIF_RISK_SEVIYESI,
+                "islem_modu": ISLEM_TARZI_MODU,
+                "htf_periyot": H_kontrol.get("htf_periyot", HTF_PERIYOT),
+                "mtf_periyot": H_kontrol.get("mtf_periyot", MTF_PERIYOT),
+                "ltf_periyot": H_kontrol.get("ltf_periyot", LTF_PERIYOT),
+                "mtf_sablonu": H_kontrol.get("mtf_sablonu", AKTIF_MTF_SABLONU)
+            }
+            _ak_kaydet()
+            V, T = bakiye_getir()
+            self.arayuzu_guncelle()
+            ng = "🟢" if aU == "LONG" else "🔴"
+            rw = f"{KALDIRAC}x Vadeli{(' [Canlı Demo]' if mP else '')}" if hd == "future" else f"Spot{(' [Canlı Demo]' if mP else '')}"
+            rx = kF * RISK_ODUL_ORANI
+            self.log_yaz(f"{ng} YENİ İŞLEM [{rw}]: {O} {aU} | {k_uyum_kisa} | Skor: {mN}/100 | Marjin: {fk:.1f}$ | Risk: -{kF:.2f}$ | Stop: {f2} | Hedef: +{rx:.2f}$")
+            tg_bildir(f"{ng} <b>MAHŞERİN 4 ATLISI İŞLEM AÇILDI ({aU} - {rw})</b>\n📌 <b>Parite:</b> {O} | 🔥 <b>Skor:</b> {mN}/100\n✅ <b>Kural:</b> {k_uyum_kisa}\n🧩 <b>Özet:</b> {bG_kural}\n💵 <b>Giriş:</b> {P} | 🛡️ <b>Stop:</b> {f2} (-{kF:.2f}$)\n🎯 <b>TP1 ({RISK_ODUL_ORANI}R):</b> {eo} (+{rx:.2f}$) | 🚀 <b>Nihai:</b> {gb}")
+        except Exception as e:
+            self.log_yaz(f"⚠️ {O} Emir Hatası: {e}")
+
+    def bot_ana_dongu(self):
+        global aQ, V, T, bE
+        try:
+            pariteleri_yukle(self.log_yaz)
+            V, T = bakiye_getir()
+            if aQ == 0:
+                aQ = T
+            self.log_yaz(f"✅ Borsa bağlantısı hazır. Bakiye: {T:.2f} USDT (Spot: {ay:.2f}$ | Vadeli: {aq:.2f}$) | Taranacak Parite: {L(ab)}")
+        except Exception as e:
+            self.log_yaz(f"⚠️ Borsa bağlantı hatası: {e}")
+        while bot_calisiyor and not self._kapaniyor:
+            try:
+                self.pozisyonlari_senkronize_et()
+                jr = "spot" if PIYASA_MODU == "spot" else "future"
+                for js in ("BTC/USDT", "ETH/USDT"):
+                    if not bot_calisiyor:
+                        break
+                    try:
+                        veri_cek(js, MTF_PERIYOT, 70, jr)
+                        veri_cek(js, LTF_PERIYOT, 70, jr)
+                    except Exception:
+                        pass
+
+                def _tarama_oncelik_anahtari(item):
+                    j_s, b_s = item
+                    o_s = anahtar_yap(j_s, b_s)
+                    h_s = analiz_hafizasi.get(o_s) or analiz_hafizasi.get(j_s)
+                    if not h_s:
+                        return (2, (0, 0, 0, 0), 0, (0, 0, 0, 0), 0, 0)
+                    km_s = h_s.get("konum_meta", {})
+                    onc_say = int(km_s.get("htf_oncelikli_bolge_sayisi", 0))
+                    ikn_say = int(km_s.get("htf_ikincil_bolge_sayisi", 0))
+                    onc_vek = tuple(km_s.get("oncelik_vektor", (0, 0, 0, 0)))
+                    ikn_vek = tuple(km_s.get("ikincil_vektor", (0, 0, 0, 0)))
+                    kademe = 3 if onc_say > 0 else (1 if ikn_say > 0 else 0)
+                    return (kademe, onc_vek, onc_say, ikn_vek, ikn_say, int(h_s.get("skor", 0)))
+
+                qu = sorted(list(ab), key=_tarama_oncelik_anahtari, reverse=True)
+                oncelikli_girilen_sayisi = 0
+                adaylar_1_qml, adaylar_2_ob, adaylar_3_fresh, adaylar_4_ote, ikincil_bolge_adaylari = [], [], [], [], []
+                for bu, (J, b0) in enumerate(qu, start=1):
+                    if not bot_calisiyor:
+                        break
+                    try:
+                        bE = bu
+                        O = anahtar_yap(J, b0)
+                        bS = veri_cek(J, HTF_PERIYOT, 250, b0)
+                        bw = veri_cek(J, MTF_PERIYOT, 250, b0)
+                        aY = veri_cek(J, LTF_PERIYOT, 250, b0)
+                        jB = _f(aY, "close", -1)
+                        H = mahserin_4_atlisi_confluence_analizi(J, bS, bw, aY, b0)
+                        km_tarama = H.get("konum_meta", {})
+                        onc_onay = bool(km_tarama.get("htf_oncelikli_bolge_onay", False) and km_tarama.get("oncelikli_giris_sart_sayisi", 0) >= 1)
+                        ikn_onay = bool(km_tarama.get("htf_ikincil_bolge_onay", False) and km_tarama.get("ikincil_giris_sart_sayisi", 0) >= 1)
+                        onc_vek_t = tuple(km_tarama.get("oncelik_vektor", (0, 0, 0, 0)))
+                        ikn_vek_t = tuple(km_tarama.get("ikincil_vektor", (0, 0, 0, 0)))
+                        if H["sinyal"] in ("LONG", "SHORT") and acik_islemler.get(O) is None:
+                            if onc_onay:
+                                kayit_onc = (onc_vek_t, int(km_tarama.get("htf_bolge_sayisi", 1)), int(H["skor"]), J, b0, O, H)
+                                if km_tarama.get("sart4_htf_qml_giris", False):
+                                    self.isleme_gir(J, H["sinyal"], H["giris"], H["sl"], H["skor"], f"[1.ÖNCELİK #1: QML] {H['ozet']}", H["detayli_kurallar"], b0)
+                                    if I(acik_islemler.get(O), dict):
+                                        oncelikli_girilen_sayisi += 1
+                                    else:
+                                        adaylar_1_qml.append(kayit_onc)
+                                elif km_tarama.get("sart2_htf_ob_giris", False):
+                                    adaylar_2_ob.append(kayit_onc)
+                                elif km_tarama.get("sart1_htf_poi_giris", False):
+                                    adaylar_3_fresh.append(kayit_onc)
+                                elif km_tarama.get("sart3_htf_ote_giris", False):
+                                    adaylar_4_ote.append(kayit_onc)
+                            elif ikn_onay:
+                                ikincil_bolge_adaylari.append((ikn_vek_t, int(km_tarama.get("htf_ikincil_bolge_sayisi", 1)), int(H["skor"]), J, b0, O, H))
+                        a1[O] = {
+                            "fiyat": jB, "4h": H["yon_4h"], "1h": H["yon_1h"], "ana_yon": H["ana_yon"],
+                            "skor": f"{H['skor']}/100",
+                            "ltf": f"AÇIK ({acik_islemler[O]['yon']})" if I(acik_islemler.get(O), dict) else H["sinyal"],
+                            "setup_detay": H["ozet"],
+                            "oncelikli_bolge": int(km_tarama.get("htf_oncelikli_bolge_sayisi", 0)),
+                            "oncelik_vektor": onc_vek_t, "ikincil_vektor": ikn_vek_t,
+                            "safe_sayisi": int(km_tarama.get("htf_bolge_sayisi", 0))
+                        }
+                        if I(acik_islemler.get(O), dict):
+                            acik_islemler[O]["anlik"] = jB
+                        if bu % 4 == 0:
+                            self.durum_guncelle(f"Taranıyor: {bu}/{L(qu)} ({HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT}) 🟢", "#4ade80")
+                            self.arayuzu_guncelle()
+                        if bu % 20 == 0:
+                            self.pozisyonlari_senkronize_et()
+                            try:
+                                gc.collect()
+                            except Exception:
+                                pass
+                        time.sleep(0.08 if ISLEM_TARZI_MODU == "Scalp" else 0.25)
+                    except Exception as e:
+                        self.log_yaz(f"⚠️ {J} ({b0.upper()}) tarama hatası: {e}")
+                        time.sleep(0.35)
+
+                for sira_etiket, aday_grup in [
+                    ("1.ÖNCELİK #1: QML", adaylar_1_qml),
+                    ("2.ÖNCELİK #2: OB", adaylar_2_ob),
+                    ("3.ÖNCELİK #3: Fresh Arz/Talep", adaylar_3_fresh),
+                    ("4.ÖNCELİK #4: OTE", adaylar_4_ote)
+                ]:
+                    if not bot_calisiyor or not aday_grup:
+                        continue
+                    aday_grup.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+                    for _, _, _, J_pr, b0_pr, O_pr, H_pr in aday_grup:
+                        if not bot_calisiyor:
+                            break
+                        if sum((1 for v in acik_islemler.values() if I(v, dict))) >= a4:
+                            break
+                        if acik_islemler.get(O_pr) is None:
+                            self.isleme_gir(J_pr, H_pr["sinyal"], H_pr["giris"], H_pr["sl"], H_pr["skor"], f"[{sira_etiket}] {H_pr['ozet']}", H_pr["detayli_kurallar"], b0_pr)
+                            if I(acik_islemler.get(O_pr), dict):
+                                oncelikli_girilen_sayisi += 1
+
+                if oncelikli_girilen_sayisi == 0 and ikincil_bolge_adaylari and bot_calisiyor:
+                    ikincil_bolge_adaylari.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+                    self.log_yaz(f"🧭 [2. KADEME HTF BÖLGE TARAMASI] {L(ikincil_bolge_adaylari)} parite değerlendiriliyor...")
+                    for _, _, _, J_ik, b0_ik, O_ik, H_ik in ikincil_bolge_adaylari:
+                        if not bot_calisiyor:
+                            break
+                        if sum((1 for v in acik_islemler.values() if I(v, dict))) >= a4:
+                            break
+                        if acik_islemler.get(O_ik) is None:
+                            self.isleme_gir(J_ik, H_ik["sinyal"], H_ik["giris"], H_ik["sl"], H_ik["skor"], f"[2.KADEME HTF: BOS/CHoCH/ITZ/Magic] {H_ik['ozet']}", H_ik["detayli_kurallar"], b0_ik)
+
+                bekle_sn = 3 if ISLEM_TARZI_MODU == "Scalp" else 10
+                self.log_yaz(f"🔄 Tarama ({L(qu)} parite | Mod: {ISLEM_TARZI_MODU}) tamamlandı. {bekle_sn}sn sonra yeniden taranacak...")
+                for _ in G(bekle_sn):
+                    if not bot_calisiyor:
+                        break
+                    time.sleep(1)
+            except BaseException as e:
+                if not bot_calisiyor or self._kapaniyor:
+                    break
+                self.log_yaz(f"🛡️ Döngü hatası izole edildi: {e}")
+                time.sleep(3)
+
+
+# ==============================================================================
+# FLET MOBİL ARAYÜZÜ (ANDROID APK & DOKUNMATİK EKRAN UYUMLU)
+# ==============================================================================
+def main(page: ft.Page):
+    page.title = "Alfa Trade Club — Mahşerin 4 Atlısı (Mobil APK)"
+    page.theme_mode = ft.ThemeMode.DARK
+    page.bgcolor = "#0f172a"
+    page.padding = 0
+    page.spacing = 0
+
+    yerel_port = yerel_grafik_sunucusu_baslat()
+    secili_parite_state = {"anahtar": "FUT:BTC/USDT", "tf": "4h"}
+
+    # --- ÜST ÖZET KARTLARI ---
+    lbl_portfoy = ft.Text("0.00 $", size=15, weight=ft.FontWeight.BOLD, color="#38bdf8")
+    lbl_serbest = ft.Text("Serbest: 0.00 $", size=11, color="#94a3b8")
+    lbl_acik_pnl = ft.Text("+0.00 $ (%0.00)", size=15, weight=ft.FontWeight.BOLD, color="#4ade80")
+    lbl_oturum_pnl = ft.Text("Oturum: +0.00 $ (00:00:00)", size=11, color="#22d3ee")
+    lbl_net_pnl = ft.Text("+0.00 $", size=15, weight=ft.FontWeight.BOLD, color="#fbbf24")
+    lbl_aktif_say = ft.Text(f"Açık: 0 / {a4}", size=11, color="#c084fc")
+    lbl_durum_bar = ft.Text("Durum: Beklemede ⏸", size=12, weight=ft.FontWeight.BOLD, color="#f59e0b")
+
+    def mini_kart(baslik, ana_lbl, alt_lbl, kenar_renk):
+        return ft.Container(
+            content=ft.Column([
+                ft.Text(baslik, size=10, weight=ft.FontWeight.BOLD, color="#94a3b8"),
+                ana_lbl,
+                alt_lbl
+            ], spacing=2, tight=True),
+            bgcolor="#1e293b",
+            border=ft.border.all(1, kenar_renk),
+            border_radius=10,
+            padding=8,
+            expand=True
+        )
+
+    ust_kartlar_row = ft.Row([
+        mini_kart("💰 PORTFÖY", lbl_portfoy, lbl_serbest, "#3b82f6"),
+        mini_kart("📈 AÇIK PNL", lbl_acik_pnl, lbl_oturum_pnl, "#10b981"),
+        mini_kart("🏆 NET K/Z", lbl_net_pnl, lbl_aktif_say, "#f59e0b"),
+    ], spacing=6)
+
+    # --- KONTROL BUTONLARI ---
+    btn_baslat = ft.ElevatedButton(
+        "▶ Başlat",
+        bgcolor="#10b981",
+        color="#ffffff",
+        expand=True,
+        on_click=lambda e: _bot_baslat_tik()
+    )
+    btn_durdur = ft.ElevatedButton(
+        "⏹ Durdur",
+        bgcolor="#ef4444",
+        color="#ffffff",
+        disabled=True,
+        expand=True,
+        on_click=lambda e: _bot_durdur_tik()
+    )
+    def _tek_tus_ota_tik(e):
+        lbl_durum_bar.value = "⏳ OTA Güncelleniyor..."
+        lbl_durum_bar.color = "#fde047"
+        page.update()
+        def _ota_bg():
+            ok, msg = ota_strateji_guncelle(tf_gh_repo.value, tf_gh_tok.value)
+            motor.log_yaz(msg)
+            motor.durum_guncelle("OTA Güncellendi ✅" if ok else "OTA Uyarı ⚠️", "#4ade80" if ok else "#f87171")
+            lbl_ayar_durum.value = msg
+            lbl_ayar_durum.color = "#4ade80" if ok else "#f87171"
+            _ekrani_yenile("force")
+        threading.Thread(target=_ota_bg, daemon=True).start()
+
+    btn_senk = ft.ElevatedButton(
+        "☁️ Eşitle",
+        bgcolor="#3b82f6",
+        color="#ffffff",
+        on_click=lambda e: threading.Thread(target=lambda: (bulut_durum_cek(True), bulut_durum_gonder(True), motor.pozisyonlari_senkronize_et()), daemon=True).start()
+    )
+    btn_ota = ft.ElevatedButton(
+        "⚡ OTA Güncelle",
+        bgcolor="#8b5cf6",
+        color="#ffffff",
+        on_click=_tek_tus_ota_tik
+    )
+
+    ust_panel = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                ft.Text("🚀 ALFA TRADE CLUB (4 ATLI PA)", size=14, weight=ft.FontWeight.BOLD, color="#f8fafc"),
+                lbl_durum_bar
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ust_kartlar_row,
+            ft.Row([btn_baslat, btn_durdur, btn_senk, btn_ota], spacing=5)
+        ], spacing=6),
+        bgcolor="#181825",
+        padding=10,
+        border=ft.border.only(bottom=ft.BorderSide(1, "#334155"))
+    )
+
+    # --- SEKME 1: AÇIK İŞLEMLER LİSTESİ ---
+    lv_acik_islemler = ft.ListView(expand=True, spacing=8, padding=10)
+
+    # --- SEKME 2: BORSA TARAMASI LİSTESİ ---
+    lbl_tarama_info = ft.Text(
+        f"🔍 MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Eşik: {MIN_CONFLUENCE_SKORU}+ Puan | Öncelik: 1.QML > 2.OB > 3.Fresh > 4.OTE",
+        size=11, color="#38bdf8", weight=ft.FontWeight.BOLD
+    )
+    lv_tarama = ft.ListView(expand=True, spacing=6, padding=10)
+
+    # --- SEKME 3: KARNE, PINE v6 & CANLI TV GRAFİK ---
+    dd_karne_parite = ft.Dropdown(
+        label="İncelenecek Parite Seçin",
+        options=[ft.dropdown.Option( f"FUT:{s}") for s in am],
+        value="FUT:BTC/USDT",
+        expand=True,
+        bgcolor="#1e293b",
+        border_color="#3b82f6"
+    )
+    txt_karne_detay = ft.TextField(
+        multiline=True,
+        read_only=True,
+        min_lines=10,
+        max_lines=16,
+        text_size=11,
+        bgcolor="#11111b",
+        color="#4ade80",
+        border_color="#334155"
+    )
+    txt_pine_kod = ft.TextField(
+        multiline=True,
+        read_only=True,
+        min_lines=8,
+        max_lines=14,
+        text_size=10,
+        bgcolor="#090d16",
+        color="#38bdf8",
+        border_color="#334155"
+    )
+    lbl_pine_bildirim = ft.Text("Canlı analiz veya Pine v6 için yukarıdan zaman dilimi seçin.", size=11, color="#fde047")
+
+    def _parite_karne_ve_pine_yukle(tf_secim="4h", canli_zorla=False, tv_ac=False):
+        secili_parite_state["tf"] = tf_secim
+        O = dd_karne_parite.value or secili_parite_state["anahtar"] or "FUT:BTC/USDT"
+        secili_parite_state["anahtar"] = O
+        lbl_pine_bildirim.value = f"⏳ {O} [{tf_secim.upper()}] verileri ve PA kutuları hesaplanıyor..."
+        page.update()
+
+        def _arka_plan():
+            try:
+                H = analiz_hafizasi.get(O) or {}
+                J = H.get("sembol", str(O).split(":", 1)[-1])
+                D = H.get("piyasa", "spot" if str(O).startswith("SPOT:") else "future")
+                if canli_zorla or not H or "df_15m_full" not in H:
+                    H = pine_icin_4h_1h_5m_veri_hazirla(J, D, H, O)
+                    analiz_hafizasi[O] = H
+                karne_metni = _karne_checklist_olustur(H, html_mi=False)
+                p1, p2, p3, p4 = H.get("atli_puanlar", (0, 0, 0, 0))
+                ek_bilgi = (
+                    f"📌 PARİTE: {O} | SİNYAL: {H.get('sinyal', 'BEKLE')} ({H.get('skor', 0)}/100)\n"
+                    f"🏇 4 Atlı: 1.Atlı:{p1}/25 | 2.Atlı:{p2}/25 | 3.Atlı:{p3}/25 | 4.Atlı:{p4}/25\n"
+                    f"🎯 Giriş Modeli: {H.get('giris_modeli', '-')}\n"
+                    f"💵 Giriş: {_fmt_f(H.get('giris', 0))} | 🛡️ Stop: {_fmt_f(H.get('sl', 0))}\n\n"
+                    f"✅ DETAYLI KURALLAR:\n" + "\n".join(f"• {k}" for k in H.get("detayli_kurallar", [])[:18])
+                )
+                txt_karne_detay.value = karne_metni + "\n" + ek_bilgi
+                pine_str = pine_script_uret_4h_1h_5m(O, tf_secim, H)
+                txt_pine_kod.value = pine_str
+                if tv_ac:
+                    dosya_yolu, _ = tradingview_kopyala_yapistirsiz_html_ac(O, tf_secim, H)
+                    dosya_adi = os.path.basename(dosya_yolu)
+                    if yerel_port:
+                        page.launch_url(f"http://127.0.0.1:{yerel_port}/{dosya_adi}")
+                    lbl_pine_bildirim.value = f"🚀 {O} [{tf_secim.upper()}] Canlı TradingView PA Grafiği tarayıcıda açıldı!"
+                else:
+                    lbl_pine_bildirim.value = f"✅ {O} [{tf_secim.upper()}] Strateji Karnesi ve Pine Script v6 hazır!"
+            except Exception as ex:
+                lbl_pine_bildirim.value = f"⚠️ Hesaplama hatası: {ex}"
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        threading.Thread(target=_arka_plan, daemon=True).start()
+
+    def _pine_kopyala_tik(e):
+        if txt_pine_kod.value:
+            page.set_clipboard(txt_pine_kod.value)
+            lbl_pine_bildirim.value = f"📋 {secili_parite_state['anahtar']} [{secili_parite_state['tf'].upper()}] Pine Script v6 panoya kopyalandı!"
+            page.update()
+
+    dd_karne_parite.on_change = lambda e: _parite_karne_ve_pine_yukle(secili_parite_state["tf"], canli_zorla=False)
+
+    sekme_karne_icerik = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                dd_karne_parite,
+                ft.ElevatedButton("🔄 Canlı Analiz", bgcolor="#0ea5e9", color="#ffffff", on_click=lambda e: _parite_karne_ve_pine_yukle(secili_parite_state["tf"], canli_zorla=True))
+            ], spacing=6),
+            ft.Row([
+                ft.ElevatedButton("🏛️ HTF Pine", bgcolor="#2563eb", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle("4h", False, False)),
+                ft.ElevatedButton("🧭 MTF Pine", bgcolor="#7c3aed", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle("1h", False, False)),
+                ft.ElevatedButton("🎯 LTF Pine", bgcolor="#0d9488", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle("5m", False, False)),
+            ], spacing=6),
+            ft.Row([
+                ft.ElevatedButton("🚀 Canlı TV Grafiğini Aç", bgcolor="#10b981", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle(secili_parite_state["tf"], False, True)),
+                ft.ElevatedButton("📋 Pine Kopyala", bgcolor="#eab308", color="#11111b", expand=True, on_click=_pine_kopyala_tik),
+            ], spacing=6),
+            lbl_pine_bildirim,
+            ft.Text("📋 STRATEJİ & SEVİYE KARNESİ CHECK-LIST (8 HTF BÖLGE):", size=12, weight=ft.FontWeight.BOLD, color="#38bdf8"),
+            txt_karne_detay,
+            ft.Text("🌲 PINE SCRIPT v6 KODU:", size=12, weight=ft.FontWeight.BOLD, color="#fde047"),
+            txt_pine_kod
+        ], scroll=ft.ScrollMode.AUTO, spacing=8),
+        padding=10,
+        expand=True
+    )
+
+    # --- SEKME 4: AYARLAR & BINANCE API ---
+    dd_piyasa = ft.Dropdown(
+        label="Piyasa Modu",
+        options=[
+            ft.dropdown.Option("her_ikisi", "HER İKİSİ (SPOT + VADELİ)"),
+            ft.dropdown.Option("future", "VADELİ (FUTURES)"),
+            ft.dropdown.Option("spot", "SPOT")
+        ],
+        value=PIYASA_MODU,
+        bgcolor="#1e293b"
+    )
+    dd_ag = ft.Dropdown(
+        label="İşlem Ağı Modu",
+        options=[
+            ft.dropdown.Option("testnet", "TESTNET / CANLI DEMO (Sanal Bakiye)"),
+            ft.dropdown.Option("mainnet", "GERÇEK (MAINNET - CANLI İŞLEM)")
+        ],
+        value="testnet" if TESTNET_AKTIF else "mainnet",
+        bgcolor="#1e293b"
+    )
+    dd_mtf_sablon = ft.Dropdown(
+        label="MTF Zaman Dilimi Şablonu",
+        options=[ft.dropdown.Option(k) for k in MTF_SABLONLARI.keys()],
+        value=AKTIF_MTF_SABLONU,
+        bgcolor="#1e293b"
+    )
+    dd_risk_seviye = ft.Dropdown(
+        label="İşlem Risk & Confluence Seviyesi",
+        options=[ft.dropdown.Option(k) for k in RISK_SEVIYESI_SECENEKLERI.keys()],
+        value=AKTIF_RISK_SEVIYESI,
+        bgcolor="#1e293b"
+    )
+    dd_stop_modu = ft.Dropdown(
+        label="🛡️ Stop Noktası Belirleme Modu (v4.0.3)",
+        options=[ft.dropdown.Option(k) for k in STOP_BELIRLEME_SECENEKLERI],
+        value=STOP_BELIRLEME_MODU,
+        bgcolor="#1e293b"
+    )
+    dd_marjin_tipi = ft.Dropdown(
+        label="Vadeli Marjin Tipi",
+        options=[ft.dropdown.Option("ISOLATED"), ft.dropdown.Option("CROSSED")],
+        value=MARJIN_TIPI,
+        bgcolor="#1e293b"
+    )
+    tf_marjin = ft.TextField(label="Maks Marjin ($)", value=str(MAKS_MARJIN_USDT), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_kaldirac = ft.TextField(label="Kaldıraç (x)", value=str(KALDIRAC), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_risk = ft.TextField(label="İşlem Başı Risk ($)", value=str(ISLEM_BASI_RISK_USDT), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_rr = ft.TextField(label="TP1 Risk/Ödül (RR)", value=str(RISK_ODUL_ORANI), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_min_skor = ft.TextField(label="Min 4 Atlı Skoru", value=str(MIN_CONFLUENCE_SKORU), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_limit = ft.TextField(label="Parite Limiti (0=Tümü)", value=str(ae), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+
+    tf_api_key = ft.TextField(label="Binance API Key", value=API_KEY, bgcolor="#1e293b")
+    tf_api_sec = ft.TextField(label="Binance Secret Key", value=API_SECRET, password=True, can_reveal_password=True, bgcolor="#1e293b")
+    tf_tg_tok = ft.TextField(label="Telegram Bot Token", value=TELEGRAM_TOKEN, bgcolor="#1e293b")
+    tf_tg_id = ft.TextField(label="Telegram Chat ID", value=TELEGRAM_CHAT_ID, bgcolor="#1e293b")
+    tf_gh_repo = ft.TextField(label="GitHub Repo (OTA & Bulut Senk: kullanici/repo)", value=GITHUB_REPO_ADRESI, bgcolor="#1e293b")
+    tf_gh_tok = ft.TextField(label="GitHub Token (Cihazlar Arası Senk & Private Repo İçin)", value=GITHUB_TOKEN, password=True, can_reveal_password=True, bgcolor="#1e293b")
+    lbl_ayar_durum = ft.Text("Ayarlar hazır.", size=12, color="#4ade80")
+
+    def _risk_secim_degisti(e):
+        sec = dd_risk_seviye.value
+        if sec in RISK_SEVIYESI_SECENEKLERI and not sec.startswith("Özel"):
+            sk, _ = RISK_SEVIYESI_SECENEKLERI[sec]
+            tf_min_skor.value = str(sk)
+            page.update()
+
+    dd_risk_seviye.on_change = _risk_secim_degisti
+
+    def _ayarlari_kaydet_tik(e):
+        global PIYASA_MODU, TESTNET_AKTIF, MARJIN_TIPI, KALDIRAC, MAKS_MARJIN_USDT
+        global ISLEM_BASI_RISK_USDT, RISK_ODUL_ORANI, NIHAI_TP_RR, MIN_CONFLUENCE_SKORU, ae
+        global API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, AKTIF_RISK_SEVIYESI, V, T
+        try:
+            PIYASA_MODU = dd_piyasa.value or "her_ikisi"
+            TESTNET_AKTIF = (dd_ag.value == "testnet")
+            MARJIN_TIPI = dd_marjin_tipi.value or "ISOLATED"
+            global STOP_BELIRLEME_MODU
+            AKTIF_RISK_SEVIYESI = dd_risk_seviye.value or AKTIF_RISK_SEVIYESI
+            STOP_BELIRLEME_MODU = dd_stop_modu.value or STOP_BELIRLEME_MODU
+            if dd_mtf_sablon.value in MTF_SABLONLARI:
+                mtf_sablonu_uygula(dd_mtf_sablon.value)
+            MAKS_MARJIN_USDT = M(5.0, F(tf_marjin.value))
+            KALDIRAC = M(1, N(125, int(F(tf_kaldirac.value))))
+            ISLEM_BASI_RISK_USDT = M(0.1, F(tf_risk.value))
+            RISK_ODUL_ORANI = M(0.5, F(tf_rr.value))
+            NIHAI_TP_RR = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
+            MIN_CONFLUENCE_SKORU = M(10, N(100, int(F(tf_min_skor.value))))
+            ae = M(0, int(F(tf_limit.value)))
+            global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+            API_KEY = tf_api_key.value.strip()
+            API_SECRET = tf_api_sec.value.strip()
+            TELEGRAM_TOKEN = tf_tg_tok.value.strip()
+            TELEGRAM_CHAT_ID = tf_tg_id.value.strip()
+            GITHUB_REPO_ADRESI = tf_gh_repo.value.strip() or "emrhozbr/bot"
+            GITHUB_TOKEN = tf_gh_tok.value.strip()
+            try:
+                with open(bd, "w", encoding="utf-8") as f:
+                    json.dump({
+                        "api_key": API_KEY, "api_secret": API_SECRET,
+                        "testnet": TESTNET_AKTIF,
+                        "telegram_token": TELEGRAM_TOKEN, "telegram_chat_id": TELEGRAM_CHAT_ID,
+                        "github_repo": GITHUB_REPO_ADRESI, "github_token": GITHUB_TOKEN,
+                        "stop_modu": STOP_BELIRLEME_MODU
+                    }, f, ensure_ascii=False)
+            except Exception:
+                pass
+            borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+            V, T = bakiye_getir()
+            threading.Thread(target=lambda: pariteleri_yukle(motor.log_yaz), daemon=True).start()
+            lbl_tarama_info.value = f"🔍 MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Eşik: {MIN_CONFLUENCE_SKORU}+ Puan | Kaldıraç: {KALDIRAC}x"
+            lbl_ayar_durum.value = f"✅ Ayarlar ve API kaydedildi! Bakiye: {T:.2f} USDT"
+            lbl_ayar_durum.color = "#4ade80"
+            motor.log_yaz(f"⚙️ Mobil Ayarlar Güncellendi -> MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Risk: {ISLEM_BASI_RISK_USDT}$ | Skor: {MIN_CONFLUENCE_SKORU}+")
+            _ekrani_yenile()
+        except Exception as ex:
+            lbl_ayar_durum.value = f"⚠️ Hata: {ex}"
+            lbl_ayar_durum.color = "#f87171"
+            page.update()
+
+    sekme_ayarlar_icerik = ft.Container(
+        content=ft.Column([
+            ft.Text("⚙️ STRATEJİ, RİSK & MTF AYARLARI", size=13, weight=ft.FontWeight.BOLD, color="#38bdf8"),
+            dd_piyasa,
+            dd_ag,
+            dd_mtf_sablon,
+            dd_risk_seviye,
+            dd_stop_modu,
+            dd_marjin_tipi,
+            ft.Row([tf_marjin, tf_kaldirac], spacing=8),
+            ft.Row([tf_risk, tf_rr], spacing=8),
+            ft.Row([tf_min_skor, tf_limit], spacing=8),
+            ft.Divider(color="#334155"),
+            ft.Text("🔑 BINANCE API & TELEGRAM AYARLARI", size=13, weight=ft.FontWeight.BOLD, color="#fde047"),
+            tf_api_key,
+            tf_api_sec,
+            tf_tg_tok,
+            tf_tg_id,
+            ft.Divider(color="#334155"),
+            ft.Text("☁️ TEK TUŞLA OTA & ÇOKLU CİHAZ SENKRONİZASYONU (PC <-> TELEFON)", size=13, weight=ft.FontWeight.BOLD, color="#c084fc"),
+            tf_gh_repo,
+            tf_gh_tok,
+            ft.Row([
+                ft.ElevatedButton("⚡ GitHub'dan OTA Güncelle (botv4.0.2.py)", bgcolor="#8b5cf6", color="#ffffff", expand=True, on_click=_tek_tus_ota_tik),
+                ft.ElevatedButton("☁️ Cihazları Eşitle", bgcolor="#0ea5e9", color="#ffffff", expand=True, on_click=lambda e: threading.Thread(target=lambda: (bulut_durum_cek(True), bulut_durum_gonder(True), _ekrani_yenile("force")), daemon=True).start()),
+            ], spacing=8),
+            ft.ElevatedButton("💾 Tüm Ayarları Kaydet ve Uygula", bgcolor="#10b981", color="#ffffff", height=42, on_click=_ayarlari_kaydet_tik),
+            lbl_ayar_durum
+        ], scroll=ft.ScrollMode.AUTO, spacing=10),
+        padding=12,
+        expand=True
+    )
+
+    # --- SEKME 5: GEÇMİŞ İŞLEMLER & LOGLAR ---
+    lbl_gecmis_ozet = ft.Text("📊 Toplam: 0 | Winrate: %0.0 | Net PnL: +0.00 USDT", size=12, weight=ft.FontWeight.BOLD, color="#38bdf8")
+    lv_gecmis = ft.ListView(height=210, spacing=5, padding=6)
+    lv_loglar = ft.ListView(expand=True, spacing=3, padding=6, auto_scroll=True)
+
+    sekme_log_icerik = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                lbl_gecmis_ozet,
+                ft.TextButton("⏱️ Oturum Sıfırla", on_click=lambda e: motor.oturum_sayaci_sifirla())
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Container(content=lv_gecmis, bgcolor="#11111b", border_radius=8, border=ft.border.all(1, "#334155")),
+            ft.Text("📋 SİSTEM VE TARAMA LOG KAYITLARI", size=12, weight=ft.FontWeight.BOLD, color="#fde047"),
+            ft.Container(content=lv_loglar, bgcolor="#11111b", border_radius=8, border=ft.border.all(1, "#334155"), expand=True)
+        ], spacing=6, expand=True),
+        padding=10,
+        expand=True
+    )
+
+    # --- ANA SEKMELER (TABS) ---
+    tabs = ft.Tabs(
+        selected_index=0,
+        animation_duration=200,
+        expand=True,
+        tabs=[
+            ft.Tab(text="📌 İşlemler", content=lv_acik_islemler),
+            ft.Tab(text="🔍 Tarama", content=ft.Column([
+                ft.Container(content=lbl_tarama_info, padding=ft.padding.only(left=10, right=10, top=8)),
+                lv_tarama
+            ], expand=True, spacing=4)),
+            ft.Tab(text="📊 Karne & Pine", content=sekme_karne_icerik),
+            ft.Tab(text="⚙️ Ayarlar", content=sekme_ayarlar_icerik),
+            ft.Tab(text="📜 Geçmiş & Log", content=sekme_log_icerik),
+        ]
+    )
+
+    def _pariteyi_karneye_ac(O):
+        secili_parite_state["anahtar"] = O
+        mevcut_opts = [opt.key for opt in dd_karne_parite.options]
+        if O not in mevcut_opts:
+            dd_karne_parite.options.append(ft.dropdown.Option(O))
+        dd_karne_parite.value = O
+        tabs.selected_index = 2
+        page.update()
+        _parite_karne_ve_pine_yukle("4h", canli_zorla=False)
+
+    # --- EKRAN GÜNCELLEME FONKSİYONU ---
+    _son_ui_ts = [0.0]
+
+    def _ekrani_yenile(kaynak="all"):
+        simdi = time.time()
+        if kaynak != "force" and (simdi - _son_ui_ts[0] < 0.45):
+            return
+        _son_ui_ts[0] = simdi
+        try:
+            lbl_durum_bar.value = motor._durum_metni
+            lbl_durum_bar.color = motor._durum_renk
+            btn_baslat.disabled = bool(bot_calisiyor)
+            btn_durdur.disabled = not bool(bot_calisiyor)
+
+            # Açık işlemler ve portföy hesabı
+            kU, rI, jq = 0.0, 0.0, 0
+            yeni_acik_kartlar = []
+            for O, bq in list(acik_islemler.items()):
+                if not I(bq, dict):
+                    continue
+                jq += 1
+                bt = bq.get("yon", "LONG")
+                b0 = bq.get("piyasa", "future")
+                gW, nD, bZ, bM, fk, k1, k0 = islem_kar_zarar_hesapla(O, bq)
+                sl, tp = F(bq.get("sl") or 0.0), F(bq.get("tp") or 0.0)
+                kU += gW
+                rI += fk
+                renk_pnl = "#4ade80" if gW >= 0 else "#f87171"
+                yon_renk = "#10b981" if bt == "LONG" else "#ef4444"
+                kart = ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Text(f"{bt} {k1}x" if b0 == "future" else f"{bt} SPOT", size=11, weight=ft.FontWeight.BOLD, color="#ffffff"),
+                                    bgcolor=yon_renk, padding=ft.padding.symmetric(horizontal=7, vertical=3), border_radius=6
+                                ),
+                                ft.Text(O, size=14, weight=ft.FontWeight.BOLD, color="#f8fafc"),
+                            ], spacing=6),
+                            ft.Text(f"{gW:+.2f} USDT (%{nD:+.2f})", size=14, weight=ft.FontWeight.BOLD, color=renk_pnl)
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"Giriş: {_fmt_f(bZ)}", size=11, color="#cbd5e1"),
+                            ft.Text(f"Anlık: {_fmt_f(bM)}", size=11, color="#38bdf8", weight=ft.FontWeight.BOLD),
+                            ft.Text(f"Marjin: {fk:.1f}$ (Risk: -{k0:.1f}$)", size=11, color="#fbbf24")
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"🛑 SL: {_fmt_f(sl)}", size=11, color="#f87171"),
+                            ft.Text(f"🎯 TP1: {_fmt_f(tp)}", size=11, color="#4ade80"),
+                            ft.Text(str(bq.get("kural_uyum_kisa", "Safe")), size=11, color="#a78bfa")
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.ElevatedButton("📊 Karne & Pine", bgcolor="#2563eb", color="#ffffff", expand=True, on_click=lambda e, k=O: _pariteyi_karneye_ac(k)),
+                            ft.ElevatedButton("🚨 Kapat", bgcolor="#f97316", color="#ffffff", expand=True, on_click=lambda e, k=O: threading.Thread(target=motor.poz_kapat, args=(k,), daemon=True).start())
+                        ], spacing=8)
+                    ], spacing=6),
+                    bgcolor="#1e293b",
+                    border=ft.border.all(1.2, renk_pnl),
+                    border_radius=10,
+                    padding=10
+                )
+                yeni_acik_kartlar.append(kart)
+
+            if not yeni_acik_kartlar:
+                yeni_acik_kartlar.append(
+                    ft.Container(
+                        content=ft.Text(
+                            "⏳ Şu anda açık pozisyon bulunmuyor.\nBot 'Kırılım Yoksa Swing Yoktur' ve '8 HTF Safe Bölge (1.QML > 2.OB > 3.Fresh > 4.OTE)' kurallarına uygun sinyal yakaladığında işlemler burada listelenir.",
+                            size=12, color="#94a3b8", text_align=ft.TextAlign.CENTER
+                        ),
+                        padding=24, alignment=ft.alignment.center
+                    )
+                )
+            lv_acik_islemler.controls = yeni_acik_kartlar
+
+            qo = M(V + rI + kU, T + kU)
+            oran_marjin = (kU / M(rI, 1e-09) * 100.0) if rI > 0 else 0.0
+            i8 = W + kU
+            ot_top, _, _, sure_str, _ = motor.oturum_pnl_hesapla(kU)
+
+            lbl_portfoy.value = f"{qo:.2f} $"
+            lbl_serbest.value = f"Serbest: {V:.2f} $"
+            lbl_acik_pnl.value = f"{kU:+.2f} $ (%{oran_marjin:+.1f})"
+            lbl_acik_pnl.color = "#4ade80" if kU >= 0 else "#f87171"
+            lbl_oturum_pnl.value = f"Oturum: {ot_top:+.2f}$ ({sure_str})"
+            lbl_oturum_pnl.color = "#4ade80" if ot_top >= 0 else "#f87171"
+            lbl_net_pnl.value = f"{i8:+.2f} $"
+            lbl_net_pnl.color = "#4ade80" if i8 >= 0 else "#f87171"
+            lbl_aktif_say.value = f"Açık: {jq}/{a4} ({'DEMO' if TESTNET_AKTIF else 'CANLI'})"
+
+            # Borsa tarama listesi
+            kG = sorted(
+                a1.items(),
+                key=lambda x: (
+                    tuple(x[1].get("oncelik_vektor", (0, 0, 0, 0))),
+                    int(x[1].get("oncelikli_bolge", 0)),
+                    tuple(x[1].get("ikincil_vektor", (0, 0, 0, 0))),
+                    int(x[1].get("safe_sayisi", 0)),
+                    int(str(x[1].get("skor", "0/100")).split("/")[0]) if str(x[1].get("skor", "0")).split("/")[0].isdigit() else 0
+                ),
+                reverse=True
+            )
+            tarama_kartlari = []
+            for O, b in kG[:60]:
+                yon_renk = "#4ade80" if b.get("ana_yon") == "BULLISH" else "#f87171" if b.get("ana_yon") == "BEARISH" else "#94a3b8"
+                safe_s = int(b.get("safe_sayisi", 0))
+                satir = ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text(O, size=13, weight=ft.FontWeight.BOLD, color=yon_renk),
+                            ft.Text(f"Fiyat: {_fmt_f(b.get('fiyat', 0))}", size=12, color="#f8fafc"),
+                            ft.Container(
+                                content=ft.Text(f"Skor: {b.get('skor', '0/100')} | Safe:{safe_s}/8", size=11, weight=ft.FontWeight.BOLD, color="#11111b"),
+                                bgcolor="#fde047" if safe_s >= 2 else "#38bdf8",
+                                padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                                border_radius=5
+                            )
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"HTF:{b.get('4h','-')} | MTF:{b.get('1h','-')} | LTF:{b.get('ltf','-')}", size=11, color="#cbd5e1"),
+                            ft.TextButton("Karne & Grafik →", on_click=lambda e, k=O: _pariteyi_karneye_ac(k))
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Text(str(b.get("setup_detay", "-"))[:95], size=10, color="#94a3b8")
+                    ], spacing=3),
+                    bgcolor="#1e293b",
+                    border_radius=8,
+                    padding=8,
+                    border=ft.border.all(1, "#334155")
+                )
+                tarama_kartlari.append(satir)
+            lv_tarama.controls = tarama_kartlari
+
+            # Geçmiş ve Loglar
+            _ig_yukle()
+            tn = L(ah)
+            kz = sum(1 for x in ah if F(x.get("pnl_usdt", 0)) >= 0)
+            tp_pnl = sum(F(x.get("pnl_usdt", 0)) for x in ah)
+            wr = (kz / tn * 100.0) if tn else 0.0
+            lbl_gecmis_ozet.value = f"📊 Toplam: {tn} | ✅ {kz} / ❌ {tn-kz} | Win: %{wr:.1f} | Net: {tp_pnl:+.2f}$"
+            lv_gecmis.controls = [
+                ft.Text(
+                    f"[{x.get('tarih','-')}] {x.get('sembol','-')} ({x.get('yon','-')}) | {F(x.get('pnl_usdt',0)):+.2f}$ (%{F(x.get('pnl_yuzde',0)):+.1f}) | {x.get('neden','-')}",
+                    size=11,
+                    color="#4ade80" if F(x.get("pnl_usdt", 0)) >= 0 else "#f87171"
+                )
+                for x in ah[:40]
+            ]
+            lv_loglar.controls = [ft.Text(lg, size=11, color="#cdd6f4", font_family="monospace") for lg in motor._log_q[-80:]]
+            page.update()
+        except Exception:
+            pass
+
+    motor = AlfaMobileBotEngine(ui_callback=_ekrani_yenile)
+
+    def _bot_baslat_tik():
+        motor.botu_baslat()
+        _ekrani_yenile("force")
+
+    def _bot_durdur_tik():
+        motor.botu_durdur()
+        _ekrani_yenile("force")
+
+    page.add(
+        ft.Column([
+            ust_panel,
+            tabs
+        ], expand=True, spacing=0)
+    )
+
+    # Arka plan periyodik yenileme (1.5 saniyede bir canlı pozisyon ve sayaç güncellemesi)
+    def _periyodik_sayac():
+        while not motor._kapaniyor:
+            try:
+                if acik_islemler and any(I(v, dict) for v in acik_islemler.values()):
+                    motor.pozisyonlari_senkronize_et()
+                else:
+                    _ekrani_yenile("force")
+            except Exception:
+                pass
+            time.sleep(2.0)
+
+    def _ilk_yukleme():
+        global V, T
+        try:
+            _api_yukle()
+            _kayitli_ota_varsa_yukle()
+            bulut_durum_cek(zorla=True)
+            V, T = bakiye_getir()
+            nQ = sum(1 for v in acik_islemler.values() if I(v, dict))
+            if nQ > 0:
+                motor.log_yaz(f"📂 Önceki oturumdan kalan {nQ} açık pozisyon yüklendi.")
+            motor.log_yaz("📱 Alfa Trade Club Flet Mobil APK arayüzü hazır. Başlat butonuna basarak taramayı başlatabilirsiniz.")
+            _ekrani_yenile("force")
+        except Exception:
+            pass
+
+    threading.Thread(target=_ilk_yukleme, daemon=True).start()
+    threading.Thread(target=_periyodik_sayac, daemon=True).start()
+
+
+if __name__ == "__main__":
+    ft.app(target=main)
