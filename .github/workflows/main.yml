@@ -47,7 +47,7 @@ jobs:
           fi
           yes | flutter doctor --android-licenses || true
 
-      - name: main.py ve requirements.txt Dosyalarini APK Icin Hazirla
+      - name: main.py Korumali Mod ve Android Dosya Sistemi Yamasi
         run: |
           rm -f pyproject.toml
           printf "flet==0.24.1\nrequests\ncertifi\nurllib3\nidna\ncharset-normalizer\n" > requirements.txt
@@ -61,21 +61,20 @@ jobs:
           # 1. Masaustu kütüphaneleri kalmissa temizle
           c = c.replace("import pandas as pd\n", "").replace("import numpy as np\n", "")
 
-          # 2. ANDROID_VERI_DIZINI'ni Android'de yazilabilir (writable) klasore yonlendir
+          # 2. ANDROID_VERI_DIZINI ve eksik degiskenleri tanimla
           android_dir_patch = """
-          import tempfile
-          ANDROID_VERI_DIZINI = os.environ.get("FLET_APP_STORAGE_DATA") or os.environ.get("HOME") or tempfile.gettempdir()
+          import tempfile as _tempfile
+          ANDROID_VERI_DIZINI = os.environ.get("FLET_APP_STORAGE_DATA") or _tempfile.gettempdir()
           try:
               os.makedirs(ANDROID_VERI_DIZINI, exist_ok=True)
           except Exception:
-              ANDROID_VERI_DIZINI = tempfile.gettempdir()
+              ANDROID_VERI_DIZINI = _tempfile.gettempdir()
           bd = os.path.join(ANDROID_VERI_DIZINI, "binance_api_config.json")
           ap = os.path.join(ANDROID_VERI_DIZINI, "islem_gecmisi.json")
           aN = os.path.join(ANDROID_VERI_DIZINI, "acik_islemler.json")
           ah = []
           """
 
-          # ANDROID_VERI_DIZINI tanimini bul ve hemen altina yazilabilir dizin + bd, ap, aN ekle
           if "ANDROID_VERI_DIZINI" in c:
               c = re.sub(
                   r'ANDROID_VERI_DIZINI\s*=\s*[^\n]+',
@@ -86,57 +85,124 @@ jobs:
           else:
               c = c.replace("import flet as ft", "import flet as ft\n" + android_dir_patch.strip(), 1)
 
-          # 3. _f fonksiyonu oncesinde bd hala yoksa garanti olarak ekle
           if "bd = os.path.join" not in c:
               c = c.replace("def _f(d,c,i=-2):", android_dir_patch.strip() + "\ndef _f(d,c,i=-2):")
 
-          # 4. _api_yukle() cagrilmadan once borsa_kur() fonksiyonunun calistigindan emin ol
           if "def _api_yukle():" in c:
               ust_kisim = c.split("def _api_yukle():")[0]
               if "borsa_kur(PIYASA_MODU, TESTNET_AKTIF)" not in ust_kisim:
                   c = c.replace("def _api_yukle():", "borsa_kur(PIYASA_MODU, TESTNET_AKTIF)\ndef _api_yukle():", 1)
 
-          # 5. Uygulamanin sessizce kapanmasini onleyen Global Hata Yakalayici (Crash Catcher) ekle
-          crash_guard_bas = """
-          import traceback as _tb
+          # 3. orijinal kodu app_core.py olarak kaydet
+          with open("app_core.py", "w", encoding="utf-8") as f:
+              f.write(c)
+
+          # 4. Kapanmayi %100 engelleyen, ft.app ve open() fonksiyonlarini koruyan yeni main.py yaz
+          wrapper_code = '''import os, sys, builtins, tempfile, traceback
+          import flet as ft
+
+          # Android Salt-Okunur (Read-Only) Dosya Sistemi Korumasi
+          _SAFE_DIR = os.environ.get("FLET_APP_STORAGE_DATA") or tempfile.gettempdir()
           try:
-          """
-          crash_guard_son = """
-          except Exception as _uygulama_hatasi:
-              _hata_metni = _tb.format_exc()
-              import flet as _ft
-              def _hata_ekrani(page: _ft.Page):
+              os.makedirs(_SAFE_DIR, exist_ok=True)
+          except Exception:
+              _SAFE_DIR = tempfile.gettempdir()
+
+          try:
+              os.chdir(_SAFE_DIR)
+          except Exception:
+              pass
+
+          _orig_open = builtins.open
+          def _safe_open(file, mode='r', *args, **kwargs):
+              if isinstance(file, str) and not os.path.isabs(file):
+                  file = os.path.join(_SAFE_DIR, file)
+              elif isinstance(file, str) and any(m in mode for m in ('w', 'a', '+')):
+                  # Yazma modunda dizin salt okunursa güvenli dizine yönlendir
+                  parent = os.path.dirname(file)
+                  if parent and not os.access(parent, os.W_OK):
+                      file = os.path.join(_SAFE_DIR, os.path.basename(file))
+              return _orig_open(file, mode, *args, **kwargs)
+          builtins.open = _safe_open
+
+          # Flet ft.app Kancasi: main(page) icindeki hatalari da yakalar!
+          _orig_ft_app = ft.app
+          _app_started = False
+
+          def _safe_ft_app(*args, **kwargs):
+              global _app_started
+              _app_started = True
+              orig_target = kwargs.get("target")
+              if orig_target is None and len(args) > 0:
+                  orig_target = args[0]
+                  args = args[1:]
+
+              def _wrapped_target(page: ft.Page):
+                  try:
+                      if orig_target:
+                          orig_target(page)
+                  except Exception:
+                      err_txt = traceback.format_exc()
+                      page.clean()
+                      page.bgcolor = "#1A1A1A"
+                      page.scroll = "auto"
+                      page.add(
+                          ft.Container(
+                              padding=20,
+                              content=ft.Column([
+                                  ft.Text("ARAYÜZ (MAIN) ÇALIŞMA HATASI", color="orange", size=18, weight="bold"),
+                                  ft.Text("Hata detayı aşağıdadır:", color="white", size=13),
+                                  ft.Container(
+                                      bgcolor="#000000",
+                                      padding=12,
+                                      border_radius=8,
+                                      content=ft.Text(err_txt, color="#FF6B6B", size=11, selectable=True, font_family="monospace")
+                                  )
+                              ])
+                          )
+                      )
+                      page.update()
+
+              kwargs["target"] = _wrapped_target
+              return _orig_ft_app(*args, **kwargs)
+
+          ft.app = _safe_ft_app
+
+          try:
+              import app_core
+              if not _app_started and hasattr(app_core, "main"):
+                  _safe_ft_app(target=app_core.main)
+          except Exception:
+              _boot_err = traceback.format_exc()
+              def _acil_hata_ekrani(page: ft.Page):
                   page.bgcolor = "#1A1A1A"
                   page.scroll = "auto"
                   page.add(
-                      _ft.Container(
+                      ft.Container(
                           padding=20,
-                          content=_ft.Column([
-                              _ft.Text("UYGULAMA BAŞLATMA HATASI", color="red", size=20, weight="bold"),
-                              _ft.Text("Lütfen bu ekranın görüntüsünü paylaşın:", color="white", size=14),
-                              _ft.Container(
+                          content=ft.Column([
+                              ft.Text("BAŞLANGIÇ (IMPORT) HATASI", color="red", size=18, weight="bold"),
+                              ft.Text("Uygulama yüklenirken hata oluştu:", color="white", size=13),
+                              ft.Container(
                                   bgcolor="#000000",
                                   padding=12,
                                   border_radius=8,
-                                  content=_ft.Text(_hata_metni, color="#FF6B6B", size=11, selectable=True, font_family="monospace")
+                                  content=ft.Text(_boot_err, color="#FF6B6B", size=11, selectable=True, font_family="monospace")
                               )
                           ])
                       )
                   )
-              _ft.app(target=_hata_ekrani)
-          """
-
-          satirlar = c.splitlines()
-          girintili_kod = "\n".join("    " + s if s.strip() else "" for s in satirlar)
-          tam_kod = crash_guard_bas.strip() + "\n" + girintili_kod + "\n" + crash_guard_son.strip() + "\n"
+              _orig_ft_app(target=_acil_hata_ekrani)
+          '''
 
           with open("main.py", "w", encoding="utf-8") as f:
-              f.write(tam_kod)
+              f.write(wrapper_code)
           EOF
 
           python3 patch_main.py
           rm -f patch_main.py
           python3 -m py_compile main.py
+          python3 -m py_compile app_core.py
 
       - name: Python Paketlerini Yukle
         run: |
