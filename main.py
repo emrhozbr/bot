@@ -12,7 +12,7 @@ import flet as ft
 # (C Derleyicisi Gerektirmez & sys.modules Kaydı İle Her Türlü Import'u Destekler)
 # ------------------------------------------------------------------------------
 try:
-    import numpy as np
+    np = __import__('numpy')
 except ImportError:
     class _NPArray(list):
         def min(self): return min(self) if self else 0.0
@@ -39,7 +39,7 @@ except ImportError:
     sys.modules["numpy"] = np
 
 try:
-    import pandas as pd
+    pd = __import__('pandas')
 except ImportError:
     class _Series:
         def __init__(self, data):
@@ -241,7 +241,7 @@ except ImportError:
     sys.modules["pandas"] = pd
 
 try:
-    import ccxt
+    ccxt = __import__('ccxt')
 except ImportError:
     class _BinanceLite:
         def __init__(self, config=None):
@@ -350,10 +350,6 @@ jC, aR, cR, eD = (('Segoe UI', 10, 'bold'), ('Segoe UI', 11, 'bold'), ('Segoe UI
 
 # Android Kalıcı Depolama Dizini Ayarı
 ANDROID_VERI_DIZINI = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.abspath(".")
-try:
-    os.makedirs(ANDROID_VERI_DIZINI, exist_ok=True)
-except Exception:
-    ANDROID_VERI_DIZINI = os.path.abspath(".")
 
 def _f(d,c,i=-2):
  try:
