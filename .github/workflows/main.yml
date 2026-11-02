@@ -1,244 +1,62 @@
-//@version=6
-indicator("Alfa Trade Club [5M] — Kırılım Yoksa Swing Yoktur & Konum Filtresi (ZECUSDT.P)", shorttitle="Alfa_5M_PA", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+name: Android APK Olustur (Flet)
 
-// ============================================================================
-// PARİTE: FUT:ZEC/USDT (ZECUSDT.P) | ZAMAN DİLİMİ MODÜLÜ: 15m (LTF İcra, Reversal Onay & Giriş/SL/TP)
-// ANLIK İŞLEM KÂR/ZARAR: +6.34 USDT (%+2.69)
-// ========================================
-// 📋 STRATEJİ & SEVİYE KARNESİ CHECK-LIST
-// 🛡️ SAFE SKORU: 5/8 HTF Bölge Sağlandı | 🛡️ ULTRA SAFE (A+++) (87/100 Puan)
-// ========================================
-//  [⬜] 1. Yön Belirleme (HTF Ana Yön)       : BULLISH
-//  [✅] 1.Öncelik: QML (Quasimodo Seviyesi)  : 1070.3200
-//  [✅] 2.Öncelik: OB (HTF Order Block)      : 1343.9485-1383.7600
-//  [✅] 3.Öncelik: Fresh Arz/Talep Bölgesi   : 1299.5078-1367.9600
-//  [✅] 4.Öncelik: OTE (Fibo 0.618-0.705-0.786) : 1245.7697-1299.5078
-//  [✅] 2.Kademe: BOS Yaptıran Nokta (Kırılım) : 1070.3200 (Origin:1253.7500)
-//  [⬜] 2.Kademe: CHoCH Yapılan Nokta (Kırılım) : 1428.0000
-//  [⬜] 2.Kademe: ITZ (Kırılım Öncesi Son Yapı) : 1202.3350
-//  [⬜] 2.Kademe: Magic Line (Flag Limit / FL) : 1070.3200
-//  [✅] 3a. LTF Reversal Kırılım Onayı       : LTF_BEAR_MSB_CHOCH
-//  [✅] 3b. LTF Reversal Mum Konsepti        : Bear_MeraMera_QML_DP, Bear_Istekli_Marubozu
-// KURAL 1: "KIRILIM YOKSA SWING YOKTUR" (No Break No Swing - İç Gürültü Filtresi)
-// KURAL 2: "KONUM (ARZ/TALEP BÖLGESİ) FİLTRESİ" (Bağlamsız Kırılım = Tuzak)
-// KURAL 3: "2 NUMARALI KARAR BÖLGESİ" (Red/Reversal vs İhlal/Flip Devam)
-// ============================================================================
+on:
+  workflow_dispatch:
+  push:
+    branches: [ "main", "master" ]
 
-grp1 = "1. Kırılım Yoksa Swing Yoktur & Yapı Ayarları"
-swing_len = input.int(5, "Fraktal Aday Swing Penceresi", minval=1, maxval=10, group=grp1)
-goster_kysy_zigzag = input.bool(false, "Onaylı Swing ZigZag & BOS/CHoCH Göster (Sadece HTF)", group=grp1)
-goster_elenen_gurultu = input.bool(false, "Elenen İç Yapı (Kırılımsız Gürültü) Noktalarını Göster", group=grp1)
+jobs:
+  build-apk:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Repo Kodlarini Cek
+        uses: actions/checkout@v4
 
-grp2 = "2. Konum (Arz/Talep) Filtresi & İstasyonlar"
-goster_dinamik_poi = input.bool(false, "Dinamik OB / FVG / Konum Kutularını Çiz (Sadece HTF)", group=grp2)
-goster_bot_kutulari = input.bool(false, "Python Botun Tespit Ettiği HTF Kutularını Çiz (Sadece HTF)", group=grp2)
-goster_fibo_ote = input.bool(false, "Sihirli Fibo 0.50 EQ & OTE (0.618-0.786) Göster (Sadece HTF)", group=grp2)
-goster_tuzak_etiket = input.bool(false, "Bağlamsız Tuzak CHoCH & Konum Hatalarını İşaretle (Sadece HTF)", group=grp2)
-goster_islem_rr = input.bool(true, "Bot Giriş / Stop-Loss (1R) / TP1 (3R) / TP2 (4R) Çiz", group=grp2)
+      - name: Linux Paketlerini Kur
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev mesa-utils zip unzip clang cmake ninja-build pkg-config libncurses5 libglu1-mesa
 
-atr_val = ta.atr(14)
-rsi_val = ta.rsi(close, 14)
+      - name: Python 3.11 Kur
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
-// --- 4H ve 1H ÜST ZAMAN DİLİMİ KONUM (ARZ/TALEP) BAĞLAMI ---
-[htf_high, htf_low, htf_close] = request.security(syminfo.tickerid, "240", [ta.highest(high, 40), ta.lowest(low, 40), close], lookahead=barmerge.lookahead_off)
-[mtf_high, mtf_low, mtf_close] = request.security(syminfo.tickerid, "60", [ta.highest(high, 40), ta.lowest(low, 40), close], lookahead=barmerge.lookahead_off)
+      - name: Java JDK 17 Kur
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
 
-htf_eq = (htf_high + htf_low) / 2.0
-mtf_eq = (mtf_high + mtf_low) / 2.0
-htf_fibo_oran = htf_high > htf_low ? (close - htf_low) / (htf_high - htf_low) : 0.5
-mtf_fibo_oran = mtf_high > mtf_low ? (close - mtf_low) / (mtf_high - mtf_low) : 0.5
+      - name: Flutter SDK Kur (Flet 0.24 Uyumlu)
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          flutter-version: '3.24.3'
+          cache: true
 
-discount_konum = htf_fibo_oran <= 0.52 or mtf_fibo_oran <= 0.50
-premium_konum  = htf_fibo_oran >= 0.48 or mtf_fibo_oran >= 0.50
-bull_ote_konum = (htf_fibo_oran >= 0.214 and htf_fibo_oran <= 0.40) or (mtf_fibo_oran >= 0.214 and mtf_fibo_oran <= 0.40)
-bear_ote_konum = (htf_fibo_oran >= 0.60 and htf_fibo_oran <= 0.786) or (mtf_fibo_oran >= 0.60 and mtf_fibo_oran <= 0.786)
+      - name: Android Lisanslarini Onayla
+        run: |
+          SDKMANAGER=$(find /usr/local/lib/android/sdk -name "sdkmanager" | head -n 1)
+          python3 -c 'print("y\n" * 40)' | "$SDKMANAGER" --licenses || true
+          python3 -c 'print("y\n" * 40)' | flutter doctor --android-licenses || true
 
-// --- KURAL 1: "KIRILIM YOKSA SWING YOKTUR" DURUM MAKİNESİ ---
-ph = ta.pivothigh(high, swing_len, swing_len)
-pl = ta.pivotlow(low, swing_len, swing_len)
+      - name: Python Paketlerini Hazirla
+        run: |
+          rm -f pyproject.toml
+          printf "requests\n" > requirements.txt
+          python -m pip install --upgrade pip
+          pip install "flet[all]==0.24.1" requests
 
-var float aktif_sh = high
-var int   aktif_sh_bar = bar_index
-var float aktif_sl = low
-var int   aktif_sl_bar = bar_index
-var int   yapi_yon = 0
-var float onayli_strong_low = low
-var float onayli_strong_high = high
-var int   son_zz_bar = bar_index
-var float son_zz_fiyat = close
-var int   elenen_sayac = 0
-var bool  pb_olustu = true
+      - name: Flet Build APK Komutunu Calistir
+        run: |
+          flet build apk --project "Alfa Trade Bot" --org "com.alfatrade" -vv --no-rich-output
 
-if not na(ph)
-    p_bar = bar_index - swing_len
-    if yapi_yon == -1
-        pb_olustu := true
-    if yapi_yon == 1 and ph > aktif_sh
-        aktif_sh := ph
-        aktif_sh_bar := p_bar
-    else if ph <= aktif_sh and ph >= aktif_sl
-        elenen_sayac += 1
-        if goster_elenen_gurultu
-            label.new(p_bar, ph, "×", color=color.new(color.gray, 100), textcolor=color.new(color.silver, 35), style=label.style_label_down, size=size.tiny, tooltip="Kırılım Yok -> Swing Yok (İç Yapı Gürültüsü Elendi)")
-
-if not na(pl)
-    p_bar = bar_index - swing_len
-    if yapi_yon == 1
-        pb_olustu := true
-    if yapi_yon == -1 and pl < aktif_sl
-        aktif_sl := pl
-        aktif_sl_bar := p_bar
-    else if pl >= aktif_sl and pl <= aktif_sh
-        elenen_sayac += 1
-        if goster_elenen_gurultu
-            label.new(p_bar, pl, "×", color=color.new(color.gray, 100), textcolor=color.new(color.silver, 35), style=label.style_label_up, size=size.tiny, tooltip="Kırılım Yok -> Swing Yok (İç Yapı Gürültüsü Elendi)")
-
-bull_kirilim = pb_olustu and close > aktif_sh and bar_index > aktif_sh_bar + 1
-bear_kirilim = pb_olustu and close < aktif_sl and bar_index > aktif_sl_bar + 1
-
-var float son_demand_ust = na
-var float son_demand_alt = na
-var float son_supply_ust = na
-var float son_supply_alt = na
-
-if bull_kirilim
-    kirilim_etiket = yapi_yon == 1 ? "BOS (KYSY Onaylı)" : "MSB / Güçlü CHoCH"
-    onayli_strong_low := aktif_sl
-    son_demand_alt := aktif_sl
-    son_demand_ust := aktif_sl + atr_val * 0.65
-    orta_bar_b = int(math.round((aktif_sh_bar + bar_index) / 2.0))
-    if goster_kysy_zigzag
-        line.new(aktif_sh_bar, aktif_sh, bar_index, aktif_sh, color=color.lime, style=line.style_dashed, width=2)
-        label.new(orta_bar_b, aktif_sh, "⚡ " + kirilim_etiket, color=color.new(color.black, 20), textcolor=color.lime, style=label.style_label_down, size=size.small)
-        line.new(son_zz_bar, son_zz_fiyat, aktif_sl_bar, aktif_sl, color=color.new(color.teal, 15), style=line.style_solid, width=2)
-        label.new(aktif_sl_bar, aktif_sl, yapi_yon == 1 ? "HL (Onaylı)" : "LL->Strong Origin", color=color.new(color.teal, 15), textcolor=color.white, style=label.style_label_up, size=size.tiny)
-    if goster_dinamik_poi
-        box.new(aktif_sl_bar, son_demand_ust, bar_index + 12, son_demand_alt, border_color=color.new(color.blue, 20), bgcolor=color.new(color.blue, 85), text="[5M] Onaylı Demand OB", text_color=color.white, text_size=size.tiny)
-    son_zz_bar := aktif_sl_bar
-    son_zz_fiyat := aktif_sl
-    yapi_yon := 1
-    aktif_sh := high
-    aktif_sh_bar := bar_index
-    pb_olustu := false
-
-if bear_kirilim
-    kirilim_etiket = yapi_yon == -1 ? "BOS (KYSY Onaylı)" : "MSB / Güçlü CHoCH"
-    onayli_strong_high := aktif_sh
-    son_supply_ust := aktif_sh
-    son_supply_alt := aktif_sh - atr_val * 0.65
-    orta_bar_s = int(math.round((aktif_sl_bar + bar_index) / 2.0))
-    if goster_kysy_zigzag
-        line.new(aktif_sl_bar, aktif_sl, bar_index, aktif_sl, color=color.red, style=line.style_dashed, width=2)
-        label.new(orta_bar_s, aktif_sl, "⚡ " + kirilim_etiket, color=color.new(color.black, 20), textcolor=color.red, style=label.style_label_up, size=size.small)
-        line.new(son_zz_bar, son_zz_fiyat, aktif_sh_bar, aktif_sh, color=color.new(color.maroon, 15), style=line.style_solid, width=2)
-        label.new(aktif_sh_bar, aktif_sh, yapi_yon == -1 ? "LH (Onaylı)" : "HH->Strong Origin", color=color.new(color.maroon, 15), textcolor=color.white, style=label.style_label_down, size=size.tiny)
-    if goster_dinamik_poi
-        box.new(aktif_sh_bar, son_supply_ust, bar_index + 12, son_supply_alt, border_color=color.new(color.red, 20), bgcolor=color.new(color.red, 85), text="[5M] Onaylı Supply OB", text_color=color.white, text_size=size.tiny)
-    son_zz_bar := aktif_sh_bar
-    son_zz_fiyat := aktif_sh
-    yapi_yon := -1
-    aktif_sl := low
-    aktif_sl_bar := bar_index
-    pb_olustu := false
-
-if yapi_yon == 1 and high > aktif_sh
-    aktif_sh := high
-    aktif_sh_bar := bar_index
-if yapi_yon == -1 and low < aktif_sl
-    aktif_sl := low
-    aktif_sl_bar := bar_index
-
-// --- KURAL 2 & 3: KONUM (ARZ/TALEP BÖLGESİ) FİLTRESİ & HATA/TUZAK TESPİTİ ---
-demand_temas = (not na(son_demand_ust) and low <= son_demand_ust + atr_val * 0.25 and close >= son_demand_alt) or discount_konum
-supply_temas = (not na(son_supply_alt) and high >= son_supply_alt - atr_val * 0.25 and close <= son_supply_ust) or premium_konum
-
-tuzak_bull_choch = bull_kirilim and not demand_temas and htf_fibo_oran > 0.72
-tuzak_bear_choch = bear_kirilim and not supply_temas and htf_fibo_oran < 0.28
-
-if goster_tuzak_etiket and tuzak_bull_choch
-    label.new(bar_index, high + atr_val * 0.3, "❌ TUZAK KIRILIM (Konum Hatası: Premium Tepede/Boşlukta!)", color=color.orange, textcolor=color.black, style=label.style_label_down, size=size.small)
-
-if goster_tuzak_etiket and tuzak_bear_choch
-    label.new(bar_index, low - atr_val * 0.3, "❌ TUZAK KIRILIM (Konum Hatası: Discount Dipte/Boşlukta!)", color=color.orange, textcolor=color.black, style=label.style_label_up, size=size.small)
-
-// --- PYTHON BOTUN HESAPLADIĞI GERÇEK 5M SEVİYELERİ VE KUTULARI ---
-var float bot_sp = 1210.140000
-var float bot_wp = 1297.430000
-var float bot_magic = 1215.210000
-var float bot_itz = 1242.472500
-var float bot_qml = 1253.250000
-var float bot_smax = 1297.430000
-var float bot_smin = 1210.140000
-var float bot_giris = 1259.820000
-var float bot_sl = 1249.120000
-var float bot_tp1 = 1291.920000
-var float bot_tp2 = 1302.620000
-
-if barstate.islast and goster_bot_kutulari
-    box.new(bar_index - 35, 1297.430000, bar_index + 8, 1253.250000, border_color=color.purple, bgcolor=color.new(color.purple, 84), text='[5M BOT] QML [1253.2500-1297.4300]', text_color=color.white, text_size=size.small)
-    box.new(bar_index - 35, 1268.000000, bar_index + 8, 1263.870000, border_color=color.purple, bgcolor=color.new(color.purple, 84), text='[5M BOT] BB/FL [1263.8700-1268.0000]', text_color=color.white, text_size=size.small)
-    box.new(bar_index - 35, 1273.300000, bar_index + 8, 1266.570000, border_color=color.purple, bgcolor=color.new(color.purple, 84), text='[5M BOT] BB/FL [1266.5700-1273.3000]', text_color=color.white, text_size=size.small)
-    box.new(bar_index - 35, 1397.580000, bar_index + 8, 1275.800000, border_color=color.orange, bgcolor=color.new(color.orange, 84), text='[4H KONUM POI] QML [1275.8000-1397.5800]', text_color=color.white, text_size=size.small)
-    box.new(bar_index - 35, 1288.070000, bar_index + 8, 1270.680000, border_color=color.orange, bgcolor=color.new(color.orange, 84), text='[4H KONUM POI] FVG [1270.6800-1288.0700]', text_color=color.white, text_size=size.small)
-    box.new(bar_index - 35, 1281.160000, bar_index + 8, 1229.290000, border_color=color.orange, bgcolor=color.new(color.orange, 84), text='[4H KONUM POI] OB [1229.2900-1281.1600]', text_color=color.white, text_size=size.small)
-    box.new(bar_index - 35, 1289.920000, bar_index + 8, 1264.840000, border_color=color.aqua, bgcolor=color.new(color.aqua, 84), text='[1H KONUM POI] BB/FL [1264.8400-1289.9200]', text_color=color.white, text_size=size.small)
-
-if barstate.islast and goster_bot_kutulari
-    if bot_sp > 0.0
-        line.new(bar_index - 40, bot_sp, bar_index + 8, bot_sp, color=color.yellow, style=line.style_dashed, width=2)
-        label.new(bar_index + 8, bot_sp, "🛡️ Strong Origin (1210.1400)", color=color.new(color.yellow, 80), textcolor=color.yellow, style=label.style_label_left, size=size.small)
-    if bot_wp > 0.0
-        line.new(bar_index - 40, bot_wp, bar_index + 8, bot_wp, color=color.silver, style=line.style_dotted, width=2)
-        label.new(bar_index + 8, bot_wp, "🎯 Weak Target (1297.4300)", color=color.new(color.silver, 80), textcolor=color.white, style=label.style_label_left, size=size.small)
-    if bot_magic > 0.0
-        line.new(bar_index - 30, bot_magic, bar_index + 8, bot_magic, color=color.fuchsia, style=line.style_dashed, width=1)
-        label.new(bar_index + 8, bot_magic, "✨ Magic Line / FL (1215.2100)", color=color.new(color.fuchsia, 80), textcolor=color.fuchsia, style=label.style_label_left, size=size.tiny)
-    if bot_itz > 0.0
-        line.new(bar_index - 30, bot_itz, bar_index + 8, bot_itz, color=color.aqua, style=line.style_dotted, width=1)
-        label.new(bar_index + 8, bot_itz, "🏛️ ITZ (1242.4725)", color=color.new(color.aqua, 80), textcolor=color.aqua, style=label.style_label_left, size=size.tiny)
-    if bot_qml > 0.0
-        line.new(bar_index - 30, bot_qml, bar_index + 8, bot_qml, color=color.purple, style=line.style_dashed, width=1)
-        label.new(bar_index + 8, bot_qml, "👑 QML (1253.2500)", color=color.new(color.purple, 80), textcolor=color.purple, style=label.style_label_left, size=size.tiny)
-
-if barstate.islast and goster_fibo_ote and bot_smax > bot_smin and bot_smin > 0.0
-    eq_f = (bot_smax + bot_smin) / 2.0
-    rng_f = bot_smax - bot_smin
-    ote1 = "BEARISH" == "BULLISH" ? bot_smax - rng_f * 0.618 : bot_smin + rng_f * 0.618
-    ote2 = "BEARISH" == "BULLISH" ? bot_smax - rng_f * 0.786 : bot_smin + rng_f * 0.786
-    line.new(bar_index - 45, eq_f, bar_index + 8, eq_f, color=color.gray, style=line.style_dashed, width=1)
-    label.new(bar_index + 8, eq_f, "0.50 EQ (" + str.tostring(eq_f, "#.####") + ")", color=color.new(color.gray, 80), textcolor=color.silver, style=label.style_label_left, size=size.tiny)
-    box.new(bar_index - 45, math.max(ote1, ote2), bar_index + 8, math.min(ote1, ote2), border_color=color.new(color.teal, 50), bgcolor=color.new(color.teal, 90), text="Sihirli Fibo OTE (0.618-0.786)", text_color=color.teal, text_size=size.tiny)
-
-if barstate.islast and goster_islem_rr and bot_giris > 0.0 and bot_sl > 0.0
-    box.new(bar_index - 12, math.max(bot_giris, bot_sl), bar_index + 10, math.min(bot_giris, bot_sl), border_color=color.red, bgcolor=color.new(color.red, 86), text="STOP (1R): 1249.1200", text_color=color.white, text_size=size.tiny)
-    box.new(bar_index - 12, math.max(bot_giris, bot_tp1), bar_index + 10, math.min(bot_giris, bot_tp1), border_color=color.green, bgcolor=color.new(color.green, 86), text="TP1 (3R %50+BE): 1291.9200", text_color=color.white, text_size=size.tiny)
-    line.new(bar_index - 14, bot_giris, bar_index + 12, bot_giris, color=color.aqua, style=line.style_solid, width=2)
-    line.new(bar_index - 14, bot_tp2, bar_index + 12, bot_tp2, color=color.lime, style=line.style_dotted, width=2)
-
-// --- SAĞ ÜST ALFA TRADE CLUB HATA DENETİM & STRATEJİ KARNESİ TABLOSU ---
-var table panel = table.new(position.top_right, 2, 12, bgcolor=color.rgb(17, 17, 27, 10), border_color=color.rgb(49, 50, 68), border_width=1)
-if barstate.islast
-    table.cell(panel, 0, 0, "🌲 ALFA PA [5M]", text_color=color.aqua, text_size=size.small, bgcolor=color.rgb(24, 24, 37))
-    table.cell(panel, 1, 0, "FUT:ZEC/USDT (ZECUSDT.P)", text_color=color.white, text_size=size.small, bgcolor=color.rgb(24, 24, 37))
-    table.cell(panel, 0, 1, "1. Yön & KYSY Onayı", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 1, "⬜ HTF:BULLISH | MTF:BEARISH | LTF:BEARISH", text_color=color.orange, text_size=size.tiny)
-    table.cell(panel, 0, 2, "2. HTF Safe Bölge Puanı", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 2, "5/8 Bölge | 🛡️ ULTRA SAFE (A+++) (87p)", text_color=color.lime, text_size=size.tiny)
-    table.cell(panel, 0, 3, "Check: QML / OTE / OB / Fresh", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 3, "✅QML ✅OTE ✅OB ✅Fresh", text_color=color.yellow, text_size=size.tiny)
-    table.cell(panel, 0, 4, "Check: CHoCH / BOS / ITZ / Magic", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 4, "⬜CHoCH ✅BOS ⬜ITZ ⬜Magic", text_color=color.yellow, text_size=size.tiny)
-    table.cell(panel, 0, 5, "3. LTF Reversal Kırılım & Mum", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 5, "✅Reversal Kırılım | ✅Reversal Mum", text_color=color.lime, text_size=size.tiny)
-    table.cell(panel, 0, 6, "Mahşerin 4 Atlısı Skoru", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 6, "85/100 (10/25/25/25) -> BEKLE", text_color=color.orange, text_size=size.tiny)
-    table.cell(panel, 0, 7, "Bölge Gücü & Wyckoff", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 7, "0.0/10 | DISTRIBUTION_RANGE", text_color=color.white, text_size=size.tiny)
-    table.cell(panel, 0, 8, "Strong Origin / Weak Target", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 8, "1210.1400 / 1297.4300", text_color=color.yellow, text_size=size.tiny)
-    table.cell(panel, 0, 9, "Giriş / Stop-Loss (1R)", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 9, "1259.8200 / 1249.1200 (LONG)", text_color=color.aqua, text_size=size.tiny)
-    table.cell(panel, 0, 10, "TP1 (3R %50+BE) / TP2 (4R)", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 10, "1291.9200 / 1302.6200", text_color=color.lime, text_size=size.tiny)
-    table.cell(panel, 0, 11, "Anlık Kâr / Zarar Tutarı", text_color=color.silver, text_size=size.tiny)
-    table.cell(panel, 1, 11, "+6.34 USDT (%+2.69)", text_color=color.lime, text_size=size.tiny)
+      - name: Olusan APK Dosyasini Yukle (Artifact)
+        uses: actions/upload-artifact@v4
+        with:
+          name: Alfa-Trade-Bot-Android-APK
+          path: |
+            build/apk/*.apk
+            build/app/outputs/flutter-apk/*.apk
+            **/*.apk
