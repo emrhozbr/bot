@@ -1,9 +1,13 @@
 # ==============================================================================
 # ALFA TRADE CLUB (MAHŞERİN 4 ATLISI + YT PART 1-13) — NATIVE ANDROID APK (FLET)
 # ==============================================================================
+# numpy yerine saf python yamasi
+class _NumpyMock:
+    nan = float('nan')
+    def array(self, x, *a, **kw): return x
+np = _NumpyMock()
 import os, sys, gc, json, ccxt, webbrowser, time, threading, socket
 import pandas as pd
-# import numpy as np
 import requests
 from datetime import datetime
 from pathlib import Path
