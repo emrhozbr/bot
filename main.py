@@ -344,6 +344,26 @@ except ImportError:
     ccxt = _CCXTModule()
     sys.modules["ccxt"] = ccxt
 
+# Masaustu (PC) kutuphaneleri (customtkinter, tkinter, matplotlib) Android'de import edilirse hata vermemesi icin Bos (Mock) Moduller
+class _DummyMod:
+    def __init__(self, *a, **kw): pass
+    def __call__(self, *a, **kw): return self
+    def __getattr__(self, name): return self
+    def pack(self, *a, **kw): return self
+    def grid(self, *a, **kw): return self
+    def configure(self, *a, **kw): return self
+    def set(self, *a, **kw): return self
+    def get(self, *a, **kw): return ""
+
+for _m_name in (
+    "customtkinter", "tkinter", "tkinter.ttk", "tkinter.messagebox",
+    "matplotlib", "matplotlib.pyplot", "matplotlib.gridspec",
+    "matplotlib.patches", "matplotlib.backends", "matplotlib.backends.backend_tkagg"
+):
+    if _m_name not in sys.modules:
+        sys.modules[_m_name] = _DummyMod()
+
+
 _HTTP_SES = requests.Session()
 F, I, R, X, M, N, L, A, G = (float, isinstance, round, Exception, max, min, len, abs, range)
 jC, aR, cR, eD = (('Segoe UI', 10, 'bold'), ('Segoe UI', 11, 'bold'), ('Segoe UI', 12, 'bold'), ('Segoe UI', 13, 'bold'))
@@ -391,55 +411,196 @@ def borsa_kur(b6=PIYASA_MODU,hj=TESTNET_AKTIF):
  cm=aC if b6=='spot'else aw;return(aG,ao)
 def borsa_baglantisi_olustur(dk='future'):
  borsa_kur(dk,TESTNET_AKTIF);return cm
-bd=os.path.join(ANDROID_VERI_DIZINI,'binance_api_config.json');ap=os.path.join(ANDROID_VERI_DIZINI,'islem_gecmisi.json');aN=os.path.join(ANDROID_VERI_DIZINI,'acik_islemler_durum.json');ah=[];
+def _kalici_dizin_hazirla():
+    adaylar = []
+    env_d = os.environ.get("FLET_APP_STORAGE_DATA")
+    if env_d:
+        adaylar.append(env_d)
+    try:
+        ev_d = os.path.join(os.path.expanduser("~"), "alfa_trade_kalici")
+        adaylar.append(ev_d)
+    except Exception:
+        pass
+    adaylar.append(os.path.abspath("."))
+    for d_yol in adaylar:
+        try:
+            os.makedirs(d_yol, exist_ok=True)
+            test_f = os.path.join(d_yol, ".yazma_test")
+            with open(test_f, "w", encoding="utf-8") as tf:
+                tf.write("ok")
+            os.remove(test_f)
+            return d_yol
+        except Exception:
+            continue
+    return ANDROID_VERI_DIZINI
+
+KALICI_VERI_DIZINI = _kalici_dizin_hazirla()
+_ESKI_VERI_DIZINI = ANDROID_VERI_DIZINI
+ANDROID_VERI_DIZINI = KALICI_VERI_DIZINI
+bd = os.path.join(KALICI_VERI_DIZINI, 'binance_api_config.json')
+ap = os.path.join(KALICI_VERI_DIZINI, 'islem_gecmisi.json')
+aN = os.path.join(KALICI_VERI_DIZINI, 'acik_islemler_durum.json')
+_aN_yedek = os.path.join(KALICI_VERI_DIZINI, 'acik_islemler.json')
+ah = []
+_SON_YEREL_KAYIT_TS = 0.0
+_AKTIF_PAGE_REF = None
+_ARKA_PLANDA_MI = [False]
+_SON_TARAMA_KALP_ATISI = [time.time()]
+
 def _api_yukle():
- global API_KEY,API_SECRET,TESTNET_AKTIF,TELEGRAM_TOKEN,TELEGRAM_CHAT_ID,GITHUB_REPO_ADRESI,GITHUB_TOKEN,STOP_BELIRLEME_MODU
- try:
-  if os.path.exists(bd):
-   with open(bd,'r',encoding='utf-8')as f:d=json.load(f)
-   API_KEY=str(d.get('api_key',API_KEY)).strip();API_SECRET=str(d.get('api_secret',API_SECRET)).strip()
-   if'testnet'in d:TESTNET_AKTIF=bool(d['testnet'])
-   TELEGRAM_TOKEN=str(d.get('telegram_token',TELEGRAM_TOKEN)).strip();TELEGRAM_CHAT_ID=str(d.get('telegram_chat_id',TELEGRAM_CHAT_ID)).strip()
-   if'github_repo'in d:GITHUB_REPO_ADRESI=str(d.get('github_repo',GITHUB_REPO_ADRESI)).strip()
-   if'github_token'in d:GITHUB_TOKEN=str(d.get('github_token',GITHUB_TOKEN)).strip()
-   if'stop_modu'in d:STOP_BELIRLEME_MODU=str(d.get('stop_modu',STOP_BELIRLEME_MODU)).strip()
- except X:pass
+    global API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GITHUB_REPO_ADRESI, GITHUB_TOKEN, STOP_BELIRLEME_MODU, PIYASA_MODU, KALDIRAC, MAKS_MARJIN_USDT, ISLEM_BASI_RISK_USDT, RISK_ODUL_ORANI, MIN_CONFLUENCE_SKORU, AKTIF_MTF_SABLONU, AKTIF_RISK_SEVIYESI
+    dosya_adaylari = [bd, os.path.join(_ESKI_VERI_DIZINI, 'binance_api_config.json'), 'binance_api_config.json']
+    for d_yol in dosya_adaylari:
+        try:
+            if os.path.exists(d_yol):
+                with open(d_yol, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                if I(d, dict):
+                    API_KEY = str(d.get('api_key', API_KEY)).strip()
+                    API_SECRET = str(d.get('api_secret', API_SECRET)).strip()
+                    if 'testnet' in d: TESTNET_AKTIF = bool(d['testnet'])
+                    TELEGRAM_TOKEN = str(d.get('telegram_token', TELEGRAM_TOKEN)).strip()
+                    TELEGRAM_CHAT_ID = str(d.get('telegram_chat_id', TELEGRAM_CHAT_ID)).strip()
+                    if 'github_repo' in d and d['github_repo']: GITHUB_REPO_ADRESI = str(d['github_repo']).strip()
+                    if 'github_token' in d and d['github_token']: GITHUB_TOKEN = str(d['github_token']).strip()
+                    if 'stop_modu' in d and d['stop_modu']: STOP_BELIRLEME_MODU = str(d['stop_modu']).strip()
+                    if 'piyasa_modu' in d and d['piyasa_modu']: PIYASA_MODU = str(d['piyasa_modu']).strip()
+                    if 'kaldirac' in d: KALDIRAC = int(F(d['kaldirac']))
+                    if 'maks_marjin' in d: MAKS_MARJIN_USDT = F(d['maks_marjin'])
+                    if 'islem_risk' in d: ISLEM_BASI_RISK_USDT = F(d['islem_risk'])
+                    if 'rr_orani' in d: RISK_ODUL_ORANI = F(d['rr_orani'])
+                    if 'min_skor' in d: MIN_CONFLUENCE_SKORU = int(F(d['min_skor']))
+                    if 'mtf_sablon' in d and d['mtf_sablon']: mtf_sablonu_uygula(str(d['mtf_sablon']))
+                    break
+        except X:
+            pass
+    if _AKTIF_PAGE_REF is not None:
+        try:
+            cs_api = _AKTIF_PAGE_REF.client_storage.get("alfa_api_config")
+            if I(cs_api, dict):
+                if cs_api.get("github_token") and not GITHUB_TOKEN:
+                    GITHUB_TOKEN = str(cs_api["github_token"]).strip()
+                if cs_api.get("github_repo"):
+                    GITHUB_REPO_ADRESI = str(cs_api["github_repo"]).strip()
+        except X:
+            pass
+
 def _ig_yukle():
- global ah
- try:
-  if os.path.exists(ap):
-   with open(ap,'r',encoding='utf-8')as f:
-    d=json.load(f)
-    if I(d,list):ah=d
- except X:pass
+    global ah
+    for d_yol in (ap, os.path.join(_ESKI_VERI_DIZINI, 'islem_gecmisi.json'), 'islem_gecmisi.json'):
+        try:
+            if os.path.exists(d_yol):
+                with open(d_yol, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                if I(d, list) and L(d) > L(ah):
+                    ah = d
+        except X:
+            pass
+
 def _ak_kaydet():
- try:
-  nQ={k:v for k,v in acik_islemler.items()if I(v,dict)}
-  with open(aN,'w',encoding='utf-8')as f:json.dump({'acik_islemler':nQ,'demo_vadeli_bakiye':S,'gerceklesen_pnl':W},f,ensure_ascii=False)
-  if 'bulut_durum_gonder' in globals() and GITHUB_TOKEN:
-   threading.Thread(target=bulut_durum_gonder, daemon=True).start()
- except X:pass
+    global _SON_YEREL_KAYIT_TS
+    try:
+        _SON_YEREL_KAYIT_TS = time.time()
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        payload = {
+            'guncelleme_ts': _SON_YEREL_KAYIT_TS,
+            'acik_islemler': nQ,
+            'demo_vadeli_bakiye': F(S),
+            'gerceklesen_pnl': F(W),
+            'bot_calisiyor': bool(bot_calisiyor)
+        }
+        for hedef_f in (aN, _aN_yedek):
+            try:
+                with open(hedef_f, 'w', encoding='utf-8') as f:
+                    json.dump(payload, f, ensure_ascii=False)
+            except X:
+                pass
+        if _AKTIF_PAGE_REF is not None:
+            try:
+                _AKTIF_PAGE_REF.client_storage.set("alfa_durum_yedek", payload)
+            except X:
+                pass
+        if 'bulut_durum_gonder' in globals() and GITHUB_TOKEN:
+            threading.Thread(target=bulut_durum_gonder, daemon=True).start()
+    except X:
+        pass
+
 def _ak_yukle():
- global acik_islemler,S,W
- try:
-  if os.path.exists(aN):
-   with open(aN,'r',encoding='utf-8')as f:d=json.load(f)
-   if I(d,dict):
-    if I(d.get('acik_islemler'),dict):acik_islemler.update(d['acik_islemler'])
-    if'demo_vadeli_bakiye'in d:S=F(d['demo_vadeli_bakiye'])
-    if'gerceklesen_pnl'in d:W=F(d['gerceklesen_pnl'])
- except X:pass
+    global acik_islemler, S, W, _SON_YEREL_KAYIT_TS
+    aday_dosyalar = [
+        aN,
+        _aN_yedek,
+        os.path.join(_ESKI_VERI_DIZINI, 'acik_islemler_durum.json'),
+        os.path.join(_ESKI_VERI_DIZINI, 'acik_islemler.json'),
+        'acik_islemler_durum.json',
+        'acik_islemler.json'
+    ]
+    en_iyi_veri = None
+    en_yeni_ts = -1.0
+    for d_yol in aday_dosyalar:
+        try:
+            if os.path.exists(d_yol):
+                with open(d_yol, 'r', encoding='utf-8') as f:
+                    d = json.load(f)
+                if I(d, dict):
+                    ts_d = F(d.get('guncelleme_ts') or os.path.getmtime(d_yol) or 0.0)
+                    acik_d = d.get('acik_islemler')
+                    acik_say = L([k for k, v in acik_d.items() if I(v, dict)]) if I(acik_d, dict) else 0
+                    skor_ts = ts_d + (1000000.0 if acik_say > 0 else 0.0)
+                    if skor_ts > en_yeni_ts:
+                        en_yeni_ts = skor_ts
+                        en_iyi_veri = d
+        except X:
+            pass
+    if _AKTIF_PAGE_REF is not None:
+        try:
+            cs_d = _AKTIF_PAGE_REF.client_storage.get("alfa_durum_yedek")
+            if I(cs_d, dict):
+                acik_cs = cs_d.get('acik_islemler')
+                acik_say_cs = L([k for k, v in acik_cs.items() if I(v, dict)]) if I(acik_cs, dict) else 0
+                skor_cs = F(cs_d.get('guncelleme_ts') or 0.0) + (1000000.0 if acik_say_cs > 0 else 0.0)
+                if skor_cs > en_yeni_ts:
+                    en_iyi_veri = cs_d
+        except X:
+            pass
+    if I(en_iyi_veri, dict):
+        if I(en_iyi_veri.get('acik_islemler'), dict):
+            for k_i, v_i in en_iyi_veri['acik_islemler'].items():
+                if I(v_i, dict):
+                    acik_islemler[k_i] = v_i
+        if 'demo_vadeli_bakiye' in en_iyi_veri:
+            S = F(en_iyi_veri['demo_vadeli_bakiye'])
+        if 'gerceklesen_pnl' in en_iyi_veri:
+            W = F(en_iyi_veri['gerceklesen_pnl'])
+        _SON_YEREL_KAYIT_TS = F(en_iyi_veri.get('guncelleme_ts') or time.time())
+        return bool(en_iyi_veri.get('bot_calisiyor', False))
+    return False
+
 def _ig_kaydet(J,jD,bt,lH,lI,Y,fq,eE,dl,lJ=''):
- global ah;k={'tarih':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'sembol':f"{('FUT' if jD=='future' else 'SPOT')}:{J.split(':')[0]}",'yon':bt,'giris':R(F(lH),6),'cikis':R(F(lI),6),'miktar':R(F(Y),6),'pnl_usdt':R(F(fq),2),'pnl_yuzde':R(F(eE),2),'neden':dl,'model':str(lJ)[:80]};ah.insert(0,k)
- try:
-  with open(ap,'w',encoding='utf-8')as f:json.dump(ah[:500],f,ensure_ascii=False)
- except X:pass
- return k
-_api_yukle();_ig_yukle();_ak_yukle();borsa_kur(PIYASA_MODU,TESTNET_AKTIF);
+    global ah
+    k={'tarih':datetime.now().strftime('%Y-%m-%d %H:%M:%S'),'sembol':f"{('FUT' if jD=='future' else 'SPOT')}:{J.split(':')[0]}",'yon':bt,'giris':R(F(lH),6),'cikis':R(F(lI),6),'miktar':R(F(Y),6),'pnl_usdt':R(F(fq),2),'pnl_yuzde':R(F(eE),2),'neden':dl,'model':str(lJ)[:80]}
+    ah.insert(0,k)
+    try:
+        with open(ap,'w',encoding='utf-8')as f:json.dump(ah[:500],f,ensure_ascii=False)
+    except X:pass
+    return k
+
+_ONCEKI_BOT_AKTIF = _ak_yukle()
+_api_yukle()
+_ig_yukle()
+borsa_kur(PIYASA_MODU,TESTNET_AKTIF)
+
 def veri_ist(D):
- return aC if D=='spot'else aw
+    global aC, aw
+    if aC is None or aw is None:
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+    return aC if D=='spot' else aw
+
 def emir_ist(D):
- return aG if D=='spot'else ao
+    global aG, ao
+    if aG is None or ao is None:
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+    return aG if D=='spot' else ao
 def anahtar_yap(J,D):
  return f"{('FUT' if D=='future' else 'SPOT')}:{J.split(':')[0]}"
 def tek_borsa_paritelerini_cek(D):
@@ -3938,13 +4099,19 @@ import re as _re
 GITHUB_REPO_ADRESI = "emrhozbr/bot"
 GITHUB_TOKEN = ""
 BULUT_SENK_AKTIF = True
-AKTIF_OTA_SURUM_BILGISI = "v4.0.5 (Yerleşik)"
+AKTIF_OTA_SURUM_BILGISI = "v4.0.9 (Canlı Motor)"
 _SON_BULUT_OKUMA_TS = 0.0
 _SON_BULUT_YAZMA_HASH = ""
 _BULUT_DOSYA_ADI = "senkron_durum.json"
 _OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
 _OTA_YEREL_UI = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_flet_ui.py')
 _OTA_META_DOSYA = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_meta_bilgi.json')
+
+# Uygulama acildiginda varsa kaydedilmis API/GitHub Token ayarlarini tekrar yukle (ustteki GITHUB_TOKEN="" atamasinin uzerine yazmak icin)
+try:
+    _api_yukle()
+except Exception:
+    pass
 
 def _github_headers(token_str=""):
     tok = (token_str or GITHUB_TOKEN or "").strip()
@@ -3991,8 +4158,8 @@ def _github_dosya_indir(hedef_repo: str, dosya_adi: str, hedef_token: str = ""):
     return None
 
 def _repodaki_guncel_bot_dosyalarini_bul(hedef_repo: str, hedef_token: str = ""):
-    """GitHub reposundaki tum botv*.py dosyalarini tarar ve en yuksek surumden (orn. botv4.0.5.py) baslayarak siralar."""
-    varsayilan = ["botv4.0.6.py", "botv4.0.5.py", "botv4.0.4.py", "botv4.0.3.py", "botv4.0.2.py"]
+    """GitHub reposundaki tum botv*.py dosyalarini tarar ve en yuksek surumden (orn. botv4.0.9.py) baslayarak siralar."""
+    varsayilan = ["botv4.1.0.py", "botv4.0.9.py", "botv4.0.8.py", "botv4.0.7.py", "botv4.0.6.py", "botv4.0.5.py", "botv4.0.4.py", "botv4.0.3.py", "botv4.0.2.py"]
     try:
         hdr = _github_headers(hedef_token)
         url = f"https://api.github.com/repos/{hedef_repo}/contents?t={int(time.time())}"
@@ -4012,27 +4179,36 @@ def _repodaki_guncel_bot_dosyalarini_bul(hedef_repo: str, hedef_token: str = "")
     return varsayilan
 
 def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
-    """botv4.0.X.py (CustomTkinter) veya main.py dosyasindan masaustu GUI kismini otomatik kesip saf strateji motorunu cikarir."""
+    """botv4.0.X.py veya main.py dosyasindan SADECE saf strateji fonksiyonlarini (def indiktorleri_ekle .. tradingview_kopyala_yapistirsiz_html_ac) cikarir.
+    Boylece acik_islemler, bakiye (S, W) ve borsa baglantisi (aC, aw, veri_ist) ASLA sifirlanmaz!"""
+    sabit_atamalar = []
+    for satir_k in kaynak_kod.splitlines()[:120]:
+        if "MTF_SABLONLARI=" in satir_k or "STOP_BELIRLEME_SECENEKLERI=" in satir_k or "def mtf_sablonu_uygula(" in satir_k:
+            if "acik_islemler=" not in satir_k and "aC=None" not in satir_k:
+                sabit_atamalar.append(satir_k)
+    if "def indiktorleri_ekle(df):" in kaynak_kod:
+        kaynak_kod = kaynak_kod[kaynak_kod.index("def indiktorleri_ekle(df):"):]
+    elif "def _f(d,c,i=-2):" in kaynak_kod:
+        kaynak_kod = kaynak_kod[kaynak_kod.index("def _f(d,c,i=-2):"):]
+    for bitis_isareti in (
+        "# BULUT SENKRONİZASYON",
+        "def masaustu_kodunu_mobil_cekirdege_ayikla",
+        "ctk.set_appearance_mode",
+        "class TradingBotGUI",
+        "class AlfaMobileBotEngine",
+        "def main(page"
+    ):
+        if bitis_isareti in kaynak_kod:
+            kaynak_kod = kaynak_kod[:kaynak_kod.index(bitis_isareti)]
     satirlar = kaynak_kod.splitlines()
     cikti = []
-    # Eger kaynak_kod bir Flet main.py dosyasi ise, shim motorunun altindan BULUT SENKRONİZASYON'a kadar olan strateji kismini al
-    if "def main(page: ft.Page):" in kaynak_kod and "def _f(d,c,i=-2):" in kaynak_kod:
-         try:
-             bas = kaynak_kod.index("def _f(d,c,i=-2):")
-             bit = kaynak_kod.index("# ==============================================================================\n# BULUT SENKRONİZASYON") if "# ==============================================================================\n# BULUT SENKRONİZASYON" in kaynak_kod else kaynak_kod.index("def main(page: ft.Page):")
-             kaynak_kod = kaynak_kod[bas:bit]
-             satirlar = kaynak_kod.splitlines()
-         except Exception:
-             pass
+    yasak_kelimeler = (
+        "customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk",
+        "FigureCanvasTkAgg", "import ccxt", "acik_islemler={}", "aC=None",
+        "bd='binance_api_config.json'", "_api_yukle();_ig_yukle();_ak_yukle();"
+    )
     for s in satirlar:
-        st = s.strip()
-        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
-            break
-        if any(yasak in s for yasak in ("import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk", "FigureCanvasTkAgg", "import ccxt")):
-            continue
-        if "bd='binance_api_config.json'" in s:
-            continue
-        if "_api_yukle();_ig_yukle();_ak_yukle();" in s:
+        if any(y in s for y in yasak_kelimeler):
             continue
         cikti.append(s)
     metin = "\n".join(cikti)
@@ -4044,12 +4220,14 @@ def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
     return metin
 
 def masaustu_gui_ozelliklerini_ayikla(kaynak_kod: str) -> dict:
-    """botv4.0.5.py gibi masaustu dosyalarindaki yeni versiyon basligini ve ekstra degiskenleri ayiklar."""
+    """botv4.0.9.py gibi masaustu dosyalarindaki yeni versiyon basligini ve ekstra degiskenleri ayiklar."""
     meta = {"versiyon": "", "baslik": ""}
     try:
-        m_ver = _re.search(r"v\d+\.\d+\.\d+", kaynak_kod)
-        if m_ver:
-            meta["versiyon"] = m_ver.group(0)
+        m_all = _re.findall(r"v\d+\.\d+\.\d+", kaynak_kod)
+        if m_all:
+            # Dosyadaki en yuksek versiyon numarasini sec (orn. v4.0.9)
+            m_all.sort(key=lambda v: tuple(int(x) for x in _re.findall(r"\d+", v)), reverse=True)
+            meta["versiyon"] = m_all[0]
         m_title = _re.search(r"q\.title\(['\"]([^'\"]+)['\"]\)", kaynak_kod)
         if m_title:
             meta["baslik"] = m_title.group(1)
@@ -4058,7 +4236,7 @@ def masaustu_gui_ozelliklerini_ayikla(kaynak_kod: str) -> dict:
     return meta
 
 def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
-    """GitHub'daki en guncel botv4.0.X.py (orn. botv4.0.5.py) VE main.py dosyalarini cekip hem stratejiyi hem Flet gorsel arayuzunu aninda gunceller."""
+    """GitHub'daki en guncel botv4.0.X.py (orn. botv4.0.9.py) VE main.py dosyalarini cekip stratejiyi ve versiyon bilgisini canliya alir."""
     global GITHUB_REPO_ADRESI, GITHUB_TOKEN, AKTIF_OTA_SURUM_BILGISI
     hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
     hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
@@ -4068,14 +4246,13 @@ def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
 
     kaynak_kod = None
     kaynak_adi = ""
-    flet_ui_kod = None
 
     if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
         with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
             kaynak_kod = f.read()
         kaynak_adi = os.path.basename(yerel_dosya_yolu)
     else:
-        # 1) En guncel botv*.py dosyasini (botv4.0.5.py, botv4.0.4.py vb.) bul ve indir
+        # 1) En guncel botv*.py dosyasini (botv4.0.9.py, botv4.0.5.py vb.) bul ve indir
         bot_dosyalari = _repodaki_guncel_bot_dosyalarini_bul(hedef_repo, hedef_token)
         for dosya in bot_dosyalari:
             indirilen = _github_dosya_indir(hedef_repo, dosya, hedef_token)
@@ -4084,27 +4261,20 @@ def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
                 kaynak_adi = dosya
                 break
 
-        # 2) Ayrica main.py dosyasini da kontrol et (Gorsel Flet arayuz degisiklikleri icin)
+        # 2) Ayrica main.py dosyasini da kontrol et
         main_indirilen = _github_dosya_indir(hedef_repo, "main.py", hedef_token)
-        if main_indirilen and len(main_indirilen) > 1000:
-            if not kaynak_kod:
-                kaynak_kod = main_indirilen
-                kaynak_adi = "main.py"
-            if "def main(page: ft.Page):" in main_indirilen:
-                try:
-                    ui_bas = main_indirilen.index("class AlfaMobileBotEngine:") if "class AlfaMobileBotEngine:" in main_indirilen else main_indirilen.index("def main(page: ft.Page):")
-                    ui_bit = main_indirilen.rindex('if __name__ == "__main__":') if 'if __name__ == "__main__":' in main_indirilen else len(main_indirilen)
-                    flet_ui_kod = main_indirilen[ui_bas:ui_bit]
-                except Exception:
-                    pass
+        if main_indirilen and len(main_indirilen) > 1000 and not kaynak_kod:
+            kaynak_kod = main_indirilen
+            kaynak_adi = "main.py"
 
     if not kaynak_kod or len(kaynak_kod) < 500:
-        return (False, "⚠️ GitHub üzerinden botv4.0.5.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan Classic GitHub Token (ghp_...) girin.")
+        return (False, "⚠️ GitHub üzerinden güncel dosya okunamadı! Repo gizli (Private) ise Ayarlar'dan Classic GitHub Token (ghp_...) girin.")
 
     try:
         # Mevcut canli durumu (acik islemler, bakiye, API) yedekle
         yedek_acik = dict(acik_islemler)
         yedek_s, yedek_w = F(S), F(W)
+        yedek_calisiyor = bool(bot_calisiyor)
         yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU, GITHUB_REPO_ADRESI, GITHUB_TOKEN)
 
         cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
@@ -4112,34 +4282,37 @@ def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
             f.write(cekirdek_kod)
         exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
 
-        # Eger main.py icinde guncellenmis Flet gorsel arayuzu varsa onu da kaydet ve canli yukle
-        if flet_ui_kod and len(flet_ui_kod) > 500:
-            with open(_OTA_YEREL_UI, "w", encoding="utf-8") as f:
-                f.write(flet_ui_kod)
-            exec(compile(flet_ui_kod, _OTA_YEREL_UI, "exec"), globals())
+        try:
+            if os.path.exists(_OTA_YEREL_UI):
+                os.remove(_OTA_YEREL_UI)
+        except Exception:
+            pass
 
         meta = masaustu_gui_ozelliklerini_ayikla(kaynak_kod)
         ver_str = meta.get("versiyon") or kaynak_adi.replace("bot", "").replace(".py", "")
-        AKTIF_OTA_SURUM_BILGISI = f"{kaynak_adi} ({datetime.now().strftime('%H:%M:%S')})"
+        AKTIF_OTA_SURUM_BILGISI = f"{ver_str} [{kaynak_adi}] ({datetime.now().strftime('%H:%M:%S')})"
         try:
             with open(_OTA_META_DOSYA, "w", encoding="utf-8") as f:
                 json.dump({"aktif_surum": AKTIF_OTA_SURUM_BILGISI, "kaynak_dosya": kaynak_adi, "baslik": meta.get("baslik", "")}, f, ensure_ascii=False)
         except Exception:
             pass
 
-        # Canli durumu geri yukle
+        # Canli durumu ve borsa baglantisini eksiksiz geri yukle
         acik_islemler.clear()
         acik_islemler.update(yedek_acik)
         globals()["S"] = yedek_s
         globals()["W"] = yedek_w
+        globals()["bot_calisiyor"] = yedek_calisiyor
         (
             globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"],
             globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"],
             globals()["GITHUB_REPO_ADRESI"], globals()["GITHUB_TOKEN"]
         ) = yedek_api
         borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-        return (True, f"✅ OTA Güncelleme Başarılı! Aktif Sürüm: {AKTIF_OTA_SURUM_BILGISI} — Strateji ve Görsel Arayüz canlı olarak yenilendi!")
+        _ak_kaydet()
+        return (True, f"✅ OTA Güncelleme Başarılı! Aktif Sürüm: {AKTIF_OTA_SURUM_BILGISI} — Borsa bağlantısı ve açık pozisyonlar korunarak canlıya alındı!")
     except Exception as ex:
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
         return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
 
 def _kayitli_ota_varsa_yukle():
@@ -4152,20 +4325,28 @@ def _kayitli_ota_varsa_yukle():
                     AKTIF_OTA_SURUM_BILGISI = str(md["aktif_surum"])
         yedek_acik = dict(acik_islemler)
         yedek_s, yedek_w = F(S), F(W)
+        yedek_calisiyor = bool(bot_calisiyor)
         if os.path.exists(_OTA_YEREL_CEKIRDEK):
             with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
                 kod = f.read()
+            # Eger eski ota_cekirdek_motor.py icinde aC=None veya acik_islemler={} varsa temizle
+            if "def indiktorleri_ekle(df):" in kod:
+                kod = kod[kod.index("def indiktorleri_ekle(df):"):]
+                with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+                    f.write(kod)
             if len(kod) > 500:
                 exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
         if os.path.exists(_OTA_YEREL_UI):
-            with open(_OTA_YEREL_UI, "r", encoding="utf-8") as f:
-                ui_kod = f.read()
-            if len(ui_kod) > 500:
-                exec(compile(ui_kod, _OTA_YEREL_UI, "exec"), globals())
+            try:
+                os.remove(_OTA_YEREL_UI)
+            except Exception:
+                pass
         acik_islemler.update(yedek_acik)
         globals()["S"], globals()["W"] = yedek_s, yedek_w
+        globals()["bot_calisiyor"] = yedek_calisiyor
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
     except Exception:
-        pass
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
 
 def bulut_durum_gonder(zorla=False):
     """Acik islemleri, bakiyeyi ve islem gecmisini GitHub uzerindeki senkron_durum.json dosyasina yazar."""
@@ -4176,7 +4357,7 @@ def bulut_durum_gonder(zorla=False):
         nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
         veri = {
             "guncelleme_ts": time.time(),
-            "guncelleyen_cihaz": "ANDROID_MOBIL" if "ANDROID_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "KALICI_VERI_DIZINI" in globals() else "PC_MASAUSTU",
             "acik_islemler": nQ,
             "demo_vadeli_bakiye": F(S),
             "gerceklesen_pnl": F(W),
@@ -4205,50 +4386,55 @@ def bulut_durum_gonder(zorla=False):
         return False
 
 def bulut_durum_cek(zorla=False):
-    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder."""
+    """Diger cihazlarin (PC veya Telefon) actigi/kapattigi islemleri GitHub'dan ve Binance canli pozisyonlardan senkronize eder.
+    Yerel acik pozisyonlari ASLA bos uzak veriyle ezmez!"""
     global _SON_BULUT_OKUMA_TS, S, W, ah
     simdi = time.time()
-    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 15.0):
         return False
     _SON_BULUT_OKUMA_TS = simdi
     degisti = False
-    # 1. GitHub Bulut Senkronizasyonu (Hem Demo/Testnet hem Mainnet icin tum strateji detaylarini esitler)
+    # 1. GitHub Bulut Senkronizasyonu
     if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
         try:
             hdr = _github_headers(GITHUB_TOKEN)
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}?t={int(simdi)}"
             r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
             if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
                 d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
                 if I(d, dict):
+                    uzak_ts = F(d.get("guncelleme_ts") or 0.0)
                     uzak_acik = d.get("acik_islemler")
-                    if I(uzak_acik, dict):
-                        # Uzak cihazda acilan yeni islemleri ekle veya kapananlari senkronize et
-                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
-                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
-                        if mevcut_anahtarlar != uzak_anahtarlar:
-                            acik_islemler.clear()
-                            acik_islemler.update(uzak_acik)
-                            degisti = True
-                        else:
-                            for k_u, v_u in uzak_acik.items():
-                                if I(v_u, dict) and I(acik_islemler.get(k_u), dict):
-                                    if v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
-                                        acik_islemler[k_u].update(v_u)
-                                        degisti = True
-                    if "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01:
+                    mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                    uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)} if I(uzak_acik, dict) else set()
+                    # Eger yerelde acik islem varsa ve uzaktaki liste bossa, yereli KORU ve buluta gonder!
+                    if mevcut_anahtarlar and not uzak_anahtarlar:
+                        if GITHUB_TOKEN:
+                            threading.Thread(target=bulut_durum_gonder, args=(True,), daemon=True).start()
+                    elif I(uzak_acik, dict) and uzak_anahtarlar:
+                        for k_u, v_u in uzak_acik.items():
+                            if I(v_u, dict):
+                                if not I(acik_islemler.get(k_u), dict):
+                                    acik_islemler[k_u] = v_u
+                                    degisti = True
+                                elif v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                    acik_islemler[k_u].update(v_u)
+                                    degisti = True
+                    if not mevcut_anahtarlar and "demo_vadeli_bakiye" in d and A(F(d["demo_vadeli_bakiye"]) - F(S)) > 0.01 and uzak_ts > _SON_YEREL_KAYIT_TS:
                         S = F(d["demo_vadeli_bakiye"])
                         degisti = True
-                    if "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01:
+                    if not mevcut_anahtarlar and "gerceklesen_pnl" in d and A(F(d["gerceklesen_pnl"]) - F(W)) > 0.01 and uzak_ts > _SON_YEREL_KAYIT_TS:
                         W = F(d["gerceklesen_pnl"])
                         degisti = True
                     uzak_ig = d.get("islem_gecmisi")
                     if I(uzak_ig, list) and L(uzak_ig) > L(ah):
                         ah = uzak_ig
                         degisti = True
+                    if degisti:
+                        _ak_kaydet()
         except Exception:
             pass
-    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu (API uzerinden acik vadeli islemleri otomatik tanima)
+    # 2. Gercek Hesap (Mainnet) Borsa Pozisyon Senkronizasyonu
     if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
         try:
             if hasattr(ao, "_signed_req"):
@@ -4394,6 +4580,7 @@ class AlfaMobileBotEngine:
                 self._bot_baslangic_ts = time.time()
                 self._bot_baslangic_w = F(W)
             bot_calisiyor = True
+            _ak_kaydet()
             i9 = "SPOT+VADELİ" if PIYASA_MODU == "her_ikisi" else PIYASA_MODU.upper()
             self.durum_guncelle(f"Çalışıyor ({i9}) 🟢", "#4ade80")
             self.log_yaz(f"🚀 Alfa Trade Club Mobil [{i9} | MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Kaldıraç: {KALDIRAC}x | Min Skor: {MIN_CONFLUENCE_SKORU}] başlatıldı.")
@@ -4403,6 +4590,7 @@ class AlfaMobileBotEngine:
     def botu_durdur(self):
         global bot_calisiyor
         bot_calisiyor = False
+        _ak_kaydet()
         self.durum_guncelle("Durduruldu 🔴", "#f87171")
         self.log_yaz("⏹ Bot kullanıcı tarafından durduruldu.")
         self.arayuzu_guncelle()
@@ -4644,6 +4832,9 @@ class AlfaMobileBotEngine:
     def bot_ana_dongu(self):
         global aQ, V, T, bE
         try:
+            if aC is None or aw is None:
+                borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+            _SON_TARAMA_KALP_ATISI[0] = time.time()
             pariteleri_yukle(self.log_yaz)
             V, T = bakiye_getir()
             if aQ == 0:
@@ -4685,6 +4876,7 @@ class AlfaMobileBotEngine:
                     if not bot_calisiyor:
                         break
                     try:
+                        _SON_TARAMA_KALP_ATISI[0] = time.time()
                         bE = bu
                         O = anahtar_yap(J, b0)
                         bS = veri_cek(J, HTF_PERIYOT, 250, b0)
@@ -4786,11 +4978,27 @@ class AlfaMobileBotEngine:
 # FLET MOBİL ARAYÜZÜ (ANDROID APK & DOKUNMATİK EKRAN UYUMLU)
 # ==============================================================================
 def main(page: ft.Page):
+    global _AKTIF_PAGE_REF
+    _AKTIF_PAGE_REF = page
     page.title = "Alfa Trade Club — Mahşerin 4 Atlısı (Mobil APK)"
     page.theme_mode = ft.ThemeMode.DARK
     page.bgcolor = "#0f172a"
     page.padding = 0
     page.spacing = 0
+
+    def _yasam_dongusu_degisti(e):
+        durum_str = str(getattr(e, "data", "") or getattr(e, "state", "")).lower()
+        if any(x in durum_str for x in ("pause", "inactive", "hidden", "detach")):
+            _ARKA_PLANDA_MI[0] = True
+            _ak_kaydet()
+        elif "resume" in durum_str:
+            _ARKA_PLANDA_MI[0] = False
+            try:
+                _ekrani_yenile("force")
+            except Exception:
+                pass
+
+    page.on_app_lifecycle_state_change = _yasam_dongusu_degisti
 
     yerel_port = yerel_grafik_sunucusu_baslat()
     secili_parite_state = {"anahtar": "FUT:BTC/USDT", "tf": "4h"}
@@ -4900,9 +5108,8 @@ def main(page: ft.Page):
             ft.Row([
                 ft.Column([
                     ft.Text("🚀 ALFA TRADE CLUB (4 ATLI PA)", size=13, weight=ft.FontWeight.BOLD, color="#f8fafc"),
-                    lbl_ota_surum
-                ], spacing=1),
-                lbl_durum_bar
+                    ft.Row([lbl_ota_surum, lbl_durum_bar], spacing=8, wrap=True)
+                ], spacing=2, expand=True),
             ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
             ust_kartlar_row,
             ft.Row([btn_baslat, btn_durdur], spacing=6),
@@ -5233,6 +5440,8 @@ def main(page: ft.Page):
     _son_ui_ts = [0.0]
 
     def _ekrani_yenile(kaynak="all"):
+        if _ARKA_PLANDA_MI[0] and kaynak != "force":
+            return
         simdi = time.time()
         if kaynak != "force" and (simdi - _son_ui_ts[0] < 0.45):
             return
@@ -5398,32 +5607,50 @@ def main(page: ft.Page):
         ], expand=True, spacing=0)
     )
 
-    # Arka plan periyodik yenileme (1.5 saniyede bir canlı pozisyon ve sayaç güncellemesi)
+    # Arka plan periyodik yenileme, Keep-Alive (Uyanık Tutucu) ve Watchdog (Oto-Kurtarma)
     def _periyodik_sayac():
+        sayac_iter = 0
         while not motor._kapaniyor:
             try:
+                sayac_iter += 1
+                # Android arka plan uyanik tutucu (yerel sunucuya hafif loopback ping)
+                if yerel_port and sayac_iter % 3 == 0:
+                    try:
+                        _HTTP_SES.get(f"http://127.0.0.1:{yerel_port}/", timeout=0.5)
+                    except Exception:
+                        pass
+                # Watchdog: Bot calisiyor gorunuyor ama tarama dongusu 75 sn'dir yanit vermiyorsa otomatik yeniden baslat
+                if bot_calisiyor and (time.time() - _SON_TARAMA_KALP_ATISI[0] > 75.0):
+                    _SON_TARAMA_KALP_ATISI[0] = time.time()
+                    threading.Thread(target=motor.bot_ana_dongu, daemon=True).start()
                 if acik_islemler and any(I(v, dict) for v in acik_islemler.values()):
                     motor.pozisyonlari_senkronize_et()
-                else:
+                elif not _ARKA_PLANDA_MI[0]:
                     _ekrani_yenile("force")
             except Exception:
                 pass
-            time.sleep(2.0)
+            time.sleep(2.5)
 
     def _ilk_yukleme():
         global V, T
         try:
             _api_yukle()
+            od_aktif = _ak_yukle()
             _kayitli_ota_varsa_yukle()
+            borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
             bulut_durum_cek(zorla=True)
             V, T = bakiye_getir()
             nQ = sum(1 for v in acik_islemler.values() if I(v, dict))
             if nQ > 0:
-                motor.log_yaz(f"📂 Önceki oturumdan kalan {nQ} açık pozisyon yüklendi.")
-            motor.log_yaz("📱 Alfa Trade Club Flet Mobil APK arayüzü hazır. Başlat butonuna basarak taramayı başlatabilirsiniz.")
+                motor.log_yaz(f"📂 Kalıcı hafızadan {nQ} açık pozisyon ve bakiye ({T:.2f}$) geri yüklendi.")
+            motor.log_yaz("📱 Alfa Trade Club Flet Mobil APK hazır. Arka plan koruyucu ve kendi kendini onaran borsa motoru aktif!")
+            # Eger uygulama arka planda kapanmadan once bot calisiyorsa veya acik islem varsa otomatik devam et!
+            if _ONCEKI_BOT_AKTIF or od_aktif or nQ > 0:
+                motor.log_yaz("🔄 Önceki oturumda tarama/işlem aktif olduğu için bot otomatik olarak yeniden başlatılıyor...")
+                motor.botu_baslat()
             _ekrani_yenile("force")
-        except Exception:
-            pass
+        except Exception as ex:
+            motor.log_yaz(f"⚠️ İlk yükleme uyarısı: {ex}")
 
     threading.Thread(target=_ilk_yukleme, daemon=True).start()
     threading.Thread(target=_periyodik_sayac, daemon=True).start()
