@@ -7581,4 +7581,4 @@ def _boot_main(page: ft.Page):
     globals()["main"](page)
 
 if __name__ == "__main__":
-    ft.app(target=_boot_main)
+    ft.app(target=_boot_main) 
