@@ -1,5 +1,5 @@
 {
-  "guncelleme_ts": 1793882876.8305638,
+  "guncelleme_ts": 1793882885.0772383,
   "guncelleyen_cihaz": "ANDROID_MOBIL",
   "acik_islemler": {
     "FUT:SKHYNIX/USDT": {
@@ -220,9 +220,9 @@
       "simule": true,
       "kaldirac": 10,
       "giris": 0.12026,
-      "anlik": 0.13694,
-      "pnl_usdt": 0.866336,
-      "pnl_yuzde": 138.699,
+      "anlik": 0.14249,
+      "pnl_usdt": 1.154595,
+      "pnl_yuzde": 184.849,
       "marjin_usdt": 0.62,
       "sl": 0.081753,
       "ilk_sl": 0.081753,
@@ -288,9 +288,9 @@
       "simule": true,
       "kaldirac": 5,
       "giris": 231.41,
-      "anlik": 228.1,
-      "pnl_usdt": 17.150259,
-      "pnl_yuzde": 7.152,
+      "anlik": 227.89,
+      "pnl_usdt": 18.238341,
+      "pnl_yuzde": 7.606,
       "marjin_usdt": 239.8,
       "sl": 233.34,
       "ilk_sl": 233.34,
@@ -349,9 +349,9 @@
       "simule": true,
       "kaldirac": 5,
       "giris": 1.3081,
-      "anlik": 1.3217,
-      "pnl_usdt": -0.561322,
-      "pnl_yuzde": -5.198,
+      "anlik": 1.3047,
+      "pnl_usdt": 0.140331,
+      "pnl_yuzde": 1.3,
       "marjin_usdt": 10.8,
       "sl": 1.550385,
       "ilk_sl": 1.550385,
@@ -421,9 +421,21 @@
       "mtf_sablonu": "4h / 1h / 15m (Swing)"
     }
   },
-  "demo_vadeli_bakiye": 952.9769206865831,
-  "gerceklesen_pnl": -47.02307931341679,
+  "demo_vadeli_bakiye": 957.071640546583,
+  "gerceklesen_pnl": -42.92835945341679,
   "islem_gecmisi": [
+    {
+      "tarih": "2026-11-05 15:47:57",
+      "sembol": "FUT:EWY/USDT",
+      "yon": "SHORT",
+      "giris": 157.38,
+      "cikis": 145.56,
+      "miktar": 0.346423,
+      "pnl_usdt": 4.09,
+      "pnl_yuzde": 75.1,
+      "neden": "NİHAİ TAKE-PROFIT",
+      "model": "[Safe:5/8 (98p)] [1.ÖNCELİK #1: QML] Safe:5/8(98p) + 15M_YON:BEAR + HTF_QML + HT"
+    },
     {
       "tarih": "2026-11-05 15:47:56",
       "sembol": "FUT:KORU/USDT",
