@@ -1,6 +1,34 @@
 {
-  "guncelleme_ts": 1793918641.5550313,
+  "guncelleme_ts": 1793918846.466084,
   "guncelleyen_cihaz": "ANDROID_MOBIL",
+  "bot_versiyonu": "v4.0.9",
+  "ayarlar": {
+    "guncelleme_ts": 1793918846.4660382,
+    "bot_versiyonu": "v4.0.9",
+    "piyasa_modu": "her_ikisi",
+    "testnet": true,
+    "kaldirac": 10,
+    "marjin_tipi": "ISOLATED",
+    "maks_marjin": 100.0,
+    "islem_risk": 2.0,
+    "rr_orani": 3.0,
+    "nihai_tp_rr": 4.0,
+    "min_skor": 70,
+    "mtf_sablon": "1h / 15m / 5m (Intraday)",
+    "htf_periyot": "1h",
+    "mtf_periyot": "15m",
+    "ltf_periyot": "5m",
+    "islem_tarzi": "DayTrade",
+    "risk_seviyesi": "Orta Risk (Skor 70+ | 1.0x)",
+    "stop_modu": "LTF Yapıya Göre (Kırılım/Mum & POI)",
+    "parite_limiti": 0,
+    "kysy_htf_atr": 1.85,
+    "kysy_ltf_atr": 1.3,
+    "eqh_tol_atr": 0.3,
+    "sfp_min_atr": 0.12,
+    "ikincil_bolge_aktif": true,
+    "birincil_olcek_carpani": 5.0
+  },
   "acik_islemler": {
     "FUT:BANK/USDT": {
       "sembol": "BANK/USDT",
@@ -70,8 +98,8 @@
       "mtf_sablonu": "4h / 1h / 15m (Swing)"
     }
   },
-  "demo_vadeli_bakiye": 1142.464648551391,
-  "gerceklesen_pnl": 142.46464855139126,
+  "demo_vadeli_bakiye": 1000.0,
+  "gerceklesen_pnl": 0.0,
   "islem_gecmisi": [
     {
       "tarih": "2026-11-06 01:44:01",
