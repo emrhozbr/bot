@@ -1,5 +1,5 @@
 {
-  "guncelleme_ts": 1793860597.3764162,
+  "guncelleme_ts": 1793860606.7268665,
   "guncelleyen_cihaz": "ANDROID_MOBIL",
   "acik_islemler": {
     "FUT:SOXL/USDT": {
@@ -9,9 +9,9 @@
       "simule": true,
       "kaldirac": 10,
       "giris": 77.14,
-      "anlik": 60.58,
-      "pnl_usdt": 5.538823,
-      "pnl_yuzde": 214.675,
+      "anlik": 60.61,
+      "pnl_usdt": 5.528789,
+      "pnl_yuzde": 214.286,
       "marjin_usdt": 2.58,
       "sl": 83.119607,
       "ilk_sl": 83.119607,
@@ -82,7 +82,7 @@
       "simule": true,
       "kaldirac": 10,
       "giris": 11.49,
-      "anlik": 9.26,
+      "anlik": 9.27,
       "pnl_usdt": 3.645918,
       "pnl_yuzde": 194.082,
       "marjin_usdt": 1.88,
@@ -226,9 +226,9 @@
       "simule": true,
       "kaldirac": 10,
       "giris": 157.38,
-      "anlik": 146.83,
-      "pnl_usdt": 3.654763,
-      "pnl_yuzde": 67.035,
+      "anlik": 146.85,
+      "pnl_usdt": 3.647834,
+      "pnl_yuzde": 66.908,
       "marjin_usdt": 5.45,
       "sl": 157.38,
       "ilk_sl": 160.266643,
@@ -290,9 +290,9 @@
       "simule": true,
       "kaldirac": 10,
       "giris": 0.12026,
-      "anlik": 0.12887,
-      "pnl_usdt": 0.447191,
-      "pnl_yuzde": 71.595,
+      "anlik": 0.12882,
+      "pnl_usdt": 0.444594,
+      "pnl_yuzde": 71.179,
       "marjin_usdt": 0.62,
       "sl": 0.081753,
       "ilk_sl": 0.081753,
@@ -413,9 +413,21 @@
       "mtf_sablonu": "4h / 1h / 15m (Swing)"
     }
   },
-  "demo_vadeli_bakiye": 1001.0503329249212,
-  "gerceklesen_pnl": 1.0503329249211064,
+  "demo_vadeli_bakiye": 1005.9242111649212,
+  "gerceklesen_pnl": 5.924211164921111,
   "islem_gecmisi": [
+    {
+      "tarih": "2026-11-05 09:36:38",
+      "sembol": "FUT:SAMSUNG/USDT",
+      "yon": "SHORT",
+      "giris": 169.36,
+      "cikis": 150.88,
+      "miktar": 0.263738,
+      "pnl_usdt": 4.87,
+      "pnl_yuzde": 109.12,
+      "neden": "NİHAİ TAKE-PROFIT",
+      "model": "[Safe:4/8 (90p)] [1.ÖNCELİK #1: QML] Safe:4/8(90p) + 15M_YON:BEAR + HTF_QML + HT"
+    },
     {
       "tarih": "2026-11-05 09:36:37",
       "sembol": "FUT:SKHYNIX/USDT",
