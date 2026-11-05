@@ -5014,9 +5014,8 @@ periyotDegistir(aktifTf);
 # ==============================================================================
 import base64 as _b64
 
-if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI:
-    GITHUB_REPO_ADRESI = "emrhozbr/bot"
-if "GITHUB_TOKEN" not in globals():
+if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI: GITHUB_REPO_ADRESI = "emrhozbr/bot"
+if "GITHUB_TOKEN" not in globals(): GITHUB_TOKEN = ""
 BULUT_SENK_AKTIF = True
 _SON_BULUT_OKUMA_TS = 0.0
 _SON_BULUT_YAZMA_HASH = ""
@@ -5794,10 +5793,8 @@ import base64 as _b64
 import re as _re
 import re
 
-if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI:
-    GITHUB_REPO_ADRESI = "emrhozbr/bot"
-if "GITHUB_TOKEN" not in globals():
-    GITHUB_TOKEN = ""
+if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI: GITHUB_REPO_ADRESI = "emrhozbr/bot"
+if "GITHUB_TOKEN" not in globals(): GITHUB_TOKEN = ""
 BULUT_SENK_AKTIF = True
 AKTIF_OTA_SURUM_BILGISI = "v4.0.9 (Canlı Motor)"
 _SON_BULUT_OKUMA_TS = 0.0
@@ -5908,7 +5905,7 @@ def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
         "import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk",
         "FigureCanvasTkAgg", "import ccxt", "acik_islemler={}", "aC=None",
         "bd='binance_api_config.json'", "_api_yukle();_ig_yukle();_ak_yukle();",
-        "GITHUB_REPO_ADRESI =", "GITHUB_TOKEN ="
+        "__YASAK_YOK__"
     )
     cikti = list(ek_ust)
     for s in ana_govde.splitlines():
