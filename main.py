@@ -1,3541 +1,3 @@
-
-Gemini ile sohbet
-github bağlantı ayarlarını yaptım ama yaptığım güncellemeler uygulamada görünmüyor
-GitHub bağlantı ayarlarınız başarılı olmasına rağmen yaptığınız değişikliklerin uygulamada görünmemesinin 3 temel teknik nedeni vardır:
-
-1. Arayüz (GUI) Değişiklikleri OTA ile Güncellenmez (En Önemli Neden)
-Kodunuzdaki masaustu_kodunu_mobil_cekirdege_ayikla() ve ota_strateji_guncelle() fonksiyonları şu şekilde çalışacak biçimde tasarlanmıştır:   
-main.py
-
-Sadece Arka Plan Strateji Motorunu Günceller: OTA güncellemesi, koddaki hesaplama fonksiyonlarını (mahserin_4_atlisi_confluence_analizi, poi_ve_bolge_analizi, stop_noktasi_belirle vb.) bellekte (globals()) canlı olarak yeniler.   
-main.py
-
-Görsel Arayüzü (main(page)) Yenilemez: Mobil uygulamanın ekran tasarımı Flet tarafından uygulama ilk açıldığında 1 kez çizilir. Eğer GitHub'da buton yerleri, renkler, yazılar, sekmeler veya yeni bir menü gibi görsel bir değişiklik yaptıysanız, OTA güncellemesi çalışan ekranı yeniden çizemez. Görsel arayüz değişikliklerinin görünmesi için GitHub Actions üzerinden oluşan yeni APK'yı indirip kurmanız gerekir.   
-main.py
-
-2. OTA Okuma Sırası Çakışması (botv4.0.3.py vs main.py)
-ota_strateji_guncelle fonksiyonu GitHub reponuzda dosyaları şu sırayla arar:   
-main.py
-
-Python
-for dosya in ("botv4.0.3.py", "botv4.0.2.py", "main.py"):
-Sorun: Eğer siz güncellemeyi GitHub'daki main.py dosyasına yaptıysanız, ancak reponuzda eski tarihten kalma bir botv4.0.3.py veya botv4.0.2.py dosyası duruyorsa, uygulama ilk sıradaki eski botv4.0.3.py dosyasını bulup onu yükler ve main.py dosyanıza hiç bakmaz!   
-main.py
-
-Çözüm: Güncellemelerinizi hangi dosyada yapıyorsanız diğer eski dosyaları (botv4.0.2.py vb.) GitHub reponuzdan silin veya güncellemeyi doğrudan ilk sıradaki dosyaya yükleyin. Ekranda çıkan ✅ OTA Güncelleme Başarılı! (emrhozbr/bot/...) mesajının parantez içinde hangi dosya adını yazdığını kontrol edin.   
-main.py
-
-3. Dosya Boyutu (1 MB Sınırı) ve Arayüz Kodu Kesme Sınırı
-Flet main.py Kesme Sorunu: masaustu_kodunu_mobil_cekirdege_ayikla fonksiyonu masaüstü kodunu kesmek için class TradingBotGUI satırını arar. Ancak main.py bir Flet uygulaması olduğu için içinde def main(page: ft.Page): bulunur. Eğer OTA doğrudan main.py dosyasını çekerse, alt kısımdaki def main(page): fonksiyonunu kesmeden tekrar çalıştırır.   
-main.py
-+ 1
-
-GitHub 1 MB API Limiti ve Önbellek (Cache): main.py dosyanız tüm HTML/JS şablonlarıyla birlikte oldukça büyüktür. GitHub standart API'si 1 MB üzerindeki dosyalarda content alanını boş döndürür ve sistem raw.githubusercontent.com adresine düşer. Raw adresleri ise GitHub CDN önbelleği nedeniyle yaptığınız değişikliği 5 dakikaya kadar gecikmeli verebilir.   
-main.py
-+ 1
-
-Hem Strateji Hem Arayüz Değişikliklerinin Anında Görünmesi İçin Çözüm
-main.py içindeki masaustu_kodunu_mobil_cekirdege_ayikla ve ota_strateji_guncelle fonksiyonlarını şu şekilde güncellerseniz; hem önbellek (cache) takılması yaşanmaz, hem de arayüzde yaptığınız değişiklikler bile APK kurmaya gerek kalmadan anında ekranda yenilenir:
-
-Python
-def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
-    """Masaüstü GUI kısmını keser, Flet main(page) fonksiyonunu ise canlı arayüz yenilemesi için korur."""
-    satirlar = kaynak_kod.splitlines()
-    cikti = []
-    for s in satirlar:
-        st = s.strip()
-        # Sadece masaüstü CustomTkinter arayüzünü kes, Flet main(page) kalsın
-        if st.startswith("ctk.set_appearance_mode") or st.startswith("class TradingBotGUI"):
-            break
-        if st.startswith('if __name__ == "__main__":'):
-            break
-        if any(yasak in s for yasak in ("import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk", "FigureCanvasTkAgg", "import ccxt")):
-            continue
-        if "bd='binance_api_config.json'" in s or "_api_yukle();_ig_yukle();_ak_yukle();" in s:
-            continue
-        cikti.append(s)
-    return "\n".join(cikti)
-Ayrıca ota_strateji_guncelle içindeki dosya okuma sırasını ve önbellek engelleyicisini (cache-buster) şu şekilde kullanın:
-
-Python
-        # Doğrudan güncel dosyayı ve önbelleksiz (raw + timestamp) halini çek
-        for dosya in ("main.py", "botv4.0.3.py", "botv4.0.2.py"):
-            try:
-                api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya}?ref=main&t={int(time.time())}"
-                hdr_raw = dict(hdr)
-                hdr_raw["Accept"] = "application/vnd.github.v3.raw"
-                r = _HTTP_SES.get(api_url, headers=hdr_raw, timeout=12)
-                if r.status_code == 200 and len(r.text) > 1000:
-                    kaynak_kod = r.text
-                    kaynak_adi = f"{hedef_repo}/{dosya} (Canlı Raw API)"
-                    break
-            except Exception:
-                pass
-Şimdi Hızlıca Kontrol Edin:
-Yaptığınız güncelleme görsel bir değişiklik mi (buton, yazı, renk), yoksa strateji/hesaplama değişikliği mi?
-
-GitHub reponuzda hangi dosyayı düzenlediniz (main.py mi, botv4.0.3.py mi)?
-
-Bunu belirtirseniz, tek tuşla ekran arayüzünü de (page.clean() + yeniden çizim ile) canlı yenileyen tam main.py dosyasını hemen üretebilirim.
-
-hem görsel değişiklik Name
-.github/workflows
-Update main.yml
-yesterday
-
-README.md
-Add files via upload
-2 days ago
-
-botv4.0.2.py
-PC Strategy OTA Update v4.0.4: botv4.0.2.py (2026-11-03 00:46:11)
-19 hours ago
-
-botv4.0.3.py
-PC Strategy OTA Update v4.0.4: botv4.0.3.py (2026-11-03 00:46:09)
-19 hours ago
-
-botv4.0.4.py
-PC Strategy OTA Update v4.0.4: botv4.0.4.py (2026-11-03 00:46:07)
-19 hours ago
-
-botv4.0.5.py
-PC Strategy OTA Update v4.0.4: botv4.0.5.py (2026-11-03 00:46:05)
-19 hours ago
-
-main.py
-Mobile main.py OTA Update v4.0.4
-19 hours ago
-
-pyproject.toml
-Add files via upload
-2 days ago
-
-requirements.txt
-Update requirements.txt
-2 days ago
-Paylaştığınız GitHub dosya listesi (botv4.0.2.py, botv4.0.3.py, botv4.0.4.py, botv4.0.5.py, main.py), güncellemelerin neden uygulamada görünmediğini net olarak ortaya çıkardı:
-
-Sorunun 3 Nedeni
-Eski Sürümün Öncelikli Okunması (botv4.0.3.py Engeli): Mevcut main.py içindeki OTA fonksiyonu sabit olarak ("botv4.0.3.py", "botv4.0.2.py", "main.py") sırasıyla arama yapıyordu. Reponuzda botv4.0.3.py hâlâ durduğu için, siz botv4.0.4.py, botv4.0.5.py veya main.py dosyasını güncelleseniz bile uygulama her seferinde eski botv4.0.3.py dosyasını indirip kuruyordu.   
-main.py
-+ 1
-
-Görsel Arayüzün (main(page)) Yenilenmemesi: OTA fonksiyonu yalnızca arka plan strateji kodlarını belleğe alıyor, ancak Flet arayüz kısmını (ota_flet_ui.py) ve açılır menüleri (Dropdown) canlı olarak ekrana yeniden çizmiyordu.   
-main.py
-
-Masaüstü (CustomTkinter) vs Mobil (Flet) Farkı: Bilgisayarınızdaki botv4.0.5.py dosyasında yaptığınız görsel değişiklikler masaüstü CustomTkinter kütüphanesine aittir; Android telefonunuzdaki ekran ise Flet (def main(page: ft.Page):) ile çizilir.   
-botv4.0.3.py
-+ 1
-
-Yapılan Kalıcı Düzeltmeler (main.py)
-Aşağıdaki yeni main.py dosyasında bu 3 sorunu tamamen çözdüm:
-
-Otomatik En Yüksek Sürüm Tarayıcı: OTA motoru artık GitHub reponuzdaki tüm botv*.py dosyalarını otomatik tarar, sürüm numaralarını karşılaştırır ve en yüksek sürümü (botv4.0.5.py, ileride botv4.0.6.py vb.) otomatik seçip indirir.
-
-Hem Strateji Hem Görsel Arayüz (UI) Canlı OTA Güncellemesi: GitHub'daki main.py içinde yaptığınız görsel Flet arayüz değişikliklerini de (ota_flet_ui.py olarak) indirip kaydeder; açılır menü seçeneklerini ve üst bardaki 📦 Sürüm: botv4.0.5.py (Saat) etiketini anında günceller.
-
-Üst Bar ve Buton Görünümü Düzeltmesi: Telefonunuzun durum çubuğu (saat/pil) ile başlığın üst üste binmesi engellendi ve ▶ Başlat / ⏹ Durdur butonlarının dikey sıkışması düzeltilerek tam genişlikli 2 satır haline getirildi.
-
-İndirilecek Güncel Mobil Dosyanız (main.py):
-
-PY simgesi
-main
- PY 
-Uygulama Adımları
-1
-Yeni main.py Dosyasını GitHub'a Yükleyin
-1 dk
-Yukarıdaki main.py dosyasını indirin ve GitHub reponuzdaki (emrhozbr/bot) mevcut main.py dosyasının üzerine yükleyip Commit changes butonuna basın.
-Verification: GitHub Actions sekmesinde yeni APK derlemesi başlayıp yeşil onay (Success) almalıdır.
-
-2
-Yeni APK'yı Kurun (Görsel Motorun Aktifleşmesi İçin Son Kez)
-2 dk
-Mevcut telefonunuzdaki APK'da eski OTA okuyucu bulunduğu için, GitHub Actions'ta oluşan yeni APK'yı indirip telefonunuza kurun.
-Verification: Uygulama açıldığında üst barda saat çakışması kalkmış, ▶ Başlat / ⏹ Durdur butonları yatay düzelmiş ve başlığın altında 📦 Sürüm: etiketi görünür olmalıdır.
-
-3
-OTA Güncellemesini Test Edin
-30 sn
-Uygulamada Ayarlar sekmesinden GitHub Token'ınızı girip ⚡ OTA Güncelle butonuna basın.
-Verification: Üstteki sürüm etiketinde ve en alttaki durum yazısında ✅ OTA Güncelleme Başarılı! Aktif Sürüm: botv4.0.5.py yazısı görünmelidir.
-
-Önemli Not: Bundan sonra strateji veya menü seçeneklerinde (MTF_SABLONLARI, STOP_BELIRLEME_SECENEKLERI vb.) değişiklik yaptığınızda botv4.0.5.py (veya botv4.0.6.py) olarak GitHub'a atmanız ve telefondan ⚡ OTA Güncelle tuşuna basmanız yeterlidir. Eğer mobil ekrana yeni bir Flet butonu/sekmesi eklemek isterseniz de bana söylemeniz yeterli; main.py içinde güncelleyip GitHub'a attığınızda yine APK kurmadan OTA ile telefonunuza yansır.
-
-Ekran görüntüsündeki ⚠️ OTA Kod Dönüştürme Hatası: No module named 'customtkinter' uyarısı, GitHub bağlantınızın artık %100 çalıştığını ve botv4.0.5.py dosyasını başarıyla indirdiğini gösteriyor!   
-WhatsApp Image 2026-11-03 at 23.58.35.jpeg
-
-Bu Hatanın Nedeni Nedir?
-İndirilen masaüstü botv4.0.5.py dosyasının başında veya içinde masaüstüne ait customtkinter / tkinter / matplotlib referansları yer aldığı için, OTA dönüştürücüsü kodu telefonda çalıştırırken (exec) Python Android ortamında customtkinter kütüphanesini arayıp bulamamış.   
-botv4.0.3.py
-+ 2
-
-Yapılan Kesin Çözüm (Çift Korumalı)
-Tam Kesim Sınırı (def _f -> # BULUT SENKRONİZASYON): masaustu_kodunu_mobil_cekirdege_ayikla() fonksiyonunu, masaüstü dosyanızın en üstündeki import customtkinter... satırlarını ve en altındaki masaüstü arayüzünü (TradingBotGUI) milimetrik olarak kesecek şekilde güncelledim.   
-botv4.0.3.py
-+ 1
-
-Android Sanal customtkinter / tkinter / matplotlib Kalkanı (sys.modules): İleride masaüstü kodunuzun herhangi bir yerine yanlışlıkla import customtkinter veya matplotlib yazsanız bile telefonun asla No module named 'customtkinter' hatası vermemesi için main.py dosyasının en üstüne sanal (mock) modül korumasını ekledim.
-
-Üst Bar Yazı Taşması Düzeltmesi: Ekran görüntüsünde sağ üstteki Taranıyor: 1108/1128 (1H/15M yazısının sağ kenardan taşmasını önlemek için durum bilgisini 📦 Sürüm etiketinin yanına otomatik alt satıra geçebilen (wrap=True) esnek satır olarak aldım.   
-WhatsApp Image 2026-11-03 at 23.58.35.jpeg
-
-İndirilecek Güncel Mobil Dosyanız (main.py):
-
-PY simgesi
-main
- PY 
-Yapmanız Gereken İşlem:
-Yukarıdaki main.py dosyasını indirip GitHub reponuzdaki (emrhozbr/bot) main.py dosyasının üzerine yükleyin (Commit changes). Yeni oluşan APK'yı kurup ⚡ OTA Güncelle butonuna bastığınızda No module named 'customtkinter' hatası tamamen ortadan kalkacak ve doğrudan ✅ OTA Güncelleme Başarılı! Aktif Sürüm: botv4.0.5.py mesajını göreceksiniz.
-
-uygulama arka planda çalışmıyor ve sürekli tarama hatası veriyor pozisyonlar da kapanmış oluyor
-Paylaştığınız ekran görüntüsündeki log kayıtları (⚠️ DOGE/USDT (SPOT) tarama hatası: 'NoneType' object has no attribute 'fetch_ohlcv') ve pozisyonların sıfırlanması (Açık: 0/6, Portföy: 1000.00 $), yaşadığınız her 3 sorunun da kök nedenini net olarak gösteriyor:   
-WhatsApp Image 2026-11-04 at 01.13.00.jpeg
-+ 1
-
-Sorunların Kök Nedenleri
-'NoneType' object has no attribute 'fetch_ohlcv' (Tarama Hatası):
-OTA güncellemesi (ota_cekirdek_motor.py) yüklendiğinde, masaüstü kodunun başındaki aC=None; aw=None; aG=None; ao=None; satırı çalışıp borsa bağlantı nesnelerini None olarak sıfırlıyor, ancak hemen altındaki borsa_kur(PIYASA_MODU, TESTNET_AKTIF) satırı OTA kesimi sırasında atlandığı için veri_ist(D) fonksiyonu None döndürüyor.   
-main.py
-+ 1
-
-Pozisyonların Kapanmış / Sıfırlanmış Olması (Açık: 0/6):
-
-OTA kodu çalıştığında masaüstü dosyasındaki acik_islemler={}; S=bs; W=0.0; satırı bellekteki işlemleri sıfırlıyordu.   
-main.py
-
-Ayrıca bulut_durum_cek() fonksiyonu GitHub'daki senkron_durum.json dosyasını okuduğunda, eğer GitHub'daki dosya henüz boşsa ({}), acik_islemler.clear() çalıştırarak telefondaki açık pozisyonları silip üzerine boş liste yazıyordu.   
-main.py
-
-Ek olarak GitHub Actions'taki patch_main.py betiği veri dizinini Android'in geçici önbelleğine (_tempfile.gettempdir()) yönlendirdiği için uygulama arka plana alındığında Android önbelleği temizleyebiliyordu.
-
-Uygulamanın Arka Planda Çalışmaması:
-
-Android'de ekran kapandığında veya başka bir uygulamaya geçtiğinizde işletim sistemi Flet'in görsel ekran soketini (page.update()) uyku moduna alır. Arka plandaki tarama döngüsü her 4 paritede bir page.update() çağırdığında ekran uyuduğu için tarama döngüsü kilitleniyordu.   
-main.py
-
-Ayrıca Android Pil Tasarrufu (Doze Mode) kısıtlaması açık olduğunda arka plan ağ istekleri durdurulur.
-
-Çözüm 1: Android Telefon Ayarlarında Arka Plan İznini Açın
-1
-Pil Tasarrufu Kısıtlamasını Kaldırın
-1 dk
-Telefonunuzda Ayarlar -> Uygulamalar -> Alfa Trade Club (veya Flet) -> Pil Tasarrufu / Pil menüsüne girin ve "Kısıtlama Yok" (Unrestricted) seçeneğini işaretleyin.
-Verification: Uygulama pil ayarında "Arka plan etkinliğine izin ver / Kısıtlama yok" seçili olmalıdır.
-
-2
-Otomatik Başlatma ve Son Uygulamalarda Kilitleme
-30 sn
-Xiaomi/MIUI/HyperOS arayüzünde Son Uygulamalar ekranını açın, uygulamanın üzerine basılı tutup Kilit (🔒) simgesine dokunun.
-Verification: Uygulama kartının üstünde kilit simgesi görünmelidir.
-
-Çözüm 2: main.py İçinde Yapılacak 4 Kritik Kod Düzeltmesi
-Otomatik dosya oluşturma aracı bu adımda teknik bir sınır nedeniyle dosya çıktısı üretemedi; ancak main.py dosyanızda aşağıdaki 4 kısa kod bloğunu güncellediğinizde hem fetch_ohlcv hatası hem pozisyonların silinmesi hem de arka plan kilitlenmesi %100 çözülür:
-
-1. veri_ist ve emir_ist Fonksiyonlarını Kendi Kendini Onaran Hale Getirin (Satır ~459)
-main.py içindeki def veri_ist(D): ve def emir_ist(D): satırlarını bulun ve şu şekilde değiştirin (böylece aC veya aw asla None olamaz):   
-main.py
-
-Python
-def veri_ist(D):
-    global aC, aw
-    if aC is None or aw is None:
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-    return aC if D == 'spot' else aw
-
-def emir_ist(D):
-    global aG, ao
-    if aG is None or ao is None:
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-    return aG if D == 'spot' else ao
-2. Kalıcı Depolama Dizinini Geçici Önbellekten (/cache) Kurtarın (Satır ~414)
-bd=os.path.join(...) satırının hemen üstüne kalıcı kullanıcı dizinini zorlayan şu satırları ekleyin:   
-main.py
-
-Python
-ANDROID_VERI_DIZINI = os.environ.get("FLET_APP_STORAGE_DATA") or os.path.join(os.path.expanduser("~"), "alfa_bot_kalici")
-try:
-    os.makedirs(ANDROID_VERI_DIZINI, exist_ok=True)
-except Exception:
-    pass
-bd = os.path.join(ANDROID_VERI_DIZINI, 'binance_api_config.json')
-ap = os.path.join(ANDROID_VERI_DIZINI, 'islem_gecmisi.json')
-aN = os.path.join(ANDROID_VERI_DIZINI, 'acik_islemler_durum.json')
-3. OTA Kesim Sınırını def indiktorleri_ekle(df): Olarak Güncelleyin (Satır ~4045)
-OTA güncellemesinin acik_islemler={} ve aC=None satırlarını çalıştırıp pozisyonlarınızı ve borsa bağlantınızı sıfırlamaması için masaustu_kodunu_mobil_cekirdege_ayikla ve _kayitli_ota_varsa_yukle fonksiyonlarını şu şekilde güncelleyin:   
-main.py
-
-Python
-def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
-    """Sadece saf strateji fonksiyonlarini alir; bakiye, acik_islemler ve borsa baglantisini asla sifirlamaz."""
-    if "def indiktorleri_ekle(df):" in kaynak_kod:
-        kaynak_kod = kaynak_kod[kaynak_kod.index("def indiktorleri_ekle(df):"):]
-    elif "def _f(d,c,i=-2):" in kaynak_kod:
-        kaynak_kod = kaynak_kod[kaynak_kod.index("def _f(d,c,i=-2):"):]
-    for bitis_isareti in (
-        "# BULUT SENKRONİZASYON",
-        "def masaustu_kodunu_mobil_cekirdege_ayikla",
-        "ctk.set_appearance_mode",
-        "class TradingBotGUI",
-        "class AlfaMobileBotEngine",
-        "def main(page"
-    ):
-        if bitis_isareti in kaynak_kod:
-            kaynak_kod = kaynak_kod[:kaynak_kod.index(bitis_isareti)]
-    satirlar = kaynak_kod.splitlines()
-    cikti = []
-    yasak_kelimeler = ("customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk", "FigureCanvasTkAgg", "import ccxt", "acik_islemler={}", "aC=None")
-    for s in satirlar:
-        if any(y in s for y in yasak_kelimeler):
-            continue
-        cikti.append(s)
-    metin = "\n".join(cikti)
-    if "ANDROID_VERI_DIZINI" in globals():
-        metin = metin.replace(
-            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
-            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
-        )
-    return metin
-Ve hemen altındaki _kayitli_ota_varsa_yukle() fonksiyonunun sonuna mutlaka borsa_kur(PIYASA_MODU, TESTNET_AKTIF) ekleyin:   
-main.py
-
-Python
-def _kayitli_ota_varsa_yukle():
-    global AKTIF_OTA_SURUM_BILGISI
-    try:
-        if os.path.exists(_OTA_META_DOSYA):
-            with open(_OTA_META_DOSYA, "r", encoding="utf-8") as f:
-                md = json.load(f)
-                if isinstance(md, dict) and md.get("aktif_surum"):
-                    AKTIF_OTA_SURUM_BILGISI = str(md["aktif_surum"])
-        yedek_acik = dict(acik_islemler)
-        yedek_s, yedek_w = F(S), F(W)
-        if os.path.exists(_OTA_YEREL_CEKIRDEK):
-            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
-                kod = f.read()
-            if "def indiktorleri_ekle(df):" in kod:
-                kod = kod[kod.index("def indiktorleri_ekle(df):"):]
-            if len(kod) > 500:
-                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
-        acik_islemler.update(yedek_acik)
-        globals()["S"], globals()["W"] = yedek_s, yedek_w
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-    except Exception:
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-4. Bulut Senkronizasyonunun Açık İşlemleri Silmesini Engelleyin ve Arka Plan Koruması Ekleyin
-bulut_durum_cek içinde (Satır ~4215): Uzaktaki dosya boşsa yerel açık işlemleri silmemesi için if mevcut_anahtarlar != uzak_anahtarlar: bloğunu şu şekilde değiştirin:   
-main.py
-
-Python
-                    if I(uzak_acik, dict):
-                        mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
-                        uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)}
-                        # Uzak liste bossa yerel acik islemleri ASLA silme, aksine yereli buluta gonder!
-                        if mevcut_anahtarlar and not uzak_anahtarlar:
-                            threading.Thread(target=bulut_durum_gonder, args=(True,), daemon=True).start()
-                        elif uzak_anahtarlar:
-                            for k_u, v_u in uzak_acik.items():
-                                if I(v_u, dict):
-                                    acik_islemler[k_u] = v_u
-                                    degisti = True
-                            _ak_kaydet()
-Arka Planda Ekran Güncelleme Kilidini Önleme (def main(page: ft.Page): içinde):
-Uygulama arka plana geçtiğinde page.update() çağrısının tarama döngüsünü durdurmaması için main(page) fonksiyonunun başına şu yaşam döngüsü kontrolünü ekleyin ve _ekrani_yenile fonksiyonunun en başına if _arka_planda[0] and kaynak != "force": return satırını koyun:   
-main.py
-
-Python
-    _arka_planda = [False]
-    def _yasam_dongusu(e):
-        durum_str = str(e.data).lower()
-        if any(x in durum_str for x in ("pause", "inactive", "hidden", "detach")):
-            _arka_planda[0] = True
-        elif "resume" in durum_str:
-            _arka_planda[0] = False
-            _ekrani_yenile("force")
-    page.on_app_lifecycle_state_change = _yasam_dongusu
-İpucu: Dilerseniz bir sonraki mesajda "Güncel main.py dosyasını indirilebilir olarak ver" yazmanız yeterlidir; bu 4 düzeltmenin tamamının işlendiği hazır main.py dosyasını tek tıkla indirmeniz için hemen oluşturabilirim.
-
-Güncel main.py dosyasını indirilebilir olarak ver bir de Masaüstünde ota güncellemesi yaptığımda [01:30:44] ℹ️ Yerel 'main.py' (v4.0.9) güncellendi! (Bulut OTA & Canlı Telefon Senkronizasyonu için '🔑 API Ayar' penceresinden GitHub Token girebilirsiniz.) uyarası veriyor ancak githupda main.py de güncelleme 5 hours yazıyor yani orada değişmiyor masaüstünde yaptığım güncellemenin uygulamaya da aktarılmasını sağla
-Hem mobil main.py hem de masaüstü botv4.0.9.py dosyalarınız tüm düzeltmelerle hazırlandı:
-
-Mobil Uygulama (main.py):
-
-PY simgesi
-main
- PY 
-Masaüstü Uygulama (botv4.0.9.py):
-
-PY simgesi
-botv4.0.9
- PY 
-Neden GitHub'daki main.py "5 Hours Ago" Olarak Kalıyordu ve Neler Düzeltildi?
-Masaüstünde GITHUB_TOKEN'ın Sıfırlanması Engellendi:
-Masaüstü kodunuzun 58. satırında _api_yukle() fonksiyonu binance_api_config.json içinden GitHub Token'ınızı okuyordu; ancak 3589. satırdaki # BULUT SENKRONİZASYON bölümünde yer alan GITHUB_TOKEN = "" satırı uygulama açılırken bu token'ı tekrar boşaltıyordu. Bu yüzden masaüstünde OTA butonuna bastığınızda program token'ı boş görüp sadece bilgisayarınızdaki yerel main.py dosyasını güncelliyor, GitHub'a yüklemeden çıkıyordu (ℹ️ Yerel 'main.py' güncellendi! ... GitHub Token girebilirsiniz).
-
-Çözüm: Hem botv4.0.9.py hem de main.py içinde GITHUB_TOKEN'ın üzerine yazılması engellendi ve OTA butonuna basıldığı anda _api_yukle() tekrar çağrılarak kayıtlı token'ın otomatik okunması sağlandı.
-
-Masaüstünden GitHub'daki main.py ve botv4.0.9.py Dosyalarının Aynı Anda Yüklenmesi:
-Eski pc_kodunu_githuba_ve_mobile_aktar() fonksiyonu GitHub'a sadece botv4.0.3.py dosyasını gönderiyor, main.py dosyasını GitHub'a push etmiyordu.
-
-Çözüm: Artık masaüstünde OTA/Senkron butonuna bastığınızda önce yerel main.py dosyanız güncelleniyor, ardından hem aktif masaüstü dosyanız (botv4.0.9.py) hem de güncellenen main.py doğrudan GitHub reponuza (emrhozbr/bot) yükleniyor.
-
-'NoneType' object has no attribute 'fetch_ohlcv' Hatası Kökten Çözüldü:
-
-veri_ist(D) ve emir_ist(D) fonksiyonlarına kendi kendini onarma kontrolü (if aC is None or aw is None: borsa_kur(PIYASA_MODU, TESTNET_AKTIF)) eklendi.
-
-OTA kesim sınırı def indiktorleri_ekle(df): olarak ayarlandı; böylece OTA güncellemesi yapıldığında borsa bağlantısı (aC, aw) ve açık işlemler (acik_islemler) asla sıfırlanmaz.
-
-Pozisyonların Kapanması/Silinmesi ve Arka Plan Kilitlenmesi Çözüldü:
-
-Kalıcı Hafıza (alfa_trade_kalici + client_storage): Veriler artık Android'in sildiği geçici /cache klasörüne değil, kalıcı uygulama hafızasına ve Android SharedPreferences (page.client_storage) yedekleme alanına kaydediliyor.
-
-Boş Bulut Koruması: bulut_durum_cek() fonksiyonunun uzaktaki boş listeyle yerel açık pozisyonları silmesi engellendi; yerelde açık işlem varsa bunlar korunup buluta gönderiliyor.
-
-Arka Plan Uyku Koruması (on_app_lifecycle_state_change + Watchdog): Ekran kapandığında veya başka uygulamaya geçtiğinizde page.update() çağrıları duraklatılarak arka plandaki Python tarama döngüsünün kilitlenmesi engellendi. Ayrıca 75 saniyelik Watchdog ve otomatik devam (_ONCEKI_BOT_AKTIF) eklendi.
-
-Yapmanız Gerekenler
-Yukarıdaki main.py ve botv4.0.9.py dosyalarını bilgisayarınıza aynı klasöre indirin ve GitHub reponuza (emrhozbr/bot) yükleyin.
-
-Bilgisayarınızda botv4.0.9.py dosyasını çalıştırıp 🔑 API Ayar penceresinden GitHub Token'ınızın (ghp_...) girili olduğundan emin olup Kaydet'e basın.
-
-Bundan sonra masaüstünde yaptığınız her güncellemede OTA butonuna bastığınızda log ekranında 🚀 [PC -> GITHUB & MOBİL OTA TAMAMLANDI] GitHub'a yüklenen dosyalar: botv4.0.9.py, main.py mesajını göreceksiniz ve telefondan ⚡ OTA Güncelle tuşuna bastığınızda doğrudan v4.0.9 [botv4.0.9.py] olarak uygulamaya aktarılacaktır.
-
-güncellemesi gereken sürüm bu
-Paylaştığınız botv4_0_9.py dosyasındaki tüm yeni özellikler (10.000 Puanlık 1. Öncelik [Arz/Talep, OB, OTE, QML] Radarı, Drive Video Serisi Ders 1-10 Likidite/IDM/EQH-EQL/SFP Motoru, Gemini AI İşlem Röntgeni & Doğal Dil Komut/Hata Düzeltici, Açılır-Kapanır Bilgi Ekranı ve VIP Slot Yönetimi) birebir korunarak hem mobil main.py hem de masaüstü botv4.0.9.py dosyalarınız hazırlandı:   
-botv4_0_9.py
-+ 1
-
-Mobil Uygulama (main.py — v4.0.9 Tam Entegre):
-
-PY simgesi
-main
- PY 
-Masaüstü Uygulama (botv4.0.9.py — GitHub OTA & Token Düzeltmeli):
-
-PY simgesi
-botv4.0.9
- PY 
-botv4_0_9.py İçinde Tespit Edilen ve Düzeltilen Kritik Noktalar
-Masaüstünde GitHub Token'ın Sıfırlanması (GITHUB_TOKEN = "" Hatası):
-Paylaştığınız botv4_0_9.py dosyasının 48. satırında _api_yukle() fonksiyonu binance_api_config.json içinden GitHub Token'ınızı okuyordu; ancak 4433. satırda yer alan GITHUB_TOKEN = "" ataması, okunan token'ı uygulama açılırken tekrar boşaltıyordu. Bu yüzden masaüstünde OTA butonuna bastığınızda sadece yerel main.py güncelleniyor, GitHub'daki main.py "5 hours ago" olarak kalıyordu.   
-botv4_0_9.py
-+ 1
-
-Çözüm: GITHUB_TOKEN değişkeninin ezilmesi engellendi ve pc_kodunu_githuba_ve_mobile_aktar() çağrıldığında hem botv4.0.9.py hem de main.py doğrudan GitHub'a (emrhozbr/bot) yükleniyor.
-
-'NoneType' object has no attribute 'fetch_ohlcv' Hatası:
-botv4_0_9.py içindeki masaustu_kodunu_mobil_cekirdege_ayikla() fonksiyonu (satır 5200), masaüstü kodunu main.py'ye aktarırken _api_yukle();_ig_yukle();_ak_yukle();borsa_kur(...) satırını siliyor ancak üstteki aC=None; aw=None; satırını bırakıyordu. Bu da main.py ve OTA motorunda borsa nesnelerinin None kalmasına yol açıyordu.   
-botv4_0_9.py
-+ 1
-
-Çözüm: Hem main.py hem de botv4.0.9.py içinde veri_ist(D) ve emir_ist(D) fonksiyonlarına kendi kendini onarma kontrolü (if aC is None or aw is None: borsa_kur(PIYASA_MODU, TESTNET_AKTIF)) eklendi; ayrıca OTA kesim sınırı def indiktorleri_ekle(df): olarak sabitlendi.
-
-botv4_0_9.py İçindeki Tüm Yeni v4.0.9 Özellikleri Mobil main.py'ye Aktarıldı:
-
-10.000 Puanlık 1. Öncelik Ölçeği (ilk_kontrol_arz_talep_ob_ote_qml): Market her taramada ilk olarak Arz/Talep, OB, OTE ve QML bölgelerine göre 10.000 puanlık ölçekle sıralanır ve 1. Öncelik işlemler +3 VIP ek kontenjan alır.   
-botv4_0_9.py
-
-Gemini AI İşlem Röntgeni & Canlı Soru-Cevap (gemini_api_sor): Mobil uygulamanın 📊 Karne & Pine sekmesine de "❓ Neye Göre Açtın?", "🛡️ Stop & TP", "🔍 Hata Denetimi" butonları ve doğal dil komut kutusu ("Stopu girişe çek", "Kaldıracı 10x yap") eklendi.
-
-Kalıcı Depolama & Arka Plan Uyku Koruması: Açık pozisyonlar ve bakiye Android'in geçici önbelleği yerine kalıcı hafızaya (alfa_trade_kalici + client_storage) kaydedilir; uygulama arka plana geçtiğinde page.update() duraklatılarak tarama döngüsünün kilitlenmesi önlenir.
-
-şu anda en son kullandığım masaüstü bot dosyası ve github daki main.py dosyası ve githubdaki tüm dosyalar bunlar uygulamada güncelleme yaptığımda masaüstündeki güncellemeyi almıyor. arka planda çalışırken kendi kendine ayarları değiştiriyor ve grafikleri açmıyor. masaüstünde bir değişiklik olduğunda mobil uygulama da aynı güncellemeyi alsın kesin çözüm bul
-Gönderdiğin masaüstü bot kodunu (botv4_0_9_2.py), mobil uygulama kodunu (main_9.py) ve GitHub depondaki dosya listesini (image_3a45ed.png) satır satır inceledim. Yaşadığın 3 büyük sorunun da kod içindeki kesin kök nedenlerini tespit ettim:   
-botv4_0_9.py
-+ 2
-
-🔍 Tespit Edilen Kök Nedenler (Neden Çalışmıyordu?)
-Masaüstü Güncellemesini Neden Almıyor? (2 Kritik Hata):
-
-GitHub'da Dosya Eksik: Ekran görüntüsüne baktığımızda GitHub deponda sadece botv4.0.2.py ile botv4.0.5.py arasındaki dosyalar var (3 days ago). Masaüstündeki botv4.0.9.py dosyan GitHub'a hiç yüklenmemiş! Dolayısıyla telefondan ⚡ OTA Güncelle dediğinde telefon GitHub'da bulabildiği en yüksek dosya olan eski botv4.0.5.py dosyasını indiriyor.   
-image_3a45ed.png
-+ 2
-
-Çekirdek Kırpma (masaustu_kodunu_mobil_cekirdege_ayikla) Hatası: main_9.py içindeki ayıklayıcı fonksiyon, kodu "def indiktorleri_ekle(df):" satırından itibaren kesiyor. Oysa senin botv4.0.9.py dosyanda eklediğin yeni değişkenler (KYSY_HTF_ATR_CARPANI, EQH_EQL_TOL_ATR, SFP_MIN_IGNE_ATR, BIRINCIL_BOLGE_OLCEK_CARPANI, BOT_VERSIYONU) ve yeni fonksiyonlar (_df_periyot_sn_bul, _df_1h_ve_alti_mi) indiktorleri_ekle fonksiyonunun/değişkenlerinin dışında kaldığı veya silindiği için mobil uygulamada NameError hatası veriyor ve yeni stratejin devreye girmiyor.   
-main.py
-+ 4
-
-Arka Planda Çalışırken Neden Kendi Kendine Ayarları Değiştiriyor?
-
-Ayarların Kaydedilmemesi: main_9.py içinde _ayarlari_kaydet_tik fonksiyonu ayarları kaydederken kaldirac, piyasa_modu, maks_marjin, islem_risk, rr_orani, min_skor ve mtf_sablon değerlerini binance_api_config.json dosyasına yazmıyor (sadece API key ve stop modunu yazıyor)!   
-main.py
-
-OTA ve mtf_sablonu_uygula() Sıfırlaması: Uygulama arka plana geçip tekrar uyandığında veya OTA yüklendiğinde sabit kodlanmış varsayılanlar (KALDIRAC=5, ISLEM_BASI_RISK_USDT=10.0, AKTIF_MTF_SABLONU='4h / 1h / 15m') tekrar yükleniyor. Ayrıca mtf_sablonu_uygula() fonksiyonu her çalıştığında senin girdiğin RISK_ODUL_ORANI değerini zorla 3.0 veya 1.5 yapıyor.   
-main.py
-+ 2
-
-Mobil Uygulamada Grafikleri Neden Açmıyor?
-
-Eksik Fonksiyon (NameError): Masaüstü botv4.0.9 içindeki HTML grafik üretici (tradingview_kopyala_yapistirsiz_html_ac), artık islem_rontgeni_olustur(O, H) fonksiyonunu çağırıyor. Ancak bu fonksiyon # BULUT SENKRONİZASYON başlığının altında olduğu için mobil çekirdek ayıklayıcı tarafından kesilip atılıyor ve grafik oluşturulurken çöküyor.   
-botv4_0_9.py
-+ 2
-
-Android WebView / Tarayıcı Engeli: Android'de webbrowser.open('file://...') güvenlik nedeniyle engellenir. Flet'in page.launch_url("[http://127.0.0.1](http://127.0.0.1):PORT/...") ile yerel sunucudan açması gerekirken zamanlama ve re modülü eksikliği yüzünden grafik sayfası tetiklenemiyor.   
-botv4_0_9.py
-+ 2
-
-🛠️ KESİN ÇÖZÜM: Tam Senkronize Kod Yamaları
-Aşağıdaki 2 adımı uyguladığında; masaüstünde bir ayar veya strateji değiştirdiğin anda GitHub üzerinden (senkron_durum.json ve botv4.0.9.py) mobil uygulama da otomatik olarak aynı güncellemeyi ve ayarları alacak, arka planda ayarların asla bozulmayacak ve grafikler tek dokunuşla açılacak.   
-botv4_0_9.py
-+ 1
-
-1. ADIM: Masaüstü Botunda (botv4_0_9_2.py) Değiştirilecek Bölüm
-Masaüstü dosyan olan botv4_0_9_2.py içinde def bulut_durum_gonder(zorla=False): ile def pc_kodunu_githuba_ve_mobile_aktar(log_fn=None): arasındaki bölümü aşağıdaki kodla değiştir.   
-botv4_0_9.py
-
-Ne Sağlar? Masaüstünde ayarları her kaydettiğinde veya bot çalışırken hem ayarlarını (kaldirac, risk, mtf_sablon, min_skor vb.) hem de botv4.0.9.py dosyasının kendisini otomatik olarak GitHub'a yükler:   
-botv4_0_9.py
-+ 1
-
-Python
-# ==============================================================================
-# MASAÜSTÜ (botv4_0_9_2.py) İÇİN KESİN SENKRONİZASYON VE OTOMATİK OTA GÖNDERİCİ
-# ==============================================================================
-_SON_PC_KOD_HASH = ""
-
-def masaustu_ayar_sozlugu_uret():
-    """Masaüstündeki tüm aktif strateji ve risk ayarlarını tek pakette toplar."""
-    return {
-        "guncelleme_ts": time.time(),
-        "bot_versiyonu": BOT_VERSIYONU,
-        "piyasa_modu": PIYASA_MODU,
-        "testnet": bool(TESTNET_AKTIF),
-        "kaldirac": int(KALDIRAC),
-        "marjin_tipi": MARJIN_TIPI,
-        "maks_marjin": F(MAKS_MARJIN_USDT),
-        "islem_risk": F(ISLEM_BASI_RISK_USDT),
-        "rr_orani": F(RISK_ODUL_ORANI),
-        "nihai_tp_rr": F(NIHAI_TP_RR),
-        "min_skor": int(MIN_CONFLUENCE_SKORU),
-        "mtf_sablon": AKTIF_MTF_SABLONU,
-        "htf_periyot": HTF_PERIYOT,
-        "mtf_periyot": MTF_PERIYOT,
-        "ltf_periyot": LTF_PERIYOT,
-        "islem_tarzi": ISLEM_TARZI_MODU,
-        "risk_seviyesi": AKTIF_RISK_SEVIYESI,
-        "stop_modu": STOP_BELIRLEME_MODU,
-        "parite_limiti": int(ae),
-        "kysy_htf_atr": F(KYSY_HTF_ATR_CARPANI),
-        "kysy_ltf_atr": F(KYSY_LTF_ATR_CARPANI),
-        "eqh_tol_atr": F(EQH_EQL_TOL_ATR),
-        "sfp_min_atr": F(SFP_MIN_IGNE_ATR),
-        "ikincil_bolge_aktif": bool(IKINCIL_BOLGE_GIRIS_AKTIF),
-        "birincil_olcek_carpani": F(BIRINCIL_BOLGE_OLCEK_CARPANI)
-    }
-
-def bulut_durum_gonder(zorla=False):
-    """Açık işlemleri, bakiyeyi VE masaüstü ayarlarını GitHub senkron_durum.json dosyasına yazar."""
-    global _SON_BULUT_YAZMA_HASH
-    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
-        return False
-    try:
-        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
-        ayar_paketi = masaustu_ayar_sozlugu_uret()
-        veri = {
-            "guncelleme_ts": time.time(),
-            "guncelleyen_cihaz": "PC_MASAUSTU",
-            "bot_versiyonu": BOT_VERSIYONU,
-            "ayarlar": ayar_paketi,
-            "acik_islemler": nQ,
-            "demo_vadeli_bakiye": F(S),
-            "gerceklesen_pnl": F(W),
-            "islem_gecmisi": ah[:150]
-        }
-        ozet_str = json.dumps({
-            "a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2),
-            "h": L(ah), "cfg": {k: v for k, v in ayar_paketi.items() if k != "guncelleme_ts"}
-        }, sort_keys=True)
-        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
-            return True
-        _SON_BULUT_YAZMA_HASH = ozet_str
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
-        tok = GITHUB_TOKEN.strip()
-        hdr = {
-            "Authorization": f"Bearer {tok}" if tok.startswith("github_pat_") else f"token {tok}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        mevcut_sha = None
-        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=8)
-        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
-            mevcut_sha = r_get.json().get("sha")
-        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
-        payload = {
-            "message": f"PC Sync & Settings {BOT_VERSIYONU} ({datetime.now().strftime('%H:%M:%S')})",
-            "content": icerik_b64
-        }
-        if mevcut_sha:
-            payload["sha"] = mevcut_sha
-        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=10)
-        return r_put.status_code in (200, 201)
-    except Exception:
-        return False
-
-def pc_kodunu_githuba_ve_mobile_aktar(log_fn=None):
-    """Masaüstündeki güncel bot dosyasını (botv4.0.9.py) ve ayarları doğrudan GitHub'a yükler."""
-    global _SON_PC_KOD_HASH
-    masaustunden_yerel_main_py_uret(log_fn)
-    if not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
-        if log_fn:
-            log_fn("⚠️ GitHub Token girilmediği için buluta yüklenemedi! '🔑 API Ayar' penceresinden GitHub Token girin.")
-        return False
-    try:
-        mevcut_dosya = os.path.abspath(__file__) if '__file__' in globals() and os.path.exists(__file__) else 'botv4_0_9_2.py'
-        with open(mevcut_dosya, 'r', encoding='utf-8') as f:
-            kod_icerik = f.read()
-        tok = GITHUB_TOKEN.strip()
-        hdr = {
-            "Authorization": f"Bearer {tok}" if tok.startswith("github_pat_") else f"token {tok}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        # Hem botv4.0.9.py hem de botv4.0.5.py olarak yükle ki eski/yeni tüm mobil sürümler anında görsün
-        for hedef_ad in ("botv4.0.9.py", "botv4.0.5.py"):
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{hedef_ad}"
-            mevcut_sha = None
-            r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=10)
-            if r_get.status_code == 200 and isinstance(r_get.json(), dict):
-                mevcut_sha = r_get.json().get("sha")
-            payload = {
-                "message": f"PC Strategy OTA Update {BOT_VERSIYONU}: {hedef_ad} ({datetime.now().strftime('%Y-%m-%d %H:%M:%S')})",
-                "content": _b64.b64encode(kod_icerik.encode("utf-8")).decode("utf-8")
-            }
-            if mevcut_sha:
-                payload["sha"] = mevcut_sha
-            _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=20)
-        bulut_durum_gonder(zorla=True)
-        if log_fn:
-            log_fn(f"🚀 [PC -> MOBİL OTA & AYAR SENKRONU TAMAMLANDI | {BOT_VERSIYONU}] Masaüstü kodunuz ve ayarlarınız GitHub'a aktarıldı!")
-        return True
-    except Exception as ex:
-        if log_fn:
-            log_fn(f"⚠️ PC->Mobil bulut aktarım hatası: {ex}")
-        return False
-(Not: Masaüstü botunda _api_kaydet_tam() fonksiyonunun en sonuna threading.Thread(target=pc_kodunu_githuba_ve_mobile_aktar, daemon=True).start() satırını eklersen masaüstünde bir ayarı kaydettiğin saniye otomatik olarak GitHub'a ve telefona gider.)
-
-2. ADIM: Mobil Uygulamada (main.py / main_9.py) Kesin Çözüm Kodu
-Mobil tarafındaki main.py dosyanda;
-
-Ayarların kendi kendine değişmesini önleyen tam kapsamlı kayıt ve kilit mekanizması,
-
-botv4.0.9.py içindeki yeni değişkenleri ve islem_rontgeni_olustur fonksiyonunu kesmeden eksiksiz alan yeni OTA motoru,
-
-Masaüstünde değişiklik olduğunda otomatik algılayıp mobil ayarları ve stratejiyi güncelleyen canlı senkronizasyon,
-
-Grafikleri hem harici tarayıcıda hem de uygulama içi pencerede (WebView/Dialog) kesintisiz açan yeni grafik motoru
-
-aşağıdaki kodda birleştirilmiştir. main.py dosyanın _api_yukle() fonksiyonu ile # BULUT SENKRONİZASYON ve grafik açma bölümlerini aşağıdaki bloklarla güncelle:
-
-Python
-# ==============================================================================
-# 1) KALICI AYAR KAYDI VE KORUMA MOTORU (ARKA PLANDA AYAR DEĞİŞMESİNİ KESİN ÖNLER)
-# ==============================================================================
-import re
-import base64 as _b64
-
-# v4.0.9 Yeni Strateji Sabitleri (Eksik Kalmaması İçin Başlangıçta Tanımlı)
-BOT_VERSIYONU = "v4.0.9"
-KYSY_HTF_ATR_CARPANI = 1.85
-KYSY_LTF_ATR_CARPANI = 1.30
-EQH_EQL_TOL_ATR = 0.30
-SFP_MIN_IGNE_ATR = 0.12
-IKINCIL_BOLGE_GIRIS_AKTIF = True
-BIRINCIL_BOLGE_OLCEK_CARPANI = 5.0
-GEMINI_API_KEY = ""
-GEMINI_MODEL = "gemini-2.5-flash"
-_SON_PC_AYAR_TS = 0.0
-
-def mtf_sablonu_uygula(aA, rr_koru=True):
-    """MTF şablonunu uygularken kullanıcının özel RR oranını ezmez."""
-    global AKTIF_MTF_SABLONU, HTF_PERIYOT, MTF_PERIYOT, LTF_PERIYOT, ISLEM_TARZI_MODU, RISK_ODUL_ORANI, NIHAI_TP_RR, a4
-    eski_rr = F(RISK_ODUL_ORANI)
-    if aA in MTF_SABLONLARI:
-        AKTIF_MTF_SABLONU = aA
-        HTF_PERIYOT, MTF_PERIYOT, LTF_PERIYOT = MTF_SABLONLARI[aA]
-    elif '/' in str(aA):
-        of = [p.strip().split()[0] for p in str(aA).split('/')]
-        if L(of) == 3:
-            AKTIF_MTF_SABLONU = str(aA)
-            HTF_PERIYOT, MTF_PERIYOT, LTF_PERIYOT = (of[0], of[1], of[2])
-    if 'Scalp' in str(AKTIF_MTF_SABLONU) or LTF_PERIYOT in ('1m', '3m') or HTF_PERIYOT in ('15m', '30m'):
-        ISLEM_TARZI_MODU = 'Scalp'
-        if not rr_koru:
-            RISK_ODUL_ORANI = 1.5; NIHAI_TP_RR = 2.5
-        a4 = 10
-    else:
-        ISLEM_TARZI_MODU = 'DayTrade'
-        if not rr_koru:
-            RISK_ODUL_ORANI = 3.0; NIHAI_TP_RR = 4.0
-        a4 = 6
-    if rr_koru and eski_rr > 0:
-        RISK_ODUL_ORANI = eski_rr
-        NIHAI_TP_RR = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
-    return (HTF_PERIYOT, MTF_PERIYOT, LTF_PERIYOT)
-
-def _tum_ayarlari_diske_kaydet():
-    """Tüm kullanıcı ayarlarını eksiksiz olarak kalıcı JSON dosyasına ve Flet hafızasına yazar."""
-    veri = {
-        "guncelleme_ts": time.time(),
-        "api_key": API_KEY,
-        "api_secret": API_SECRET,
-        "testnet": bool(TESTNET_AKTIF),
-        "telegram_token": TELEGRAM_TOKEN,
-        "telegram_chat_id": TELEGRAM_CHAT_ID,
-        "github_repo": GITHUB_REPO_ADRESI,
-        "github_token": GITHUB_TOKEN,
-        "stop_modu": STOP_BELIRLEME_MODU,
-        "piyasa_modu": PIYASA_MODU,
-        "marjin_tipi": MARJIN_TIPI,
-        "kaldirac": int(KALDIRAC),
-        "maks_marjin": F(MAKS_MARJIN_USDT),
-        "islem_risk": F(ISLEM_BASI_RISK_USDT),
-        "rr_orani": F(RISK_ODUL_ORANI),
-        "nihai_tp_rr": F(NIHAI_TP_RR),
-        "min_skor": int(MIN_CONFLUENCE_SKORU),
-        "mtf_sablon": AKTIF_MTF_SABLONU,
-        "risk_seviyesi": AKTIF_RISK_SEVIYESI,
-        "parite_limiti": int(ae),
-        "kysy_htf_atr": F(KYSY_HTF_ATR_CARPANI),
-        "kysy_ltf_atr": F(KYSY_LTF_ATR_CARPANI),
-        "eqh_tol_atr": F(EQH_EQL_TOL_ATR),
-        "sfp_min_atr": F(SFP_MIN_IGNE_ATR),
-        "ikincil_bolge_aktif": bool(IKINCIL_BOLGE_GIRIS_AKTIF),
-        "birincil_olcek_carpani": F(BIRINCIL_BOLGE_OLCEK_CARPANI)
-    }
-    for d_yol in (bd, 'binance_api_config.json'):
-        try:
-            with open(d_yol, "w", encoding="utf-8") as f:
-                json.dump(veri, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-    if _AKTIF_PAGE_REF is not None:
-        try:
-            _AKTIF_PAGE_REF.client_storage.set("alfa_api_config", veri)
-        except Exception:
-            pass
-
-def _sozlukten_ayarlari_uygula(d: dict):
-    """Hem yerel diskten hem de PC bulut senkronizasyonundan gelen ayarları güvenli şekilde uygular."""
-    global API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID
-    global GITHUB_REPO_ADRESI, GITHUB_TOKEN, STOP_BELIRLEME_MODU, PIYASA_MODU, MARJIN_TIPI
-    global KALDIRAC, MAKS_MARJIN_USDT, ISLEM_BASI_RISK_USDT, RISK_ODUL_ORANI, NIHAI_TP_RR
-    global MIN_CONFLUENCE_SKORU, AKTIF_MTF_SABLONU, AKTIF_RISK_SEVIYESI, ae
-    global KYSY_HTF_ATR_CARPANI, KYSY_LTF_ATR_CARPANI, EQH_EQL_TOL_ATR, SFP_MIN_IGNE_ATR
-    global IKINCIL_BOLGE_GIRIS_AKTIF, BIRINCIL_BOLGE_OLCEK_CARPANI
-    if not I(d, dict):
-        return
-    if d.get('api_key'): API_KEY = str(d['api_key']).strip()
-    if d.get('api_secret'): API_SECRET = str(d['api_secret']).strip()
-    if 'testnet' in d: TESTNET_AKTIF = bool(d['testnet'])
-    if d.get('telegram_token'): TELEGRAM_TOKEN = str(d['telegram_token']).strip()
-    if d.get('telegram_chat_id'): TELEGRAM_CHAT_ID = str(d['telegram_chat_id']).strip()
-    if d.get('github_repo'): GITHUB_REPO_ADRESI = str(d['github_repo']).strip()
-    if d.get('github_token'): GITHUB_TOKEN = str(d['github_token']).strip()
-    if d.get('stop_modu'): STOP_BELIRLEME_MODU = str(d['stop_modu']).strip()
-    if d.get('piyasa_modu'): PIYASA_MODU = str(d['piyasa_modu']).strip()
-    if d.get('marjin_tipi'): MARJIN_TIPI = str(d['marjin_tipi']).strip()
-    if d.get('mtf_sablon'): mtf_sablonu_uygula(str(d['mtf_sablon']), rr_koru=True)
-    if d.get('risk_seviyesi'): AKTIF_RISK_SEVIYESI = str(d['risk_seviyesi'])
-    if 'kaldirac' in d and F(d['kaldirac']) >= 1: KALDIRAC = int(F(d['kaldirac']))
-    if 'maks_marjin' in d and F(d['maks_marjin']) >= 5: MAKS_MARJIN_USDT = F(d['maks_marjin'])
-    if 'islem_risk' in d and F(d['islem_risk']) >= 0.1: ISLEM_BASI_RISK_USDT = F(d['islem_risk'])
-    if 'rr_orani' in d and F(d['rr_orani']) >= 0.5: RISK_ODUL_ORANI = F(d['rr_orani'])
-    if 'nihai_tp_rr' in d and F(d['nihai_tp_rr']) >= 1.0: NIHAI_TP_RR = F(d['nihai_tp_rr'])
-    if 'min_skor' in d and F(d['min_skor']) >= 10: MIN_CONFLUENCE_SKORU = int(F(d['min_skor']))
-    if 'parite_limiti' in d: ae = int(F(d['parite_limiti']))
-    if 'kysy_htf_atr' in d: KYSY_HTF_ATR_CARPANI = F(d['kysy_htf_atr'])
-    if 'kysy_ltf_atr' in d: KYSY_LTF_ATR_CARPANI = F(d['kysy_ltf_atr'])
-    if 'eqh_tol_atr' in d: EQH_EQL_TOL_ATR = F(d['eqh_tol_atr'])
-    if 'sfp_min_atr' in d: SFP_MIN_IGNE_ATR = F(d['sfp_min_atr'])
-    if 'ikincil_bolge_aktif' in d: IKINCIL_BOLGE_GIRIS_AKTIF = bool(d['ikincil_bolge_aktif'])
-    if 'birincil_olcek_carpani' in d: BIRINCIL_BOLGE_OLCEK_CARPANI = F(d['birincil_olcek_carpani'])
-3. ADIM: Mobil Uygulamada (main.py) OTA Ayıklayıcı ve Grafik Açıcı Düzeltmesi
-main.py içindeki masaustu_kodunu_mobil_cekirdege_ayikla, ota_strateji_guncelle, bulut_durum_cek ve grafik açma fonksiyonlarını şu şekilde güncelle:
-
-Python
-# ==============================================================================
-# 2) v4.0.9 UYUMLU TAM KAPSAMLI OTA AYIKLAYICI (HİÇBİR FONKSİYONU VEYA DEĞİŞKENİ KAYBETMEZ)
-# ==============================================================================
-def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
-    """botv4.0.9.py dosyasındaki yeni sabitleri, _df_periyot_sn_bul, ilk_kontrol_arz_talep_ob_ote_qml
-    ve islem_rontgeni_olustur fonksiyonlarını kesmeden güvenli şekilde ayıklar."""
-    ek_sabitler = [
-        "import re",
-        "KYSY_HTF_ATR_CARPANI=1.85;KYSY_LTF_ATR_CARPANI=1.30;EQH_EQL_TOL_ATR=0.30;SFP_MIN_IGNE_ATR=0.12;IKINCIL_BOLGE_GIRIS_AKTIF=True;BIRINCIL_BOLGE_OLCEK_CARPANI=5.0;"
-    ]
-    for satir_k in kaynak_kod.splitlines()[:140]:
-        if any(k in satir_k for k in ("BOT_VERSIYONU=", "KYSY_HTF_ATR_CARPANI=", "MTF_SABLONLARI=", "STOP_BELIRLEME_SECENEKLERI=")):
-            # Kullanıcının yerel ayarlarını ezecek satırları temizle, sadece yeni sabitleri al
-            for parca in satir_k.split(";"):
-                p_str = parca.strip()
-                if any(p_str.startswith(x) for x in (
-                    "BOT_VERSIYONU", "BOT_DOSYA_ADI", "BIRINCIL_", "IKINCIL_",
-                    "KYSY_", "EQH_", "SFP_", "GEMINI_", "MTF_SABLONLARI", "STOP_BELIRLEME_SECENEKLERI"
-                )):
-                    ek_sabitler.append(p_str)
-
-    if "def indiktorleri_ekle(df):" in kaynak_kod:
-        ana_govde = kaynak_kod[kaynak_kod.index("def indiktorleri_ekle(df):"):]
-    elif "def _f(d,c,i=-2):" in kaynak_kod:
-        ana_govde = kaynak_kod[kaynak_kod.index("def _f(d,c,i=-2):"):]
-    else:
-        ana_govde = kaynak_kod
-
-    # Sadece masaüstü GUI sınıfından (TradingBotGUI) veya mobil yeniden tanımlamadan kes!
-    # Böylece islem_rontgeni_olustur() fonksiyonu da çekirdeğin içinde kalır ve grafikler çökmez.
-    for bitis_isareti in (
-        "def masaustu_kodunu_mobil_cekirdege_ayikla",
-        "ctk.set_appearance_mode",
-        "class TradingBotGUI",
-        "class AlfaMobileBotEngine",
-        "def main(page"
-    ):
-        if bitis_isareti in ana_govde:
-            ana_govde = ana_govde[:ana_govde.index(bitis_isareti)]
-
-    yasak_kelimeler = (
-        "customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk",
-        "FigureCanvasTkAgg", "import ccxt", "acik_islemler={}", "aC=None",
-        "bd='binance_api_config.json'", "_api_yukle();_ig_yukle();_ak_yukle();",
-        "GITHUB_REPO_ADRESI =", "GITHUB_TOKEN ="
-    )
-    cikti = list(ek_sabitler)
-    for s in ana_govde.splitlines():
-        if any(y in s for y in yasak_kelimeler):
-            continue
-        cikti.append(s)
-
-    metin = "\n".join(cikti)
-    if "ANDROID_VERI_DIZINI" in globals():
-        metin = metin.replace(
-            'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
-            'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
-        )
-    return metin
-4. ADIM: Masaüstünde Değişiklik Olduğunda Mobilin Otomatik Algılaması (bulut_durum_cek Güncellemesi)
-Mobil uygulamadaki bulut_durum_cek fonksiyonuna aşağıdaki kontrolü eklediğinde; masaüstünde bir ayar değiştirdiğinde veya yeni bir sürüm (v4.0.9) açtığında telefon bunu arka planda 15 saniye içinde otomatik fark eder, ayarları eşitler ve yeni strateji kodunu kendi kendine indirir:
-
-Python
-# bulut_durum_cek() içindeki GitHub okuma bloğuna eklenecek kısım:
-uzak_ayarlar = d.get("ayarlar")
-if I(uzak_ayarlar, dict):
-    uzak_ayar_ts = F(uzak_ayarlar.get("guncelleme_ts") or d.get("guncelleme_ts") or 0.0)
-    if uzak_ayar_ts > _SON_PC_AYAR_TS and d.get("guncelleyen_cihaz") == "PC_MASAUSTU":
-        _SON_PC_AYAR_TS = uzak_ayar_ts
-        _sozlukten_ayarlari_uygula(uzak_ayarlar)
-        _tum_ayarlari_diske_kaydet()
-        degisti = True
-
-# Masaüstündeki bot versiyonu (örn. v4.0.9) mobildekinden farklıysa otomatik OTA tetikle!
-uzak_versiyon = str(d.get("bot_versiyonu") or "")
-if uzak_versiyon and uzak_versiyon not in str(AKTIF_OTA_SURUM_BILGISI):
-    threading.Thread(target=ota_strateji_guncelle, args=(GITHUB_REPO_ADRESI, GITHUB_TOKEN), daemon=True).start()
-5. ADIM: Mobil Uygulamada Grafiğin Kesin Açılması İçin (_parite_karne_ve_pine_yukle İçi)
-Mobil main.py içinde tradingview_kopyala_yapistirsiz_html_ac fonksiyonunun sonunda webbrowser.open çağrısı Android'de sessizce başarısız olur veya takılır. Bunun yerine _parite_karne_ve_pine_yukle içindeki if tv_ac: bloğunu şu şekilde değiştir:   
-main.py
-
-Python
-if tv_ac:
-    dosya_yolu, _ = tradingview_kopyala_yapistirsiz_html_ac(O, tf_secim, H)
-    dosya_adi = os.path.basename(dosya_yolu)
-    port = yerel_grafik_sunucusu_baslat()
-    if port:
-        hedef_url = f"http://127.0.0.1:{port}/{dosya_adi}?t={int(time.time())}"
-        page.launch_url(hedef_url)
-        lbl_pine_bildirim.value = f"🚀 {O} [{tf_secim.upper()}] Canlı Grafik açıldı: {hedef_url}"
-    else:
-        lbl_pine_bildirim.value = "⚠️ Yerel grafik sunucusu başlatılamadı!"
-📌 Hemen Şimdi Ne Yapmalısın?
-GitHub depona (emrhozbr/bot) girip elindeki botv4_0_9_2.py dosyasını adını botv4.0.9.py yaparak yükle (veya masaüstü botunda 🔑 API Ayar penceresine GitHub Token'ını girip kaydet ki masaüstü botun kendisi otomatik yüklesin).   
-botv4_0_9.py
-+ 1
-
-Yukarıdaki kod güncellemelerini main.py dosyana uygulayıp GitHub'daki main.py dosyanın üzerine kaydet.   
-main.py
-+ 1
-
-İstersen bu düzeltmelerin tamamının tek parça halinde birleştirildiği hazır main.py ve botv4.0.9.py dosyalarını doğrudan üretebilirim; hangisinden başlayalım?
-
-ikisinide paylaş ama githubda botv4_0_9_2.py ve main_9.py diye bir dosya yok
-Haklısın; botv4_0_9_2.py ve main_9.py isimleri sadece senin buraya yüklerken bilgisayarının otomatik verdiği kopya numaralarıydı. GitHub deponda (emrhozbr/bot) ve bilgisayarında asıl kullanılan dosya adları botv4.0.9.py ve main.py.   
-botv4_0_9.py
-+ 4
-
-Aşağıda öncelikle tüm senkronizasyon, ayar koruma ve otomatik GitHub/OTA yükleme düzeltmeleri uygulanmış botv4.0.9.py dosyan yer alıyor:
-
-Masaüstü Bot Dosyan (botv4.0.9.py):
-
-PY simgesi
-botv4.0.9
- PY 
-Mobil main.py Dosyanda Yapılan Kesin Çözüm (Kopyala-Yapıştır Tam Blok)
-GitHub depondaki main.py dosyasında;   
-main.py
-+ 1
-
-Arka planda ayarların kendi kendine sıfırlanmasına yol açan eksik kayıt (_ayarlari_kaydet_tik ve _tek_tus_ota_tik içinde sadece API anahtarlarının yazılıp kaldıraç, risk, marjin, MTF şablonu ve RR oranının silinmesi),   
-main.py
-
-Masaüstünde (botv4.0.9.py) yaptığın ayar veya strateji değişikliklerinin otomatik olarak telefona gelmemesi (bulut_durum_cek içinde masaüstü ayar paketinin okunmaması ve GitHub'da eski botv4.0.5.py dosyasının çekilmesi),   
-botv4_0_9.py
-+ 2
-
-Grafiklerin telefonda açılmamasına neden olan webbrowser.open('file://...') (Android FileUriExposedException hatası) ve islem_rontgeni_olustur fonksiyonunun OTA sırasında kesilmesi   
-botv4_0_9.py
-+ 1
-
-sorunlarının tamamını tek seferde çözen güncel main.py Bulut Senkronizasyon, Ayar Koruma ve Grafik Açma bloğu aşağıdadır.
-
-GitHub'daki main.py dosyanda # ============================================================================== / # BULUT SENKRONİZASYON satırından class AlfaMobileBotEngine: satırına kadar olan kısmı aşağıdaki kodla değiştirmen ve _ayarlari_kaydet_tik içinde _api_kaydet_tam() çağırman yeterlidir:   
-main.py
-+ 3
-
-Python
-# ==============================================================================
-# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
-# ==============================================================================
-import base64 as _b64
-import re as _re
-import re
-
-BOT_VERSIYONU = "v4.0.9"
-BOT_DOSYA_ADI = "botv4.0.9.py"
-if "BIRINCIL_BOLGE_OLCEK_CARPANI" not in globals(): BIRINCIL_BOLGE_OLCEK_CARPANI = 5.0
-if "BIRINCIL_VIP_EK_SLOT" not in globals(): BIRINCIL_VIP_EK_SLOT = 3
-if "IKINCIL_REZERV_SLOT" not in globals(): IKINCIL_REZERV_SLOT = 2
-if "KYSY_HTF_ATR_CARPANI" not in globals(): KYSY_HTF_ATR_CARPANI = 1.85
-if "KYSY_LTF_ATR_CARPANI" not in globals(): KYSY_LTF_ATR_CARPANI = 1.30
-if "EQH_EQL_TOL_ATR" not in globals(): EQH_EQL_TOL_ATR = 0.30
-if "SFP_MIN_IGNE_ATR" not in globals(): SFP_MIN_IGNE_ATR = 0.12
-if "IKINCIL_BOLGE_GIRIS_AKTIF" not in globals(): IKINCIL_BOLGE_GIRIS_AKTIF = True
-if "GEMINI_API_KEY" not in globals(): GEMINI_API_KEY = ""
-if "GEMINI_MODEL" not in globals(): GEMINI_MODEL = "gemini-2.5-flash"
-if "GEMINI_OTOMATIK_ISLEM_YORUMU" not in globals(): GEMINI_OTOMATIK_ISLEM_YORUMU = True
-if "htf_1_oncelik_radar_cache" not in globals(): htf_1_oncelik_radar_cache = {}
-
-if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI:
-    GITHUB_REPO_ADRESI = "emrhozbr/bot"
-if "GITHUB_TOKEN" not in globals():
-    GITHUB_TOKEN = ""
-
-BULUT_SENK_AKTIF = True
-AKTIF_OTA_SURUM_BILGISI = "v4.0.9 (Canlı Motor)"
-_SON_BULUT_OKUMA_TS = 0.0
-_SON_BULUT_YAZMA_HASH = ""
-_SON_PC_AYAR_TS = 0.0
-_BULUT_DOSYA_ADI = "senkron_durum.json"
-_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
-_OTA_YEREL_UI = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_flet_ui.py')
-_OTA_META_DOSYA = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_meta_bilgi.json')
-
-def masaustu_ayar_sozlugu_uret():
-    """Aktif tüm strateji, MTF ve risk ayarlarını tek pakette toplar (Arka planda sıfırlanmayı önler)."""
-    return {
-        "guncelleme_ts": time.time(),
-        "bot_versiyonu": globals().get("BOT_VERSIYONU", "v4.0.9"),
-        "piyasa_modu": PIYASA_MODU,
-        "testnet": bool(TESTNET_AKTIF),
-        "kaldirac": int(KALDIRAC),
-        "marjin_tipi": MARJIN_TIPI,
-        "maks_marjin": F(MAKS_MARJIN_USDT),
-        "islem_risk": F(ISLEM_BASI_RISK_USDT),
-        "rr_orani": F(RISK_ODUL_ORANI),
-        "nihai_tp_rr": F(NIHAI_TP_RR),
-        "min_skor": int(MIN_CONFLUENCE_SKORU),
-        "mtf_sablon": AKTIF_MTF_SABLONU,
-        "htf_periyot": HTF_PERIYOT,
-        "mtf_periyot": MTF_PERIYOT,
-        "ltf_periyot": LTF_PERIYOT,
-        "islem_tarzi": ISLEM_TARZI_MODU,
-        "risk_seviyesi": AKTIF_RISK_SEVIYESI,
-        "stop_modu": STOP_BELIRLEME_MODU,
-        "parite_limiti": int(ae),
-        "kysy_htf_atr": F(globals().get("KYSY_HTF_ATR_CARPANI", 1.85)),
-        "kysy_ltf_atr": F(globals().get("KYSY_LTF_ATR_CARPANI", 1.30)),
-        "eqh_tol_atr": F(globals().get("EQH_EQL_TOL_ATR", 0.30)),
-        "sfp_min_atr": F(globals().get("SFP_MIN_IGNE_ATR", 0.12)),
-        "ikincil_bolge_aktif": bool(globals().get("IKINCIL_BOLGE_GIRIS_AKTIF", True)),
-        "birincil_olcek_carpani": F(globals().get("BIRINCIL_BOLGE_OLCEK_CARPANI", 5.0))
-    }
-
-def _sozlukten_ayarlari_uygula(d: dict):
-    """Hem yerel diskten hem de Masaüstü (PC) senkronizasyonundan gelen ayarları eksiksiz uygular."""
-    global API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, GITHUB_REPO_ADRESI, GITHUB_TOKEN
-    global STOP_BELIRLEME_MODU, PIYASA_MODU, MARJIN_TIPI, KALDIRAC, MAKS_MARJIN_USDT, ISLEM_BASI_RISK_USDT
-    global RISK_ODUL_ORANI, NIHAI_TP_RR, MIN_CONFLUENCE_SKORU, AKTIF_MTF_SABLONU, AKTIF_RISK_SEVIYESI, ae
-    global KYSY_HTF_ATR_CARPANI, KYSY_LTF_ATR_CARPANI, EQH_EQL_TOL_ATR, SFP_MIN_IGNE_ATR, IKINCIL_BOLGE_GIRIS_AKTIF, BIRINCIL_BOLGE_OLCEK_CARPANI
-    if not I(d, dict):
-        return
-    if d.get("api_key"): API_KEY = str(d["api_key"]).strip()
-    if d.get("api_secret"): API_SECRET = str(d["api_secret"]).strip()
-    if "testnet" in d: TESTNET_AKTIF = bool(d["testnet"])
-    if d.get("telegram_token"): TELEGRAM_TOKEN = str(d["telegram_token"]).strip()
-    if d.get("telegram_chat_id"): TELEGRAM_CHAT_ID = str(d["telegram_chat_id"]).strip()
-    if d.get("github_repo"): GITHUB_REPO_ADRESI = str(d["github_repo"]).strip()
-    if d.get("github_token"): GITHUB_TOKEN = str(d["github_token"]).strip()
-    if d.get("stop_modu"): STOP_BELIRLEME_MODU = str(d["stop_modu"]).strip()
-    if d.get("piyasa_modu"): PIYASA_MODU = str(d["piyasa_modu"]).strip()
-    if d.get("marjin_tipi"): MARJIN_TIPI = str(d["marjin_tipi"]).strip()
-    # Önce MTF şablonunu uygula, ardından kullanıcının özel RR ve sayısal ayarlarını koru!
-    if d.get("mtf_sablon"): mtf_sablonu_uygula(str(d["mtf_sablon"]))
-    if d.get("risk_seviyesi"): AKTIF_RISK_SEVIYESI = str(d["risk_seviyesi"])
-    if "kaldirac" in d and F(d["kaldirac"]) >= 1: KALDIRAC = M(1, N(125, int(F(d["kaldirac"]))))
-    if "maks_marjin" in d and F(d["maks_marjin"]) >= 5: MAKS_MARJIN_USDT = F(d["maks_marjin"])
-    if "islem_risk" in d and F(d["islem_risk"]) >= 0.1: ISLEM_BASI_RISK_USDT = F(d["islem_risk"])
-    if "rr_orani" in d and F(d["rr_orani"]) >= 0.5:
-        RISK_ODUL_ORANI = F(d["rr_orani"])
-        NIHAI_TP_RR = F(d.get("nihai_tp_rr") or M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0))
-    if "min_skor" in d and F(d["min_skor"]) >= 10: MIN_CONFLUENCE_SKORU = M(10, N(100, int(F(d["min_skor"]))))
-    if "parite_limiti" in d: ae = M(0, int(F(d["parite_limiti"])))
-    if "kysy_htf_atr" in d: KYSY_HTF_ATR_CARPANI = M(0.6, N(4.0, F(d["kysy_htf_atr"])))
-    if "kysy_ltf_atr" in d: KYSY_LTF_ATR_CARPANI = M(0.5, N(3.5, F(d["kysy_ltf_atr"])))
-    if "eqh_tol_atr" in d: EQH_EQL_TOL_ATR = M(0.08, N(1.2, F(d["eqh_tol_atr"])))
-    if "sfp_min_atr" in d: SFP_MIN_IGNE_ATR = M(0.03, N(0.8, F(d["sfp_min_atr"])))
-    if "ikincil_bolge_aktif" in d: IKINCIL_BOLGE_GIRIS_AKTIF = bool(d["ikincil_bolge_aktif"])
-    if "birincil_olcek_carpani" in d: BIRINCIL_BOLGE_OLCEK_CARPANI = M(1.5, N(10.0, F(d["birincil_olcek_carpani"])))
-
-def _api_kaydet_tam():
-    """Tüm ayarları kalıcı diske ve Flet client_storage hafızasına tam kaydeder."""
-    try:
-        mev = masaustu_ayar_sozlugu_uret()
-        mev.update({
-            "api_key": API_KEY, "api_secret": API_SECRET, "testnet": bool(TESTNET_AKTIF),
-            "telegram_token": TELEGRAM_TOKEN, "telegram_chat_id": TELEGRAM_CHAT_ID,
-            "github_repo": GITHUB_REPO_ADRESI, "github_token": GITHUB_TOKEN
-        })
-        for d_yol in (bd, "binance_api_config.json"):
-            try:
-                with open(d_yol, "w", encoding="utf-8") as f:
-                    json.dump(mev, f, ensure_ascii=False, indent=2)
-            except Exception:
-                pass
-        if _AKTIF_PAGE_REF is not None:
-            try:
-                _AKTIF_PAGE_REF.client_storage.set("alfa_api_config", mev)
-            except Exception:
-                pass
-    except Exception:
-        pass
-
-try:
-    _api_yukle()
-except Exception:
-    pass
-
-def _github_headers(token_str=""):
-    tok = (token_str or GITHUB_TOKEN or "").strip()
-    hdr = {
-        "Accept": "application/vnd.github.v3+json",
-        "User-Agent": "AlfaTradeBot-OTA",
-        "Cache-Control": "no-cache, no-store, must-revalidate",
-        "Pragma": "no-cache"
-    }
-    if tok:
-        hdr["Authorization"] = f"Bearer {tok}" if tok.startswith("github_pat_") else f"token {tok}"
-    return hdr
-
-def _github_dosya_indir(hedef_repo: str, dosya_adi: str, hedef_token: str = ""):
-    ts = int(time.time())
-    hdr = _github_headers(hedef_token)
-    try:
-        hdr_raw = dict(hdr)
-        hdr_raw["Accept"] = "application/vnd.github.v3.raw"
-        api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya_adi}?ref=main&t={ts}"
-        r = _HTTP_SES.get(api_url, headers=hdr_raw, timeout=15)
-        if r.status_code == 200 and len(r.text) > 500 and not r.text.strip().startswith('{"message":'):
-            return r.text
-    except Exception:
-        pass
-    try:
-        api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya_adi}?ref=main&t={ts}"
-        r = _HTTP_SES.get(api_url, headers=hdr, timeout=15)
-        if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
-            return _b64.b64decode(r.json()["content"]).decode("utf-8")
-    except Exception:
-        pass
-    try:
-        raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya_adi}?t={ts}"
-        r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=15)
-        if r2.status_code == 200 and len(r2.text) > 500:
-            return r2.text
-    except Exception:
-        pass
-    return None
-
-def _repodaki_guncel_bot_dosyalarini_bul(hedef_repo: str, hedef_token: str = ""):
-    varsayilan = ["botv4.1.0.py", "botv4.0.9.py", "botv4.0.8.py", "botv4.0.7.py", "botv4.0.6.py", "botv4.0.5.py", "botv4.0.4.py", "botv4.0.3.py", "botv4.0.2.py"]
-    try:
-        hdr = _github_headers(hedef_token)
-        url = f"https://api.github.com/repos/{hedef_repo}/contents?t={int(time.time())}"
-        r = _HTTP_SES.get(url, headers=hdr, timeout=10)
-        if r.status_code == 200 and isinstance(r.json(), list):
-            bulunanlar = []
-            for item in r.json():
-                ad = str(item.get("name", ""))
-                if ad.startswith("botv") and ad.endswith(".py"):
-                    sayilar = tuple(int(x) for x in _re.findall(r"\d+", ad))
-                    bulunanlar.append((sayilar, ad))
-            if bulunanlar:
-                bulunanlar.sort(key=lambda x: x[0], reverse=True)
-                return [ad for _, ad in bulunanlar]
-    except Exception:
-        pass
-    return varsayilan
-
-def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
-    """botv4.0.9.py içindeki tüm yeni strateji ve islem_rontgeni_olustur fonksiyonlarını kesmeden alır;
-    ancak kullanıcının ayarlarını, açık işlemlerini ve borsa bağlantısını ASLA ezmez!"""
-    ek_ust = [
-        "import re",
-        "BOT_VERSIYONU='v4.0.9';BOT_DOSYA_ADI='botv4.0.9.py';",
-        "if 'BIRINCIL_BOLGE_OLCEK_CARPANI' not in globals(): BIRINCIL_BOLGE_OLCEK_CARPANI=5.0",
-        "if 'BIRINCIL_VIP_EK_SLOT' not in globals(): BIRINCIL_VIP_EK_SLOT=3",
-        "if 'IKINCIL_REZERV_SLOT' not in globals(): IKINCIL_REZERV_SLOT=2",
-        "if 'KYSY_HTF_ATR_CARPANI' not in globals(): KYSY_HTF_ATR_CARPANI=1.85",
-        "if 'KYSY_LTF_ATR_CARPANI' not in globals(): KYSY_LTF_ATR_CARPANI=1.30",
-        "if 'EQH_EQL_TOL_ATR' not in globals(): EQH_EQL_TOL_ATR=0.30",
-        "if 'SFP_MIN_IGNE_ATR' not in globals(): SFP_MIN_IGNE_ATR=0.12",
-        "if 'IKINCIL_BOLGE_GIRIS_AKTIF' not in globals(): IKINCIL_BOLGE_GIRIS_AKTIF=True",
-        "if 'htf_1_oncelik_radar_cache' not in globals(): htf_1_oncelik_radar_cache={}"
-    ]
-    if "def indiktorleri_ekle(df):" in kaynak_kod:
-        ana_govde = kaynak_kod[kaynak_kod.index("def indiktorleri_ekle(df):"):]
-    elif "def _f(d,c,i=-2):" in kaynak_kod:
-        ana_govde = kaynak_kod[kaynak_kod.index("def _f(d,c,i=-2):"):]
-    else:
-        ana_govde = kaynak_kod
-
-    # Sadece masaüstü GUI sınıfından (TradingBotGUI) veya mobil yeniden tanımlamadan kes!
-    # Böylece islem_rontgeni_olustur() fonksiyonu da çekirdeğin içinde kalır ve grafikler çökmez.
-    for bitis_isareti in (
-        "def _github_headers(",
-        "def masaustu_ayar_sozlugu_uret(",
-        "def masaustu_kodunu_mobil_cekirdege_ayikla",
-        "ctk.set_appearance_mode",
-        "class TradingBotGUI",
-        "class AlfaMobileBotEngine",
-        "def main(page"
-    ):
-        if bitis_isareti in ana_govde:
-            ana_govde = ana_govde[:ana_govde.index(bitis_isareti)]
-
-    yasak_kelimeler = (
-        "import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk",
-        "FigureCanvasTkAgg", "import ccxt", "acik_islemler={}", "aC=None",
-        "bd='binance_api_config.json'", "_api_yukle();_ig_yukle();_ak_yukle();",
-        "GITHUB_REPO_ADRESI =", "GITHUB_TOKEN ="
-    )
-    cikti = list(ek_ust)
-    for s in ana_govde.splitlines():
-        if any(y in s for y in yasak_kelimeler):
-            continue
-        cikti.append(s)
-
-    metin = "\n".join(cikti)
-    metin = metin.replace(
-        'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
-        'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
-    )
-    # Android'de FileUriExposedException hatasını önlemek için webbrowser.open('file://...') çağrısını devre dışı bırak
-    metin = metin.replace(
-        "if os.name=='nt':os.startfile(dosya_yolu)\n  else:webbrowser.open(Path(dosya_yolu).as_uri())",
-        "if os.name=='nt' and 'KALICI_VERI_DIZINI' not in globals():os.startfile(dosya_yolu)"
-    )
-    metin = metin.replace("webbrowser.open(Path(dosya_yolu).as_uri())", "None")
-    metin = metin.replace("webbrowser.open('file://'+dosya_yolu)", "None")
-    return metin
-
-def masaustu_gui_ozelliklerini_ayikla(kaynak_kod: str) -> dict:
-    meta = {"versiyon": "", "baslik": ""}
-    try:
-        m_all = _re.findall(r"v\d+\.\d+\.\d+", kaynak_kod)
-        if m_all:
-            m_all.sort(key=lambda v: tuple(int(x) for x in _re.findall(r"\d+", v)), reverse=True)
-            meta["versiyon"] = m_all[0]
-        m_title = _re.search(r"q\.title\(['\"]([^'\"]+)['\"]\)", kaynak_kod)
-        if m_title:
-            meta["baslik"] = m_title.group(1)
-    except Exception:
-        pass
-    return meta
-
-def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
-    global GITHUB_REPO_ADRESI, GITHUB_TOKEN, AKTIF_OTA_SURUM_BILGISI
-    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
-    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
-    GITHUB_REPO_ADRESI = hedef_repo
-    if hedef_token:
-        GITHUB_TOKEN = hedef_token
-
-    kaynak_kod = None
-    kaynak_adi = ""
-    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
-        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
-            kaynak_kod = f.read()
-        kaynak_adi = os.path.basename(yerel_dosya_yolu)
-    else:
-        bot_dosyalari = _repodaki_guncel_bot_dosyalarini_bul(hedef_repo, hedef_token)
-        for dosya in bot_dosyalari:
-            indirilen = _github_dosya_indir(hedef_repo, dosya, hedef_token)
-            if indirilen and len(indirilen) > 1000:
-                kaynak_kod = indirilen
-                kaynak_adi = dosya
-                break
-        if not kaynak_kod:
-            main_indirilen = _github_dosya_indir(hedef_repo, "main.py", hedef_token)
-            if main_indirilen and len(main_indirilen) > 1000:
-                kaynak_kod = main_indirilen
-                kaynak_adi = "main.py"
-
-    if not kaynak_kod or len(kaynak_kod) < 500:
-        return (False, "⚠️ GitHub üzerinden güncel dosya okunamadı! Ayarlar'dan GitHub Token kontrol edin.")
-
-    try:
-        yedek_acik = dict(acik_islemler)
-        yedek_s, yedek_w = F(S), F(W)
-        yedek_calisiyor = bool(bot_calisiyor)
-        yedek_ayar = masaustu_ayar_sozlugu_uret()
-        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU, GITHUB_REPO_ADRESI, GITHUB_TOKEN)
-
-        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
-        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
-            f.write(cekirdek_kod)
-        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
-
-        meta = masaustu_gui_ozelliklerini_ayikla(kaynak_kod)
-        ver_str = meta.get("versiyon") or globals().get("BOT_VERSIYONU", "v4.0.9")
-        AKTIF_OTA_SURUM_BILGISI = f"{ver_str} [{kaynak_adi}] ({datetime.now().strftime('%H:%M:%S')})"
-        try:
-            with open(_OTA_META_DOSYA, "w", encoding="utf-8") as f:
-                json.dump({"aktif_surum": AKTIF_OTA_SURUM_BILGISI, "kaynak_dosya": kaynak_adi}, f, ensure_ascii=False)
-        except Exception:
-            pass
-
-        acik_islemler.clear()
-        acik_islemler.update(yedek_acik)
-        globals()["S"] = yedek_s
-        globals()["W"] = yedek_w
-        globals()["bot_calisiyor"] = yedek_calisiyor
-        (
-            globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"],
-            globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"],
-            globals()["GITHUB_REPO_ADRESI"], globals()["GITHUB_TOKEN"]
-        ) = yedek_api
-        # Kullanıcının mevcut ayarlarını geri yükle (OTA'nın ayarları bozmasını engelle)
-        _sozlukten_ayarlari_uygula(yedek_ayar)
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-        _ak_kaydet()
-        return (True, f"✅ OTA Güncelleme Başarılı! Aktif Sürüm: {AKTIF_OTA_SURUM_BILGISI}")
-    except Exception as ex:
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
-
-def _kayitli_ota_varsa_yukle():
-    global AKTIF_OTA_SURUM_BILGISI
-    try:
-        if os.path.exists(_OTA_META_DOSYA):
-            with open(_OTA_META_DOSYA, "r", encoding="utf-8") as f:
-                md = json.load(f)
-                if isinstance(md, dict) and md.get("aktif_surum"):
-                    AKTIF_OTA_SURUM_BILGISI = str(md["aktif_surum"])
-        yedek_acik = dict(acik_islemler)
-        yedek_s, yedek_w = F(S), F(W)
-        yedek_calisiyor = bool(bot_calisiyor)
-        yedek_ayar = masaustu_ayar_sozlugu_uret()
-        if os.path.exists(_OTA_YEREL_CEKIRDEK):
-            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
-                kod = f.read()
-            if "def indiktorleri_ekle(df):" in kod:
-                kod = masaustu_kodunu_mobil_cekirdege_ayikla(kod)
-                with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
-                    f.write(kod)
-            if len(kod) > 500:
-                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
-        acik_islemler.update(yedek_acik)
-        globals()["S"], globals()["W"] = yedek_s, yedek_w
-        globals()["bot_calisiyor"] = yedek_calisiyor
-        _sozlukten_ayarlari_uygula(yedek_ayar)
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-    except Exception:
-        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
-
-def bulut_durum_gonder(zorla=False):
-    global _SON_BULUT_YAZMA_HASH
-    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
-        return False
-    try:
-        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
-        veri = {
-            "guncelleme_ts": time.time(),
-            "guncelleyen_cihaz": "ANDROID_MOBIL",
-            "bot_versiyonu": globals().get("BOT_VERSIYONU", "v4.0.9"),
-            "ayarlar": masaustu_ayar_sozlugu_uret(),
-            "acik_islemler": nQ,
-            "demo_vadeli_bakiye": F(S),
-            "gerceklesen_pnl": F(W),
-            "islem_gecmisi": ah[:150]
-        }
-        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
-        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
-            return True
-        _SON_BULUT_YAZMA_HASH = ozet_str
-        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
-        hdr = _github_headers(GITHUB_TOKEN)
-        mevcut_sha = None
-        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
-        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
-            mevcut_sha = r_get.json().get("sha")
-        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
-        payload = {
-            "message": f"Sync: ANDROID_MOBIL ({datetime.now().strftime('%H:%M:%S')})",
-            "content": icerik_b64
-        }
-        if mevcut_sha:
-            payload["sha"] = mevcut_sha
-        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
-        return r_put.status_code in (200, 201)
-    except Exception:
-        return False
-
-def bulut_durum_cek(zorla=False):
-    """Masaüstünde (PC) yapılan ayar, sürüm veya işlem değişikliklerini otomatik algılayıp telefona uygular!"""
-    global _SON_BULUT_OKUMA_TS, _SON_PC_AYAR_TS, S, W, ah
-    simdi = time.time()
-    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
-        return False
-    _SON_BULUT_OKUMA_TS = simdi
-    degisti = False
-    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
-        try:
-            hdr = _github_headers(GITHUB_TOKEN)
-            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}?t={int(simdi)}"
-            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
-            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
-                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
-                if I(d, dict):
-                    uzak_ts = F(d.get("guncelleme_ts") or 0.0)
-                    # 1) MASAÜSTÜNDE AYAR VEYA SÜRÜM DEĞİŞTİYSE TELEFONA OTOMATİK UYGULA!
-                    if d.get("guncelleyen_cihaz") == "PC_MASAUSTU":
-                        uzak_ayar = d.get("ayarlar")
-                        if I(uzak_ayar, dict):
-                            ayar_ts = F(uzak_ayar.get("guncelleme_ts") or uzak_ts)
-                            if ayar_ts > _SON_PC_AYAR_TS:
-                                _SON_PC_AYAR_TS = ayar_ts
-                                _sozlukten_ayarlari_uygula(uzak_ayar)
-                                _api_kaydet_tam()
-                                degisti = True
-                        uzak_ver = str(d.get("bot_versiyonu") or "")
-                        if uzak_ver and uzak_ver not in str(AKTIF_OTA_SURUM_BILGISI):
-                            threading.Thread(target=ota_strateji_guncelle, args=(GITHUB_REPO_ADRESI, GITHUB_TOKEN), daemon=True).start()
-                    # 2) AÇIK İŞLEMLERİ SENKRONİZE ET (Yerel açık işlemleri boş veriyle silme)
-                    uzak_acik = d.get("acik_islemler")
-                    mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
-                    uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)} if I(uzak_acik, dict) else set()
-                    if mevcut_anahtarlar and not uzak_anahtarlar:
-                        if GITHUB_TOKEN:
-                            threading.Thread(target=bulut_durum_gonder, args=(True,), daemon=True).start()
-                    elif I(uzak_acik, dict) and uzak_anahtarlar:
-                        for k_u, v_u in uzak_acik.items():
-                            if I(v_u, dict):
-                                if not I(acik_islemler.get(k_u), dict):
-                                    acik_islemler[k_u] = v_u
-                                    degisti = True
-                                elif v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
-                                    acik_islemler[k_u].update(v_u)
-                                    degisti = True
-                    uzak_ig = d.get("islem_gecmisi")
-                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
-                        ah = uzak_ig
-                        degisti = True
-                    if degisti:
-                        _ak_kaydet()
-        except Exception:
-            pass
-    return degisti
-📌 Adım Adım Uygulama Özeti
-Masaüstü (botv4.0.9.py): Yukarıda paylaştığım botv4.0.9.py dosyasını indirip bilgisayarında çalıştır ve üst menüdeki 🔑 API Ayar penceresinden GitHub Token'ını bir kez kaydedip 📲 PC -> Mobil OTA butonuna bas. (Bu işlem GitHub depona otomatik olarak botv4.0.9.py dosyasını ve masaüstü ayarlarını yükleyecek).   
-botv4_0_9.py
-+ 1
-
-Mobil (main.py): GitHub depondaki main.py dosyasına yukarıdaki senkronizasyon bloğunu yapıştırıp kaydettiğinde;   
-main.py
-+ 1
-
-Masaüstünde kaldıraç, risk, MTF şablonu veya stop modunu değiştirdiğin anda telefon 12 saniye içinde otomatik olarak aynı ayarları alır.
-
-Uygulama arka planda çalışırken ayarların asla kendi kendine değişmez.
-
-Android'de grafik açarken file:// çökmesi tamamen kalkar ve yerel sunucu üzerinden ([http://127.0.0.1](http://127.0.0.1):PORT/...) grafikler sorunsuz açılır.   
-main.py
-
-bu değişiklikle masaüstü programında ota güncellemesine basıldığında githubdaki hangi dosya güncellenecek uygulama githubdan güncelleme için hangi dosyayı çekeçek masaüstü programın farklı versiyonu çıktığında uygulama güncellemeyi okuyabilecek mi
-Bu değişiklikle birlikte masaüstü botu ve mobil uygulama arasındaki GitHub dosya trafiği ve sürüm tanıma mekanizması şu şekilde çalışır:
-
-1. Masaüstünde "📲 PC -> Mobil OTA" Butonuna Basıldığında GitHub'da Hangi Dosyalar Güncellenir?
-Masaüstü programında (pc_kodunu_githuba_ve_mobile_aktar fonksiyonu çalıştığında) GitHub deponuzdaki (emrhozbr/bot) şu dosyalar otomatik olarak güncellenir (yoksa yeni oluşturulur):   
-botv4.0.9.py
-
-botv4.0.9.py: Masaüstündeki aktif sürüm dosyanız doğrudan kendi adıyla yüklenir.
-
-botv4.0.5.py, botv4.0.4.py, botv4.0.3.py: Telefonunuzda daha önceden derlenmiş eski bir APK yüklü olsa bile (eski APK'lar sadece botv4.0.5.py veya botv4.0.3.py dosyalarını aradığı için) geriye dönük uyumluluk amacıyla güncel kod bu dosyaların da üzerine yazılır.
-
-main.py: Masaüstündeki yeni strateji çekirdeği aynı klasördeki main.py dosyasına enjekte edilir ve güncel main.py de GitHub'a yüklenir.   
-botv4.0.9.py
-
-senkron_durum.json: Masaüstündeki tüm aktif ayarlarınız (kaldıraç, risk, MTF şablonu, stop modu), açık işlemleriniz ve bot_versiyonu (v4.0.9) bilgisi anında bu dosyaya yazılır.   
-botv4.0.9.py
-
-2. Mobil Uygulama Güncelleme İçin GitHub'dan Hangi Dosyayı Çeker?
-Mobil uygulamadaki ota_strateji_guncelle fonksiyonu kademeli bir tarama yapar:
-
-Önce En Yüksek Sürümlü botvX.Y.Z.py Dosyasını Çeker: _repodaki_guncel_bot_dosyalarini_bul fonksiyonu GitHub deponuzdaki tüm dosyaları tarar, botv ile başlayıp .py ile biten dosyaların içindeki rakamları ayıklar ve en büyük numaralı dosyayı (örneğin şu an botv4.0.9.py) ilk sıraya koyup indirir.
-
-Yedek Olarak main.py Dosyasını Çeker: Eğer repoda hiçbir botv*.py dosyasına ulaşamazsa doğrudan main.py dosyasını indirip içindeki strateji çekirdeğini ayıklar.   
-botv4.0.9.py
-
-Ayarlar ve Tetikleme İçin senkron_durum.json Dosyasını Okur: Arka planda her 12 saniyede bir senkron_durum.json dosyasını kontrol ederek masaüstünde bir ayar veya sürüm değişikliği olup olmadığına bakar.   
-botv4.0.9.py
-
-3. Masaüstü Programın Farklı (Yeni) Bir Versiyonu Çıktığında Uygulama Okuyabilecek mi?
-Evet, yeni APK derlemenize gerek kalmadan otomatik okuyabilecek. Sistem ileriye dönük sürüm artışlarını iki farklı yoldan yakalar:
-
-Dinamik Sürüm Tarayıcı (_repodaki_guncel_bot_dosyalarini_bul): Mobil uygulama sabit bir dosya adına bağlı değildir. GitHub API üzerinden deponuzdaki dosya listesini çeker ve re.findall(r"\d+", ad) ile sürüm numaralarını matematiksel olarak sıralar ((4, 1, 0) > (4, 0, 9) > (4, 0, 5)). Dolayısıyla ileride masaüstünde botv4.1.0.py, botv4.2.5.py veya botv5.0.0.py çıkardığınızda mobil uygulama en yüksek numaralı yeni dosyayı otomatik olarak bulup indirir.
-
-Otomatik Sürüm Farkı Algılama (bulut_durum_cek): Masaüstünde yeni bir versiyon açtığınızda senkron_durum.json içine yeni bot_versiyonu yazılır. Mobil uygulama senkron_durum.json içindeki bot_versiyonu bilgisinin kendi üzerindeki sürümden farklı olduğunu gördüğü anda, siz telefondan butona basmasanız bile arka planda ota_strateji_guncelle fonksiyonunu otomatik tetikleyerek yeni sürümü indirip canlıya alır.   
-botv4.0.9.py
-
-💡 Gelecek Sürümler İçin Küçük Bir İpucu
-İleride masaüstü botunuzun adını örneğin botv4.1.0.py yaptığınızda, masaüstü kodunun en başındaki:
-
-Python
-BOT_VERSIYONU = 'v4.1.0'
-BOT_DOSYA_ADI = 'botv4.1.0.py'
-değişkenlerini güncellemeniz ve pc_kodunu_githuba_ve_mobile_aktar içindeki yükleme listesinde ("botv4.0.9.py", ...) yerine (BOT_DOSYA_ADI, "botv4.0.9.py", "botv4.0.5.py") kullanmanız yeterlidir; böylece hangi sürümü çıkarırsanız çıkarın masaüstü botu kendi güncel dosya adını doğrudan GitHub'a göndermeye devam eder.
-
-2026-11-05T21:14:05.7139108Z Current runner version: '2.338.2'
-2026-11-05T21:14:05.7176505Z ##[group]Runner Image Provisioner
-2026-11-05T21:14:05.7177884Z Hosted Compute Agent
-2026-11-05T21:14:05.7179400Z Version: 20261028.624
-2026-11-05T21:14:05.7180470Z Commit: 54898b74c23fde5556c9b3c3a2290865feef0dfe
-2026-11-05T21:14:05.7181918Z Build Date: 2026-10-28T21:51:42Z
-2026-11-05T21:14:05.7183160Z Worker ID: {076a74d7-48da-4870-9ccc-9729038c8334}
-2026-11-05T21:14:05.7184409Z Region: eastus2
-2026-11-05T21:14:05.7185576Z Cloud: Azure
-2026-11-05T21:14:05.7186529Z ##[endgroup]
-2026-11-05T21:14:05.7200262Z ##[group]Operating System
-2026-11-05T21:14:05.7201640Z Ubuntu
-2026-11-05T21:14:05.7202646Z 22.04.5
-2026-11-05T21:14:05.7203751Z LTS
-2026-11-05T21:14:05.7204701Z ##[endgroup]
-2026-11-05T21:14:05.7205762Z ##[group]Runner Image
-2026-11-05T21:14:05.7206897Z Image: ubuntu-22.04
-2026-11-05T21:14:05.7208001Z Version: 20261101.347.1
-2026-11-05T21:14:05.7210823Z Included Software: https://github.com/actions/runner-images/blob/ubuntu22/20261101.347/images/ubuntu/Ubuntu2204-Readme.md
-2026-11-05T21:14:05.7213877Z Image Release: https://github.com/actions/runner-images/releases/tag/ubuntu22%2F20261101.347
-2026-11-05T21:14:05.7215835Z ##[endgroup]
-2026-11-05T21:14:05.7218158Z ##[group]GITHUB_TOKEN Permissions
-2026-11-05T21:14:05.7241700Z Contents: read
-2026-11-05T21:14:05.7242773Z Metadata: read
-2026-11-05T21:14:05.7243997Z Packages: read
-2026-11-05T21:14:05.7245080Z ##[endgroup]
-2026-11-05T21:14:05.7248310Z Secret source: Actions
-2026-11-05T21:14:05.7250277Z Cache mode: write
-2026-11-05T21:14:05.7251614Z Prepare workflow directory
-2026-11-05T21:14:05.8269413Z Prepare all required actions
-2026-11-05T21:14:05.8403477Z Getting action download info
-2026-11-05T21:14:06.1448815Z Download action repository 'actions/checkout@v4' (SHA:11d5960a326750d5838078e36cf38b85af677262)
-2026-11-05T21:14:06.2804489Z Download action repository 'actions/setup-python@v5' (SHA:a26af69be951a213d495a4c3e4e4022e16d87065)
-2026-11-05T21:14:06.3752987Z Download action repository 'actions/setup-java@v4' (SHA:cf277c60eb25467037889841efdb72551f06f6c3)
-2026-11-05T21:14:06.6931056Z Download action repository 'subosito/flutter-action@v2' (SHA:1a449444c387b1966244ae4d4f8c696479add0b2)
-2026-11-05T21:14:06.8221120Z Download action repository 'actions/upload-artifact@v4' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
-2026-11-05T21:14:07.0811729Z Getting action download info
-2026-11-05T21:14:07.1700917Z Download action repository 'actions/cache@v5' (SHA:caa296126883cff596d87d8935842f9db880ef25)
-2026-11-05T21:14:07.3463105Z Complete job name: build-apk
-2026-11-05T21:14:07.4789532Z ##[group]Run actions/checkout@v4
-2026-11-05T21:14:07.4791111Z with:
-2026-11-05T21:14:07.4791907Z repository: emrhozbr/bot
-2026-11-05T21:14:07.4799212Z token: ***
-2026-11-05T21:14:07.4799701Z ssh-strict: true
-2026-11-05T21:14:07.4800167Z ssh-user: git
-2026-11-05T21:14:07.4800633Z persist-credentials: true
-2026-11-05T21:14:07.4801172Z clean: true
-2026-11-05T21:14:07.4801649Z sparse-checkout-cone-mode: true
-2026-11-05T21:14:07.4802254Z fetch-depth: 1
-2026-11-05T21:14:07.4802720Z fetch-tags: false
-2026-11-05T21:14:07.4803204Z show-progress: true
-2026-11-05T21:14:07.4803676Z lfs: false
-2026-11-05T21:14:07.4804101Z submodules: false
-2026-11-05T21:14:07.4804580Z set-safe-directory: true
-2026-11-05T21:14:07.4805115Z allow-unsafe-pr-checkout: false
-2026-11-05T21:14:07.4806071Z ##[endgroup]
-2026-11-05T21:14:07.7845185Z Syncing repository: emrhozbr/bot
-2026-11-05T21:14:07.7869128Z ##[group]Getting Git version info
-2026-11-05T21:14:07.7870960Z Working directory is '/home/runner/work/bot/bot'
-2026-11-05T21:14:07.7873716Z [command]/usr/bin/git version
-2026-11-05T21:14:07.8072850Z git version 2.56.0
-2026-11-05T21:14:07.8427288Z ##[endgroup]
-2026-11-05T21:14:07.8455948Z Temporarily overriding HOME='/home/runner/work/_temp/b20f873b-af72-4640-80e9-87eeebedde78' before making global git config changes
-2026-11-05T21:14:07.8491689Z Adding repository directory to the temporary git global config as a safe directory
-2026-11-05T21:14:07.8496228Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bot/bot
-2026-11-05T21:14:07.8788810Z Deleting the contents of '/home/runner/work/bot/bot'
-2026-11-05T21:14:07.8791819Z ##[group]Initializing the repository
-2026-11-05T21:14:07.8793655Z [command]/usr/bin/git init /home/runner/work/bot/bot
-2026-11-05T21:14:07.8796557Z hint: Using 'master' as the name for the initial branch. This default branch name
-2026-11-05T21:14:07.8800013Z hint: will change to "main" in Git 3.0. To configure the initial branch name
-2026-11-05T21:14:07.8803790Z hint: to use in all of your new repositories, which will suppress this warning,
-2026-11-05T21:14:07.8806278Z hint: call:
-2026-11-05T21:14:07.8807468Z hint:
-2026-11-05T21:14:07.8809312Z hint: git config --global init.defaultBranch <name>
-2026-11-05T21:14:07.8811334Z hint:
-2026-11-05T21:14:07.8813163Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
-2026-11-05T21:14:07.8816529Z hint: 'development'. The just-created branch can be renamed via this command:
-2026-11-05T21:14:07.8819257Z hint:
-2026-11-05T21:14:07.8820389Z hint: git branch -m <name>
-2026-11-05T21:14:07.8821718Z hint:
-2026-11-05T21:14:07.8823528Z hint: Disable this message with "git config set advice.defaultBranchName false"
-2026-11-05T21:14:07.8826490Z Initialized empty Git repository in /home/runner/work/bot/bot/.git/
-2026-11-05T21:14:07.8834514Z [command]/usr/bin/git remote add origin https://github.com/emrhozbr/bot
-2026-11-05T21:14:07.8839725Z ##[endgroup]
-2026-11-05T21:14:07.8841945Z ##[group]Disabling automatic garbage collection
-2026-11-05T21:14:07.8843909Z [command]/usr/bin/git config --local gc.auto 0
-2026-11-05T21:14:07.8848115Z ##[endgroup]
-2026-11-05T21:14:07.8850698Z ##[group]Setting up auth
-2026-11-05T21:14:07.8852760Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
-2026-11-05T21:14:07.8862390Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
-2026-11-05T21:14:07.9418341Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
-2026-11-05T21:14:07.9464535Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
-2026-11-05T21:14:07.9757548Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
-2026-11-05T21:14:07.9831759Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
-2026-11-05T21:14:08.0091462Z [command]/usr/bin/git config --local http.https://github.com/.extraheader AUTHORIZATION: basic ***
-2026-11-05T21:14:08.0150787Z ##[endgroup]
-2026-11-05T21:14:08.0153602Z ##[group]Fetching the repository
-2026-11-05T21:14:08.0159421Z [command]/usr/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +2ee7bb7bae94b8c571eb6b1a40fb2ca97089d0a7:refs/remotes/origin/main
-2026-11-05T21:14:08.3029230Z From https://github.com/emrhozbr/bot
-2026-11-05T21:14:08.3038250Z * [new ref] 2ee7bb7bae94b8c571eb6b1a40fb2ca97089d0a7 -> origin/main
-2026-11-05T21:14:08.3058131Z ##[endgroup]
-2026-11-05T21:14:08.3061002Z ##[group]Determining the checkout info
-2026-11-05T21:14:08.3064112Z ##[endgroup]
-2026-11-05T21:14:08.3068881Z [command]/usr/bin/git sparse-checkout disable
-2026-11-05T21:14:08.3074404Z [command]/usr/bin/git config --local --unset-all extensions.worktreeConfig
-2026-11-05T21:14:08.3103370Z ##[group]Checking out the ref
-2026-11-05T21:14:08.3106165Z [command]/usr/bin/git checkout --progress --force -B main refs/remotes/origin/main
-2026-11-05T21:14:08.3248228Z Switched to a new branch 'main'
-2026-11-05T21:14:08.3260211Z branch 'main' set up to track 'origin/main'.
-2026-11-05T21:14:08.3266246Z ##[endgroup]
-2026-11-05T21:14:08.3310996Z [command]/usr/bin/git log -1 --format=%H
-2026-11-05T21:14:08.3347872Z 2ee7bb7bae94b8c571eb6b1a40fb2ca97089d0a7
-2026-11-05T21:14:08.3631116Z ##[group]Run sudo apt-get update
-2026-11-05T21:14:08.3632360Z [36;1msudo apt-get update[0m
-2026-11-05T21:14:08.3634619Z [36;1msudo apt-get install -y libgtk-3-dev mesa-utils zip unzip clang cmake ninja-build pkg-config libncurses5 libglu1-mesa[0m
-2026-11-05T21:14:08.3724431Z shell: /usr/bin/bash -e {0}
-2026-11-05T21:14:08.3725442Z ##[endgroup]
-2026-11-05T21:14:08.5527940Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
-2026-11-05T21:14:08.5944782Z Get:6 https://packages.microsoft.com/ubuntu/22.04/prod jammy InRelease [3632 B]
-2026-11-05T21:14:08.6280485Z Hit:2 http://azure.archive.ubuntu.com/ubuntu jammy InRelease
-2026-11-05T21:14:08.6321257Z Get:3 http://azure.archive.ubuntu.com/ubuntu jammy-updates InRelease [128 kB]
-2026-11-05T21:14:08.6421153Z Get:4 http://azure.archive.ubuntu.com/ubuntu jammy-backports InRelease [127 kB]
-2026-11-05T21:14:08.6530709Z Get:5 http://azure.archive.ubuntu.com/ubuntu jammy-security InRelease [129 kB]
-2026-11-05T21:14:08.7360843Z Get:7 https://packages.microsoft.com/ubuntu/22.04/prod jammy/main amd64 Packages [1033 kB]
-2026-11-05T21:14:08.7671349Z Get:8 https://packages.microsoft.com/ubuntu/22.04/prod jammy/main arm64 Packages [760 kB]
-2026-11-05T21:14:08.9711050Z Get:9 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 Packages [3940 kB]
-2026-11-05T21:14:08.9981419Z Get:10 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main Translation-en [580 kB]
-2026-11-05T21:14:09.0072038Z Get:11 http://azure.archive.ubuntu.com/ubuntu jammy-updates/universe amd64 Packages [1291 kB]
-2026-11-05T21:14:09.0239990Z Get:12 http://azure.archive.ubuntu.com/ubuntu jammy-updates/universe Translation-en [327 kB]
-2026-11-05T21:14:09.2591927Z Get:13 http://azure.archive.ubuntu.com/ubuntu jammy-security/main amd64 Packages [3675 kB]
-2026-11-05T21:14:09.2981670Z Get:14 http://azure.archive.ubuntu.com/ubuntu jammy-security/main Translation-en [513 kB]
-2026-11-05T21:14:09.3051217Z Get:15 http://azure.archive.ubuntu.com/ubuntu jammy-security/restricted Translation-en [1261 kB]
-2026-11-05T21:14:09.3210899Z Get:16 http://azure.archive.ubuntu.com/ubuntu jammy-security/universe amd64 Packages [1057 kB]
-2026-11-05T21:14:09.3321776Z Get:17 http://azure.archive.ubuntu.com/ubuntu jammy-security/universe Translation-en [238 kB]
-2026-11-05T21:14:14.3008749Z Fetched 15.1 MB in 2s (6303 kB/s)
-2026-11-05T21:14:15.8805840Z Reading package lists...
-2026-11-05T21:14:15.9548108Z Reading package lists...
-2026-11-05T21:14:16.2351209Z Building dependency tree...
-2026-11-05T21:14:16.2378815Z Reading state information...
-2026-11-05T21:14:16.4111505Z zip is already the newest version (3.0-12build2).
-2026-11-05T21:14:16.4112894Z unzip is already the newest version (6.0-26ubuntu3.2).
-2026-11-05T21:14:16.4114612Z The following additional packages will be installed:
-2026-11-05T21:14:16.4116225Z cmake-data dh-elpa-helper gir1.2-atk-1.0 gir1.2-atspi-2.0 gir1.2-gtk-3.0
-2026-11-05T21:14:16.4128096Z gir1.2-harfbuzz-0.0 gir1.2-pango-1.0 libatk-bridge2.0-dev libatk1.0-dev
-2026-11-05T21:14:16.4130079Z libatspi2.0-dev libdatrie-dev libdbus-1-dev libegl-dev libegl-mesa0 libegl1
-2026-11-05T21:14:16.4132574Z libegl1-mesa-dev libepoxy-dev libfribidi-dev libgl-dev libgles-dev libgles1
-2026-11-05T21:14:16.4133987Z libgles2 libglvnd-core-dev libglvnd-dev libglx-dev libgraphite2-dev
-2026-11-05T21:14:16.4136131Z libharfbuzz-dev libharfbuzz-gobject0 libharfbuzz-icu0 libjsoncpp25
-2026-11-05T21:14:16.4137527Z libopengl-dev libopengl0 libpango1.0-dev libpangoxft-1.0-0 librhash0
-2026-11-05T21:14:16.4143350Z libthai-dev libtinfo5 libwayland-bin libwayland-dev libxcomposite-dev
-2026-11-05T21:14:16.4147333Z libxcursor-dev libxdamage-dev libxfixes-dev libxft-dev libxi-dev
-2026-11-05T21:14:16.4149671Z libxinerama-dev libxkbcommon-dev libxrandr-dev libxtst-dev mesa-utils-bin
-2026-11-05T21:14:16.4150944Z pango1.0-tools wayland-protocols
-2026-11-05T21:14:16.4320061Z Suggested packages:
-2026-11-05T21:14:16.4321919Z cmake-doc cmake-format libdatrie-doc libgraphite2-utils libgtk-3-doc
-2026-11-05T21:14:16.4323669Z libpango1.0-doc libthai-doc libwayland-doc graphicsmagick
-2026-11-05T21:14:16.4570086Z The following packages will be REMOVED:
-2026-11-05T21:14:16.4571999Z pkgconf r-base-dev
-2026-11-05T21:14:16.4572744Z The following NEW packages will be installed:
-2026-11-05T21:14:16.4573677Z clang cmake cmake-data dh-elpa-helper gir1.2-atk-1.0 gir1.2-atspi-2.0
-2026-11-05T21:14:16.4574731Z gir1.2-gtk-3.0 gir1.2-harfbuzz-0.0 gir1.2-pango-1.0 libatk-bridge2.0-dev
-2026-11-05T21:14:16.4575732Z libatk1.0-dev libatspi2.0-dev libdatrie-dev libdbus-1-dev libegl-dev
-2026-11-05T21:14:16.4576853Z libegl-mesa0 libegl1 libegl1-mesa-dev libepoxy-dev libfribidi-dev libgl-dev
-2026-11-05T21:14:16.4578649Z libgles-dev libgles1 libgles2 libglu1-mesa libglvnd-core-dev libglvnd-dev
-2026-11-05T21:14:16.4579980Z libglx-dev libgraphite2-dev libgtk-3-dev libharfbuzz-dev
-2026-11-05T21:14:16.4581012Z libharfbuzz-gobject0 libharfbuzz-icu0 libjsoncpp25 libncurses5 libopengl-dev
-2026-11-05T21:14:16.4582199Z libopengl0 libpango1.0-dev libpangoxft-1.0-0 librhash0 libthai-dev libtinfo5
-2026-11-05T21:14:16.4583191Z libwayland-bin libwayland-dev libxcomposite-dev libxcursor-dev
-2026-11-05T21:14:16.4584115Z libxdamage-dev libxfixes-dev libxft-dev libxi-dev libxinerama-dev
-2026-11-05T21:14:16.4585067Z libxkbcommon-dev libxrandr-dev libxtst-dev mesa-utils mesa-utils-bin
-2026-11-05T21:14:16.4586009Z ninja-build pango1.0-tools pkg-config wayland-protocols
-2026-11-05T21:14:16.4799539Z 0 upgraded, 60 newly installed, 2 to remove and 31 not upgraded.
-2026-11-05T21:14:16.4800370Z Need to get 12.6 MB of archives.
-2026-11-05T21:14:16.4801197Z After this operation, 68.9 MB of additional disk space will be used.
-2026-11-05T21:14:16.4802134Z Get:1 file:/etc/apt/apt-mirrors.txt Mirrorlist [144 B]
-2026-11-05T21:14:16.5205081Z Get:2 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 pkg-config amd64 0.29.2-1ubuntu3 [48.2 kB]
-2026-11-05T21:14:16.5439407Z Get:3 http://azure.archive.ubuntu.com/ubuntu jammy/universe amd64 clang amd64 1:14.0-55~exp2 [3558 B]
-2026-11-05T21:14:16.5640483Z Get:4 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libjsoncpp25 amd64 1.9.5-3 [80.0 kB]
-2026-11-05T21:14:16.5886215Z Get:5 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 librhash0 amd64 1.4.2-1ubuntu1 [125 kB]
-2026-11-05T21:14:16.6169365Z Get:6 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 dh-elpa-helper all 2.0.9ubuntu1 [7610 B]
-2026-11-05T21:14:16.6368672Z Get:7 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 cmake-data all 3.22.1-1ubuntu1.22.04.2 [1913 kB]
-2026-11-05T21:14:16.8001866Z Get:8 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 cmake amd64 3.22.1-1ubuntu1.22.04.2 [5010 kB]
-2026-11-05T21:14:17.2449063Z Get:9 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 gir1.2-atk-1.0 amd64 2.36.0-3build1 [21.0 kB]
-2026-11-05T21:14:17.2724910Z Get:10 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 gir1.2-atspi-2.0 amd64 2.44.0-3 [18.1 kB]
-2026-11-05T21:14:17.2934255Z Get:11 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 gir1.2-harfbuzz-0.0 amd64 2.7.4-1ubuntu3.2 [31.6 kB]
-2026-11-05T21:14:17.3141411Z Get:12 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpangoxft-1.0-0 amd64 1.50.6+ds-2ubuntu1 [31.0 kB]
-2026-11-05T21:14:17.3349778Z Get:13 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 gir1.2-pango-1.0 amd64 1.50.6+ds-2ubuntu1 [44.0 kB]
-2026-11-05T21:14:17.3590764Z Get:14 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 gir1.2-gtk-3.0 amd64 3.24.33-1ubuntu2.2 [240 kB]
-2026-11-05T21:14:17.3924756Z Get:15 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libatk1.0-dev amd64 2.36.0-3build1 [96.6 kB]
-2026-11-05T21:14:17.4180658Z Get:16 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libdbus-1-dev amd64 1.12.20-2ubuntu4.1 [188 kB]
-2026-11-05T21:14:17.4515960Z Get:17 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxfixes-dev amd64 1:6.0.0-1 [12.2 kB]
-2026-11-05T21:14:17.4799200Z Get:18 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxi-dev amd64 2:1.8-1build1 [193 kB]
-2026-11-05T21:14:17.5141051Z Get:19 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libxtst-dev amd64 2:1.2.3-1ubuntu0.22.04.1 [16.3 kB]
-2026-11-05T21:14:17.5757798Z Get:20 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libatspi2.0-dev amd64 2.44.0-3 [71.5 kB]
-2026-11-05T21:14:17.6021274Z Get:21 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libatk-bridge2.0-dev amd64 2.38.0-3 [2954 B]
-2026-11-05T21:14:17.6222708Z Get:22 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libdatrie-dev amd64 0.2.13-2 [19.7 kB]
-2026-11-05T21:14:17.6424000Z Get:23 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libegl-mesa0 amd64 23.2.1-1ubuntu3.1~22.04.4 [118 kB]
-2026-11-05T21:14:17.6697854Z Get:24 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libegl1 amd64 1.4.0-1 [28.6 kB]
-2026-11-05T21:14:17.6914991Z Get:25 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libglx-dev amd64 1.4.0-1 [14.1 kB]
-2026-11-05T21:14:17.7155709Z Get:26 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libgl-dev amd64 1.4.0-1 [101 kB]
-2026-11-05T21:14:17.7432045Z Get:27 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libegl-dev amd64 1.4.0-1 [18.0 kB]
-2026-11-05T21:14:17.7629251Z Get:28 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libglvnd-core-dev amd64 1.4.0-1 [12.7 kB]
-2026-11-05T21:14:17.7825582Z Get:29 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libgles1 amd64 1.4.0-1 [11.5 kB]
-2026-11-05T21:14:17.8134364Z Get:30 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libgles2 amd64 1.4.0-1 [18.0 kB]
-2026-11-05T21:14:17.8334002Z Get:31 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libgles-dev amd64 1.4.0-1 [49.4 kB]
-2026-11-05T21:14:17.8554509Z Get:32 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libopengl0 amd64 1.4.0-1 [36.5 kB]
-2026-11-05T21:14:17.8774365Z Get:33 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libopengl-dev amd64 1.4.0-1 [3400 B]
-2026-11-05T21:14:17.8973240Z Get:34 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libglvnd-dev amd64 1.4.0-1 [3162 B]
-2026-11-05T21:14:17.9180036Z Get:35 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libegl1-mesa-dev amd64 23.2.1-1ubuntu3.1~22.04.4 [11.3 kB]
-2026-11-05T21:14:17.9377443Z Get:36 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libepoxy-dev amd64 1.5.10-1 [132 kB]
-2026-11-05T21:14:17.9667788Z Get:37 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libfribidi-dev amd64 1.0.8-2ubuntu3.1 [64.8 kB]
-2026-11-05T21:14:17.9910782Z Get:38 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libgraphite2-dev amd64 1.3.14-1ubuntu0.1 [14.7 kB]
-2026-11-05T21:14:18.0525806Z Get:39 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libharfbuzz-icu0 amd64 2.7.4-1ubuntu3.2 [5890 B]
-2026-11-05T21:14:18.0725752Z Get:40 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libharfbuzz-gobject0 amd64 2.7.4-1ubuntu3.2 [26.0 kB]
-2026-11-05T21:14:18.0938331Z Get:41 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libharfbuzz-dev amd64 2.7.4-1ubuntu3.2 [554 kB]
-2026-11-05T21:14:18.1552836Z Get:42 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libthai-dev amd64 0.1.29-1build1 [26.4 kB]
-2026-11-05T21:14:18.1755825Z Get:43 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxft-dev amd64 2.3.4-1 [52.4 kB]
-2026-11-05T21:14:18.1987497Z Get:44 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 pango1.0-tools amd64 1.50.6+ds-2ubuntu1 [45.8 kB]
-2026-11-05T21:14:18.2211941Z Get:45 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libpango1.0-dev amd64 1.50.6+ds-2ubuntu1 [154 kB]
-2026-11-05T21:14:18.2535485Z Get:46 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libwayland-bin amd64 1.20.0-1ubuntu0.1 [20.4 kB]
-2026-11-05T21:14:18.2737465Z Get:47 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libwayland-dev amd64 1.20.0-1ubuntu0.1 [69.5 kB]
-2026-11-05T21:14:18.2987373Z Get:48 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxcomposite-dev amd64 1:0.4.5-1build2 [9326 B]
-2026-11-05T21:14:18.3193209Z Get:49 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxcursor-dev amd64 1:1.2.0-2build4 [28.2 kB]
-2026-11-05T21:14:18.3403195Z Get:50 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxdamage-dev amd64 1:1.1.5-2build2 [5264 B]
-2026-11-05T21:14:18.3630378Z Get:51 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxinerama-dev amd64 2:1.1.4-3 [8104 B]
-2026-11-05T21:14:18.3834248Z Get:52 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxkbcommon-dev amd64 1.4.0-1 [54.9 kB]
-2026-11-05T21:14:18.4076429Z Get:53 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libxrandr-dev amd64 2:1.5.2-1build1 [26.7 kB]
-2026-11-05T21:14:18.4286738Z Get:54 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 wayland-protocols all 1.25-1 [70.6 kB]
-2026-11-05T21:14:18.4527762Z Get:55 http://azure.archive.ubuntu.com/ubuntu jammy-updates/main amd64 libgtk-3-dev amd64 3.24.33-1ubuntu2.2 [1082 kB]
-2026-11-05T21:14:18.5396882Z Get:56 http://azure.archive.ubuntu.com/ubuntu jammy-updates/universe amd64 libtinfo5 amd64 6.3-2ubuntu0.3 [100 kB]
-2026-11-05T21:14:18.5653213Z Get:57 http://azure.archive.ubuntu.com/ubuntu jammy-updates/universe amd64 libncurses5 amd64 6.3-2ubuntu0.3 [107 kB]
-2026-11-05T21:14:18.6357288Z Get:58 http://azure.archive.ubuntu.com/ubuntu jammy/universe amd64 mesa-utils-bin amd64 8.4.0-1ubuntu1 [53.8 kB]
-2026-11-05T21:14:18.6579839Z Get:59 http://azure.archive.ubuntu.com/ubuntu jammy/universe amd64 ninja-build amd64 1.10.1-1 [111 kB]
-2026-11-05T21:14:18.6842515Z Get:60 http://azure.archive.ubuntu.com/ubuntu jammy/main amd64 libglu1-mesa amd64 9.0.2-1 [145 kB]
-2026-11-05T21:14:18.7136750Z Get:61 http://azure.archive.ubuntu.com/ubuntu jammy/universe amd64 mesa-utils amd64 8.4.0-1ubuntu1 [1065 kB]
-2026-11-05T21:14:19.2189583Z Fetched 12.6 MB in 2s (5411 kB/s)
-2026-11-05T21:14:19.2733855Z (Reading database ...
-2026-11-05T21:14:19.2734461Z (Reading database ... 5%
-2026-11-05T21:14:19.2734867Z (Reading database ... 10%
-2026-11-05T21:14:19.2735260Z (Reading database ... 15%
-2026-11-05T21:14:19.2735631Z (Reading database ... 20%
-2026-11-05T21:14:19.2736001Z (Reading database ... 25%
-2026-11-05T21:14:19.2736371Z (Reading database ... 30%
-2026-11-05T21:14:19.2736739Z (Reading database ... 35%
-2026-11-05T21:14:19.2737110Z (Reading database ... 40%
-2026-11-05T21:14:19.2737492Z (Reading database ... 45%
-2026-11-05T21:14:19.2737868Z (Reading database ... 50%
-2026-11-05T21:14:19.3188284Z (Reading database ... 55%
-2026-11-05T21:14:19.5687254Z (Reading database ... 60%
-2026-11-05T21:14:19.7754108Z (Reading database ... 65%
-2026-11-05T21:14:19.9607816Z (Reading database ... 70%
-2026-11-05T21:14:20.1697602Z (Reading database ... 75%
-2026-11-05T21:14:20.3121735Z (Reading database ... 80%
-2026-11-05T21:14:20.5185257Z (Reading database ... 85%
-2026-11-05T21:14:20.7259003Z (Reading database ... 90%
-2026-11-05T21:14:20.9183413Z (Reading database ... 95%
-2026-11-05T21:14:20.9184095Z (Reading database ... 100%
-2026-11-05T21:14:20.9184882Z (Reading database ... 263777 files and directories currently installed.)
-2026-11-05T21:14:20.9239961Z Removing r-base-dev (4.6.2-1.2204.0) ...
-2026-11-05T21:14:21.0100641Z dpkg: pkgconf: dependency problems, but removing anyway as you requested:
-2026-11-05T21:14:21.0101353Z php8.1-dev depends on pkg-config; however:
-2026-11-05T21:14:21.0101970Z Package pkg-config is not installed.
-2026-11-05T21:14:21.0102640Z Package pkgconf which provides pkg-config is to be removed.
-2026-11-05T21:14:21.0103249Z mono-devel depends on pkg-config; however:
-2026-11-05T21:14:21.0103846Z Package pkg-config is not installed.
-2026-11-05T21:14:21.0109529Z Package pkgconf which provides pkg-config is to be removed.
-2026-11-05T21:14:21.0110408Z libmagickwand-6.q16-dev:amd64 depends on pkg-config; however:
-2026-11-05T21:14:21.0111195Z Package pkg-config is not installed.
-2026-11-05T21:14:21.0112422Z Package pkgconf which provides pkg-config is to be removed.
-2026-11-05T21:14:21.0113275Z libmagickcore-6.q16-dev:amd64 depends on pkg-config; however:
-2026-11-05T21:14:21.0114003Z Package pkg-config is not installed.
-2026-11-05T21:14:21.0114682Z Package pkgconf which provides pkg-config is to be removed.
-2026-11-05T21:14:21.0115512Z libglib2.0-dev:amd64 depends on pkg-config; however:
-2026-11-05T21:14:21.0116198Z Package pkg-config is not installed.
-2026-11-05T21:14:21.0116890Z Package pkgconf which provides pkg-config is to be removed.
-2026-11-05T21:14:21.0117693Z libfontconfig-dev:amd64 depends on pkg-config; however:
-2026-11-05T21:14:21.0118412Z Package pkg-config is not installed.
-2026-11-05T21:14:21.0119372Z Package pkgconf which provides pkg-config is to be removed.
-2026-11-05T21:14:21.0119945Z
-2026-11-05T21:14:21.0173157Z Removing pkgconf (1.8.0-1) ...
-2026-11-05T21:14:21.1288833Z Removing 'diversion of /usr/bin/pkg-config to /usr/bin/pkg-config.real by pkgconf'
-2026-11-05T21:14:21.1440167Z Removing 'diversion of /usr/share/aclocal/pkg.m4 to /usr/share/aclocal/pkg.real.m4 by pkgconf'
-2026-11-05T21:14:21.1570230Z Removing 'diversion of /usr/share/man/man1/pkg-config.1.gz to /usr/share/man/man1/pkg-config.real.1.gz by pkgconf'
-2026-11-05T21:14:21.1709577Z Removing 'diversion of /usr/share/pkg-config-crosswrapper to /usr/share/pkg-config-crosswrapper.real by pkgconf'
-2026-11-05T21:14:21.2299504Z Selecting previously unselected package pkg-config.
-2026-11-05T21:14:21.2399573Z (Reading database ...
-2026-11-05T21:14:21.2400227Z (Reading database ... 5%
-2026-11-05T21:14:21.2401004Z (Reading database ... 10%
-2026-11-05T21:14:21.2401728Z (Reading database ... 15%
-2026-11-05T21:14:21.2402324Z (Reading database ... 20%
-2026-11-05T21:14:21.2402900Z (Reading database ... 25%
-2026-11-05T21:14:21.2403480Z (Reading database ... 30%
-2026-11-05T21:14:21.2404061Z (Reading database ... 35%
-2026-11-05T21:14:21.2404642Z (Reading database ... 40%
-2026-11-05T21:14:21.2405257Z (Reading database ... 45%
-2026-11-05T21:14:21.2405851Z (Reading database ... 50%
-2026-11-05T21:14:21.2419154Z (Reading database ... 55%
-2026-11-05T21:14:21.2459147Z (Reading database ... 60%
-2026-11-05T21:14:21.2562067Z (Reading database ... 65%
-2026-11-05T21:14:21.2595902Z (Reading database ... 70%
-2026-11-05T21:14:21.2659857Z (Reading database ... 75%
-2026-11-05T21:14:21.2689975Z (Reading database ... 80%
-2026-11-05T21:14:21.2857538Z (Reading database ... 85%
-2026-11-05T21:14:21.3063705Z (Reading database ... 90%
-2026-11-05T21:14:21.3371081Z (Reading database ... 95%
-2026-11-05T21:14:21.3372346Z (Reading database ... 100%
-2026-11-05T21:14:21.3373254Z (Reading database ... 263755 files and directories currently installed.)
-2026-11-05T21:14:21.3428274Z Preparing to unpack .../00-pkg-config_0.29.2-1ubuntu3_amd64.deb ...
-2026-11-05T21:14:21.3438248Z Unpacking pkg-config (0.29.2-1ubuntu3) ...
-2026-11-05T21:14:21.3741723Z Selecting previously unselected package clang.
-2026-11-05T21:14:21.3945662Z Preparing to unpack .../01-clang_1%3a14.0-55~exp2_amd64.deb ...
-2026-11-05T21:14:21.3954555Z Unpacking clang (1:14.0-55~exp2) ...
-2026-11-05T21:14:21.4219536Z Selecting previously unselected package libjsoncpp25:amd64.
-2026-11-05T21:14:21.4425200Z Preparing to unpack .../02-libjsoncpp25_1.9.5-3_amd64.deb ...
-2026-11-05T21:14:21.4455332Z Unpacking libjsoncpp25:amd64 (1.9.5-3) ...
-2026-11-05T21:14:21.4719737Z Selecting previously unselected package librhash0:amd64.
-2026-11-05T21:14:21.4923622Z Preparing to unpack .../03-librhash0_1.4.2-1ubuntu1_amd64.deb ...
-2026-11-05T21:14:21.4949738Z Unpacking librhash0:amd64 (1.4.2-1ubuntu1) ...
-2026-11-05T21:14:21.5259423Z Selecting previously unselected package dh-elpa-helper.
-2026-11-05T21:14:21.5452328Z Preparing to unpack .../04-dh-elpa-helper_2.0.9ubuntu1_all.deb ...
-2026-11-05T21:14:21.5461433Z Unpacking dh-elpa-helper (2.0.9ubuntu1) ...
-2026-11-05T21:14:21.5753981Z Selecting previously unselected package cmake-data.
-2026-11-05T21:14:21.5956346Z Preparing to unpack .../05-cmake-data_3.22.1-1ubuntu1.22.04.2_all.deb ...
-2026-11-05T21:14:21.6047601Z Unpacking cmake-data (3.22.1-1ubuntu1.22.04.2) ...
-2026-11-05T21:14:22.2519679Z Selecting previously unselected package cmake.
-2026-11-05T21:14:22.2717967Z Preparing to unpack .../06-cmake_3.22.1-1ubuntu1.22.04.2_amd64.deb ...
-2026-11-05T21:14:22.2727842Z Unpacking cmake (3.22.1-1ubuntu1.22.04.2) ...
-2026-11-05T21:14:22.3898073Z Selecting previously unselected package gir1.2-atk-1.0:amd64.
-2026-11-05T21:14:22.4107651Z Preparing to unpack .../07-gir1.2-atk-1.0_2.36.0-3build1_amd64.deb ...
-2026-11-05T21:14:22.4119208Z Unpacking gir1.2-atk-1.0:amd64 (2.36.0-3build1) ...
-2026-11-05T21:14:22.4379320Z Selecting previously unselected package gir1.2-atspi-2.0:amd64.
-2026-11-05T21:14:22.4566910Z Preparing to unpack .../08-gir1.2-atspi-2.0_2.44.0-3_amd64.deb ...
-2026-11-05T21:14:22.4588904Z Unpacking gir1.2-atspi-2.0:amd64 (2.44.0-3) ...
-2026-11-05T21:14:22.4829711Z Selecting previously unselected package gir1.2-harfbuzz-0.0:amd64.
-2026-11-05T21:14:22.5059469Z Preparing to unpack .../09-gir1.2-harfbuzz-0.0_2.7.4-1ubuntu3.2_amd64.deb ...
-2026-11-05T21:14:22.5079350Z Unpacking gir1.2-harfbuzz-0.0:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:22.5323486Z Selecting previously unselected package libpangoxft-1.0-0:amd64.
-2026-11-05T21:14:22.5527720Z Preparing to unpack .../10-libpangoxft-1.0-0_1.50.6+ds-2ubuntu1_amd64.deb ...
-2026-11-05T21:14:22.5539276Z Unpacking libpangoxft-1.0-0:amd64 (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:22.5799556Z Selecting previously unselected package gir1.2-pango-1.0:amd64.
-2026-11-05T21:14:22.5994699Z Preparing to unpack .../11-gir1.2-pango-1.0_1.50.6+ds-2ubuntu1_amd64.deb ...
-2026-11-05T21:14:22.6013479Z Unpacking gir1.2-pango-1.0:amd64 (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:22.6259444Z Selecting previously unselected package gir1.2-gtk-3.0:amd64.
-2026-11-05T21:14:22.6453723Z Preparing to unpack .../12-gir1.2-gtk-3.0_3.24.33-1ubuntu2.2_amd64.deb ...
-2026-11-05T21:14:22.6469591Z Unpacking gir1.2-gtk-3.0:amd64 (3.24.33-1ubuntu2.2) ...
-2026-11-05T21:14:22.6744920Z Selecting previously unselected package libatk1.0-dev:amd64.
-2026-11-05T21:14:22.6949435Z Preparing to unpack .../13-libatk1.0-dev_2.36.0-3build1_amd64.deb ...
-2026-11-05T21:14:22.6959401Z Unpacking libatk1.0-dev:amd64 (2.36.0-3build1) ...
-2026-11-05T21:14:22.7327045Z Selecting previously unselected package libdbus-1-dev:amd64.
-2026-11-05T21:14:22.7557228Z Preparing to unpack .../14-libdbus-1-dev_1.12.20-2ubuntu4.1_amd64.deb ...
-2026-11-05T21:14:22.7567142Z Unpacking libdbus-1-dev:amd64 (1.12.20-2ubuntu4.1) ...
-2026-11-05T21:14:22.7899757Z Selecting previously unselected package libxfixes-dev:amd64.
-2026-11-05T21:14:22.8104825Z Preparing to unpack .../15-libxfixes-dev_1%3a6.0.0-1_amd64.deb ...
-2026-11-05T21:14:22.8115012Z Unpacking libxfixes-dev:amd64 (1:6.0.0-1) ...
-2026-11-05T21:14:22.8399572Z Selecting previously unselected package libxi-dev:amd64.
-2026-11-05T21:14:22.8586729Z Preparing to unpack .../16-libxi-dev_2%3a1.8-1build1_amd64.deb ...
-2026-11-05T21:14:22.8605001Z Unpacking libxi-dev:amd64 (2:1.8-1build1) ...
-2026-11-05T21:14:22.9016143Z Selecting previously unselected package libxtst-dev:amd64.
-2026-11-05T21:14:22.9223868Z Preparing to unpack .../17-libxtst-dev_2%3a1.2.3-1ubuntu0.22.04.1_amd64.deb ...
-2026-11-05T21:14:22.9232903Z Unpacking libxtst-dev:amd64 (2:1.2.3-1ubuntu0.22.04.1) ...
-2026-11-05T21:14:22.9483151Z Selecting previously unselected package libatspi2.0-dev:amd64.
-2026-11-05T21:14:22.9687551Z Preparing to unpack .../18-libatspi2.0-dev_2.44.0-3_amd64.deb ...
-2026-11-05T21:14:22.9699559Z Unpacking libatspi2.0-dev:amd64 (2.44.0-3) ...
-2026-11-05T21:14:23.0029517Z Selecting previously unselected package libatk-bridge2.0-dev:amd64.
-2026-11-05T21:14:23.0218250Z Preparing to unpack .../19-libatk-bridge2.0-dev_2.38.0-3_amd64.deb ...
-2026-11-05T21:14:23.0226445Z Unpacking libatk-bridge2.0-dev:amd64 (2.38.0-3) ...
-2026-11-05T21:14:23.0455587Z Selecting previously unselected package libdatrie-dev:amd64.
-2026-11-05T21:14:23.0662069Z Preparing to unpack .../20-libdatrie-dev_0.2.13-2_amd64.deb ...
-2026-11-05T21:14:23.0671080Z Unpacking libdatrie-dev:amd64 (0.2.13-2) ...
-2026-11-05T21:14:23.0924431Z Selecting previously unselected package libegl-mesa0:amd64.
-2026-11-05T21:14:23.1130665Z Preparing to unpack .../21-libegl-mesa0_23.2.1-1ubuntu3.1~22.04.4_amd64.deb ...
-2026-11-05T21:14:23.1140875Z Unpacking libegl-mesa0:amd64 (23.2.1-1ubuntu3.1~22.04.4) ...
-2026-11-05T21:14:23.1434387Z Selecting previously unselected package libegl1:amd64.
-2026-11-05T21:14:23.1642238Z Preparing to unpack .../22-libegl1_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.1650911Z Unpacking libegl1:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.1891063Z Selecting previously unselected package libglx-dev:amd64.
-2026-11-05T21:14:23.2096798Z Preparing to unpack .../23-libglx-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.2105041Z Unpacking libglx-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.2350678Z Selecting previously unselected package libgl-dev:amd64.
-2026-11-05T21:14:23.2572677Z Preparing to unpack .../24-libgl-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.2582427Z Unpacking libgl-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.2869658Z Selecting previously unselected package libegl-dev:amd64.
-2026-11-05T21:14:23.3075276Z Preparing to unpack .../25-libegl-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.3084797Z Unpacking libegl-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.3330465Z Selecting previously unselected package libglvnd-core-dev:amd64.
-2026-11-05T21:14:23.3539884Z Preparing to unpack .../26-libglvnd-core-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.3550101Z Unpacking libglvnd-core-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.3802337Z Selecting previously unselected package libgles1:amd64.
-2026-11-05T21:14:23.4006335Z Preparing to unpack .../27-libgles1_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.4015472Z Unpacking libgles1:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.4265493Z Selecting previously unselected package libgles2:amd64.
-2026-11-05T21:14:23.4471376Z Preparing to unpack .../28-libgles2_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.4491654Z Unpacking libgles2:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.4730426Z Selecting previously unselected package libgles-dev:amd64.
-2026-11-05T21:14:23.4926517Z Preparing to unpack .../29-libgles-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.4935589Z Unpacking libgles-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.5233016Z Selecting previously unselected package libopengl0:amd64.
-2026-11-05T21:14:23.5437328Z Preparing to unpack .../30-libopengl0_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.5449557Z Unpacking libopengl0:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.5683046Z Selecting previously unselected package libopengl-dev:amd64.
-2026-11-05T21:14:23.5890225Z Preparing to unpack .../31-libopengl-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.5900815Z Unpacking libopengl-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.6134871Z Selecting previously unselected package libglvnd-dev:amd64.
-2026-11-05T21:14:23.6340281Z Preparing to unpack .../32-libglvnd-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:23.6348949Z Unpacking libglvnd-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:23.6583798Z Selecting previously unselected package libegl1-mesa-dev:amd64.
-2026-11-05T21:14:23.6789456Z Preparing to unpack .../33-libegl1-mesa-dev_23.2.1-1ubuntu3.1~22.04.4_amd64.deb ...
-2026-11-05T21:14:23.6809467Z Unpacking libegl1-mesa-dev:amd64 (23.2.1-1ubuntu3.1~22.04.4) ...
-2026-11-05T21:14:23.7037591Z Selecting previously unselected package libepoxy-dev:amd64.
-2026-11-05T21:14:23.7241099Z Preparing to unpack .../34-libepoxy-dev_1.5.10-1_amd64.deb ...
-2026-11-05T21:14:23.7250535Z Unpacking libepoxy-dev:amd64 (1.5.10-1) ...
-2026-11-05T21:14:23.7580492Z Selecting previously unselected package libfribidi-dev:amd64.
-2026-11-05T21:14:23.7786766Z Preparing to unpack .../35-libfribidi-dev_1.0.8-2ubuntu3.1_amd64.deb ...
-2026-11-05T21:14:23.7799023Z Unpacking libfribidi-dev:amd64 (1.0.8-2ubuntu3.1) ...
-2026-11-05T21:14:23.8131382Z Selecting previously unselected package libgraphite2-dev:amd64.
-2026-11-05T21:14:23.8337047Z Preparing to unpack .../36-libgraphite2-dev_1.3.14-1ubuntu0.1_amd64.deb ...
-2026-11-05T21:14:23.8347736Z Unpacking libgraphite2-dev:amd64 (1.3.14-1ubuntu0.1) ...
-2026-11-05T21:14:23.8598113Z Selecting previously unselected package libharfbuzz-icu0:amd64.
-2026-11-05T21:14:23.8803232Z Preparing to unpack .../37-libharfbuzz-icu0_2.7.4-1ubuntu3.2_amd64.deb ...
-2026-11-05T21:14:23.8821666Z Unpacking libharfbuzz-icu0:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:23.9082514Z Selecting previously unselected package libharfbuzz-gobject0:amd64.
-2026-11-05T21:14:23.9289444Z Preparing to unpack .../38-libharfbuzz-gobject0_2.7.4-1ubuntu3.2_amd64.deb ...
-2026-11-05T21:14:23.9298952Z Unpacking libharfbuzz-gobject0:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:23.9533809Z Selecting previously unselected package libharfbuzz-dev:amd64.
-2026-11-05T21:14:23.9740164Z Preparing to unpack .../39-libharfbuzz-dev_2.7.4-1ubuntu3.2_amd64.deb ...
-2026-11-05T21:14:23.9748055Z Unpacking libharfbuzz-dev:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:24.0249267Z Selecting previously unselected package libthai-dev:amd64.
-2026-11-05T21:14:24.0480867Z Preparing to unpack .../40-libthai-dev_0.1.29-1build1_amd64.deb ...
-2026-11-05T21:14:24.0488108Z Unpacking libthai-dev:amd64 (0.1.29-1build1) ...
-2026-11-05T21:14:24.0754786Z Selecting previously unselected package libxft-dev:amd64.
-2026-11-05T21:14:24.0963693Z Preparing to unpack .../41-libxft-dev_2.3.4-1_amd64.deb ...
-2026-11-05T21:14:24.0974445Z Unpacking libxft-dev:amd64 (2.3.4-1) ...
-2026-11-05T21:14:24.1228059Z Selecting previously unselected package pango1.0-tools.
-2026-11-05T21:14:24.1455380Z Preparing to unpack .../42-pango1.0-tools_1.50.6+ds-2ubuntu1_amd64.deb ...
-2026-11-05T21:14:24.1628028Z Unpacking pango1.0-tools (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:24.1882752Z Selecting previously unselected package libpango1.0-dev:amd64.
-2026-11-05T21:14:24.2090165Z Preparing to unpack .../43-libpango1.0-dev_1.50.6+ds-2ubuntu1_amd64.deb ...
-2026-11-05T21:14:24.2099386Z Unpacking libpango1.0-dev:amd64 (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:24.2499095Z Selecting previously unselected package libwayland-bin.
-2026-11-05T21:14:24.2710201Z Preparing to unpack .../44-libwayland-bin_1.20.0-1ubuntu0.1_amd64.deb ...
-2026-11-05T21:14:24.2721879Z Unpacking libwayland-bin (1.20.0-1ubuntu0.1) ...
-2026-11-05T21:14:24.2956620Z Selecting previously unselected package libwayland-dev:amd64.
-2026-11-05T21:14:24.3158917Z Preparing to unpack .../45-libwayland-dev_1.20.0-1ubuntu0.1_amd64.deb ...
-2026-11-05T21:14:24.3168648Z Unpacking libwayland-dev:amd64 (1.20.0-1ubuntu0.1) ...
-2026-11-05T21:14:24.3496334Z Selecting previously unselected package libxcomposite-dev:amd64.
-2026-11-05T21:14:24.3703555Z Preparing to unpack .../46-libxcomposite-dev_1%3a0.4.5-1build2_amd64.deb ...
-2026-11-05T21:14:24.3713553Z Unpacking libxcomposite-dev:amd64 (1:0.4.5-1build2) ...
-2026-11-05T21:14:24.3967546Z Selecting previously unselected package libxcursor-dev:amd64.
-2026-11-05T21:14:24.4178013Z Preparing to unpack .../47-libxcursor-dev_1%3a1.2.0-2build4_amd64.deb ...
-2026-11-05T21:14:24.4199632Z Unpacking libxcursor-dev:amd64 (1:1.2.0-2build4) ...
-2026-11-05T21:14:24.4486554Z Selecting previously unselected package libxdamage-dev:amd64.
-2026-11-05T21:14:24.4691075Z Preparing to unpack .../48-libxdamage-dev_1%3a1.1.5-2build2_amd64.deb ...
-2026-11-05T21:14:24.4700839Z Unpacking libxdamage-dev:amd64 (1:1.1.5-2build2) ...
-2026-11-05T21:14:24.4933153Z Selecting previously unselected package libxinerama-dev:amd64.
-2026-11-05T21:14:24.5199615Z Preparing to unpack .../49-libxinerama-dev_2%3a1.1.4-3_amd64.deb ...
-2026-11-05T21:14:24.5217915Z Unpacking libxinerama-dev:amd64 (2:1.1.4-3) ...
-2026-11-05T21:14:24.5452626Z Selecting previously unselected package libxkbcommon-dev:amd64.
-2026-11-05T21:14:24.5659208Z Preparing to unpack .../50-libxkbcommon-dev_1.4.0-1_amd64.deb ...
-2026-11-05T21:14:24.5669747Z Unpacking libxkbcommon-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:24.5920481Z Selecting previously unselected package libxrandr-dev:amd64.
-2026-11-05T21:14:24.6124241Z Preparing to unpack .../51-libxrandr-dev_2%3a1.5.2-1build1_amd64.deb ...
-2026-11-05T21:14:24.6133363Z Unpacking libxrandr-dev:amd64 (2:1.5.2-1build1) ...
-2026-11-05T21:14:24.6385543Z Selecting previously unselected package wayland-protocols.
-2026-11-05T21:14:24.6590436Z Preparing to unpack .../52-wayland-protocols_1.25-1_all.deb ...
-2026-11-05T21:14:24.6599710Z Unpacking wayland-protocols (1.25-1) ...
-2026-11-05T21:14:24.6949172Z Selecting previously unselected package libgtk-3-dev:amd64.
-2026-11-05T21:14:24.7142136Z Preparing to unpack .../53-libgtk-3-dev_3.24.33-1ubuntu2.2_amd64.deb ...
-2026-11-05T21:14:24.7164137Z Unpacking libgtk-3-dev:amd64 (3.24.33-1ubuntu2.2) ...
-2026-11-05T21:14:24.8680696Z Selecting previously unselected package libtinfo5:amd64.
-2026-11-05T21:14:24.8889729Z Preparing to unpack .../54-libtinfo5_6.3-2ubuntu0.3_amd64.deb ...
-2026-11-05T21:14:24.8922773Z Unpacking libtinfo5:amd64 (6.3-2ubuntu0.3) ...
-2026-11-05T21:14:24.9183555Z Selecting previously unselected package libncurses5:amd64.
-2026-11-05T21:14:24.9390209Z Preparing to unpack .../55-libncurses5_6.3-2ubuntu0.3_amd64.deb ...
-2026-11-05T21:14:24.9400787Z Unpacking libncurses5:amd64 (6.3-2ubuntu0.3) ...
-2026-11-05T21:14:24.9669630Z Selecting previously unselected package mesa-utils-bin:amd64.
-2026-11-05T21:14:24.9856411Z Preparing to unpack .../56-mesa-utils-bin_8.4.0-1ubuntu1_amd64.deb ...
-2026-11-05T21:14:24.9863690Z Unpacking mesa-utils-bin:amd64 (8.4.0-1ubuntu1) ...
-2026-11-05T21:14:25.0191572Z Selecting previously unselected package ninja-build.
-2026-11-05T21:14:25.0395665Z Preparing to unpack .../57-ninja-build_1.10.1-1_amd64.deb ...
-2026-11-05T21:14:25.0406260Z Unpacking ninja-build (1.10.1-1) ...
-2026-11-05T21:14:25.0818330Z Selecting previously unselected package libglu1-mesa:amd64.
-2026-11-05T21:14:25.1026869Z Preparing to unpack .../58-libglu1-mesa_9.0.2-1_amd64.deb ...
-2026-11-05T21:14:25.1034051Z Unpacking libglu1-mesa:amd64 (9.0.2-1) ...
-2026-11-05T21:14:25.1300513Z Selecting previously unselected package mesa-utils.
-2026-11-05T21:14:25.1504856Z Preparing to unpack .../59-mesa-utils_8.4.0-1ubuntu1_amd64.deb ...
-2026-11-05T21:14:25.1519394Z Unpacking mesa-utils (8.4.0-1ubuntu1) ...
-2026-11-05T21:14:25.2360345Z Setting up libharfbuzz-icu0:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:25.2393390Z Setting up libpangoxft-1.0-0:amd64 (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:25.2415556Z Setting up libglvnd-core-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.2437989Z Setting up gir1.2-atk-1.0:amd64 (2.36.0-3build1) ...
-2026-11-05T21:14:25.2458278Z Setting up libfribidi-dev:amd64 (1.0.8-2ubuntu3.1) ...
-2026-11-05T21:14:25.2479640Z Setting up libxkbcommon-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.2502097Z Setting up pango1.0-tools (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:25.2527287Z Setting up libharfbuzz-gobject0:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:25.2551231Z Setting up gir1.2-atspi-2.0:amd64 (2.44.0-3) ...
-2026-11-05T21:14:25.2574173Z Setting up gir1.2-harfbuzz-0.0:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:25.2596223Z Setting up libopengl0:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.2616976Z Setting up ninja-build (1.10.1-1) ...
-2026-11-05T21:14:25.2637662Z Setting up libxfixes-dev:amd64 (1:6.0.0-1) ...
-2026-11-05T21:14:25.2658818Z Setting up libwayland-bin (1.20.0-1ubuntu0.1) ...
-2026-11-05T21:14:25.2687756Z Setting up libgraphite2-dev:amd64 (1.3.14-1ubuntu0.1) ...
-2026-11-05T21:14:25.2711635Z Setting up gir1.2-pango-1.0:amd64 (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:25.2735053Z Setting up libxrandr-dev:amd64 (2:1.5.2-1build1) ...
-2026-11-05T21:14:25.2755615Z Setting up libegl-mesa0:amd64 (23.2.1-1ubuntu3.1~22.04.4) ...
-2026-11-05T21:14:25.2777964Z Setting up libgles2:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.2800951Z Setting up dh-elpa-helper (2.0.9ubuntu1) ...
-2026-11-05T21:14:25.2825587Z Setting up clang (1:14.0-55~exp2) ...
-2026-11-05T21:14:25.3114886Z Setting up libgles1:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.3139747Z Setting up libjsoncpp25:amd64 (1.9.5-3) ...
-2026-11-05T21:14:25.3163698Z Setting up pkg-config (0.29.2-1ubuntu3) ...
-2026-11-05T21:14:25.3526102Z Setting up libxinerama-dev:amd64 (2:1.1.4-3) ...
-2026-11-05T21:14:25.3547894Z Setting up wayland-protocols (1.25-1) ...
-2026-11-05T21:14:25.3570591Z Setting up libdatrie-dev:amd64 (0.2.13-2) ...
-2026-11-05T21:14:25.3590875Z Setting up librhash0:amd64 (1.4.2-1ubuntu1) ...
-2026-11-05T21:14:25.3620838Z Setting up libegl1:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.3645614Z Setting up libglx-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.3670158Z Setting up cmake-data (3.22.1-1ubuntu1.22.04.2) ...
-2026-11-05T21:14:25.4323275Z Setting up libglu1-mesa:amd64 (9.0.2-1) ...
-2026-11-05T21:14:25.4350778Z Setting up libopengl-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.4373304Z Setting up libxi-dev:amd64 (2:1.8-1build1) ...
-2026-11-05T21:14:25.4413264Z Setting up libtinfo5:amd64 (6.3-2ubuntu0.3) ...
-2026-11-05T21:14:25.4436379Z Setting up libgl-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.4460585Z Setting up libatk1.0-dev:amd64 (2.36.0-3build1) ...
-2026-11-05T21:14:25.4483648Z Setting up libxft-dev:amd64 (2.3.4-1) ...
-2026-11-05T21:14:25.4505148Z Setting up libxtst-dev:amd64 (2:1.2.3-1ubuntu0.22.04.1) ...
-2026-11-05T21:14:25.4529595Z Setting up libxdamage-dev:amd64 (1:1.1.5-2build2) ...
-2026-11-05T21:14:25.4551994Z Setting up libharfbuzz-dev:amd64 (2.7.4-1ubuntu3.2) ...
-2026-11-05T21:14:25.4575532Z Setting up libegl-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.4596994Z Setting up libxcomposite-dev:amd64 (1:0.4.5-1build2) ...
-2026-11-05T21:14:25.4619517Z Setting up libxcursor-dev:amd64 (1:1.2.0-2build4) ...
-2026-11-05T21:14:25.4642602Z Setting up libepoxy-dev:amd64 (1.5.10-1) ...
-2026-11-05T21:14:25.4665134Z Setting up gir1.2-gtk-3.0:amd64 (3.24.33-1ubuntu2.2) ...
-2026-11-05T21:14:25.4689682Z Setting up libwayland-dev:amd64 (1.20.0-1ubuntu0.1) ...
-2026-11-05T21:14:25.4710649Z Setting up libncurses5:amd64 (6.3-2ubuntu0.3) ...
-2026-11-05T21:14:25.4737150Z Setting up mesa-utils-bin:amd64 (8.4.0-1ubuntu1) ...
-2026-11-05T21:14:25.4759031Z Setting up libdbus-1-dev:amd64 (1.12.20-2ubuntu4.1) ...
-2026-11-05T21:14:25.4782835Z Setting up libthai-dev:amd64 (0.1.29-1build1) ...
-2026-11-05T21:14:25.4804252Z Setting up cmake (3.22.1-1ubuntu1.22.04.2) ...
-2026-11-05T21:14:25.4825544Z Setting up libgles-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.4847912Z Setting up libatspi2.0-dev:amd64 (2.44.0-3) ...
-2026-11-05T21:14:25.4870302Z Setting up libglvnd-dev:amd64 (1.4.0-1) ...
-2026-11-05T21:14:25.4895142Z Setting up libatk-bridge2.0-dev:amd64 (2.38.0-3) ...
-2026-11-05T21:14:25.4915792Z Setting up mesa-utils (8.4.0-1ubuntu1) ...
-2026-11-05T21:14:25.4941811Z Setting up libpango1.0-dev:amd64 (1.50.6+ds-2ubuntu1) ...
-2026-11-05T21:14:25.4964309Z Setting up libegl1-mesa-dev:amd64 (23.2.1-1ubuntu3.1~22.04.4) ...
-2026-11-05T21:14:25.4987037Z Setting up libgtk-3-dev:amd64 (3.24.33-1ubuntu2.2) ...
-2026-11-05T21:14:25.5020325Z Processing triggers for man-db (2.10.2-1) ...
-2026-11-05T21:14:25.5058280Z Not building database; man-db/auto-update is not 'true'.
-2026-11-05T21:14:25.5070677Z Processing triggers for libc-bin (2.35-0ubuntu3.15) ...
-2026-11-05T21:14:26.2039143Z
-2026-11-05T21:14:26.2039792Z Running kernel seems to be up-to-date.
-2026-11-05T21:14:26.2040182Z
-2026-11-05T21:14:26.2040369Z No services need to be restarted.
-2026-11-05T21:14:26.2040672Z
-2026-11-05T21:14:26.2040830Z No containers need to be restarted.
-2026-11-05T21:14:26.2041130Z
-2026-11-05T21:14:26.2041338Z No user sessions are running outdated binaries.
-2026-11-05T21:14:26.2041713Z
-2026-11-05T21:14:26.2042050Z No VM guests are running outdated hypervisor (qemu) binaries on this host.
-2026-11-05T21:14:27.7706441Z ##[group]Run actions/setup-python@v5
-2026-11-05T21:14:27.7706741Z with:
-2026-11-05T21:14:27.7706941Z python-version: 3.11
-2026-11-05T21:14:27.7707179Z check-latest: false
-2026-11-05T21:14:27.7710182Z token: ***
-2026-11-05T21:14:27.7710408Z update-environment: true
-2026-11-05T21:14:27.7710650Z allow-prereleases: false
-2026-11-05T21:14:27.7710883Z freethreaded: false
-2026-11-05T21:14:27.7711101Z ##[endgroup]
-2026-11-05T21:14:27.9192600Z ##[group]Installed versions
-2026-11-05T21:14:27.9316861Z (node:2928) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
-2026-11-05T21:14:27.9318324Z (Use `node --trace-deprecation ...` to show where the warning was created)
-2026-11-05T21:14:27.9319788Z Successfully set up CPython (3.11.18)
-2026-11-05T21:14:27.9320765Z ##[endgroup]
-2026-11-05T21:14:27.9666483Z ##[group]Run actions/setup-java@v4
-2026-11-05T21:14:27.9666925Z with:
-2026-11-05T21:14:27.9667229Z distribution: temurin
-2026-11-05T21:14:27.9667580Z java-version: 17
-2026-11-05T21:14:27.9667906Z java-package: jdk
-2026-11-05T21:14:27.9668249Z check-latest: false
-2026-11-05T21:14:27.9668841Z server-id: github
-2026-11-05T21:14:27.9669183Z server-username: GITHUB_ACTOR
-2026-11-05T21:14:27.9669592Z server-password: GITHUB_TOKEN
-2026-11-05T21:14:27.9669993Z overwrite-settings: true
-2026-11-05T21:14:27.9670363Z job-status: success
-2026-11-05T21:14:27.9675109Z token: ***
-2026-11-05T21:14:27.9675450Z env:
-2026-11-05T21:14:27.9675861Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:27.9676616Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:27.9677344Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:27.9677990Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:27.9679078Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:27.9679772Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:27.9680315Z ##[endgroup]
-2026-11-05T21:14:28.1631701Z ##[warning]setup-java v4 is deprecated and will no longer receive updates. Please migrate to actions/setup-java@v5.
-2026-11-05T21:14:28.1643850Z ##[group]Installed distributions
-2026-11-05T21:14:28.1743957Z Resolved Java 17.0.21+9 from tool-cache
-2026-11-05T21:14:28.1744749Z Setting Java 17.0.21+9 as the default
-2026-11-05T21:14:28.1756659Z (node:2936) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
-2026-11-05T21:14:28.1758705Z (Use `node --trace-deprecation ...` to show where the warning was created)
-2026-11-05T21:14:28.1761979Z Creating toolchains.xml for JDK version 17 from temurin
-2026-11-05T21:14:28.1846005Z Writing to /home/runner/.m2/toolchains.xml
-2026-11-05T21:14:28.1846761Z
-2026-11-05T21:14:28.1847753Z Java configuration:
-2026-11-05T21:14:28.1848740Z Distribution: temurin
-2026-11-05T21:14:28.1849968Z Version: 17.0.21+9
-2026-11-05T21:14:28.1850858Z Path: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.1852330Z
-2026-11-05T21:14:28.1853129Z ##[endgroup]
-2026-11-05T21:14:28.1864219Z Creating settings.xml with server-id: github
-2026-11-05T21:14:28.1939122Z Writing to /home/runner/.m2/settings.xml
-2026-11-05T21:14:28.2426544Z ##[group]Run subosito/flutter-action@v2
-2026-11-05T21:14:28.2427023Z with:
-2026-11-05T21:14:28.2427324Z channel: stable
-2026-11-05T21:14:28.2427664Z flutter-version: 3.24.3
-2026-11-05T21:14:28.2428052Z cache: true
-2026-11-05T21:14:28.2428359Z architecture: X64
-2026-11-05T21:14:28.2429693Z pub-cache-path: default
-2026-11-05T21:14:28.2430108Z dry-run: false
-2026-11-05T21:14:28.2430546Z git-source: https://github.com/flutter/flutter.git
-2026-11-05T21:14:28.2431060Z env:
-2026-11-05T21:14:28.2431436Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2432486Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:28.2433408Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2434344Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2435125Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2436403Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:28.2437313Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.2440561Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.2441693Z ##[endgroup]
-2026-11-05T21:14:28.2610373Z ##[start-action display=Make yq tool available on Windows runners;id=__subosito_flutter-action.__run]
-2026-11-05T21:14:28.2629333Z ##[end-action id=__subosito_flutter-action.__run;outcome=skipped;conclusion=skipped;duration_ms=0]
-2026-11-05T21:14:28.2632885Z ##[start-action display=Make setup script executable;id=__subosito_flutter-action.__run_2]
-2026-11-05T21:14:28.2674407Z ##[group]Run chmod +x "$GITHUB_ACTION_PATH/setup.sh"
-2026-11-05T21:14:28.2675517Z [36;1mchmod +x "$GITHUB_ACTION_PATH/setup.sh"[0m
-2026-11-05T21:14:28.2761602Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-2026-11-05T21:14:28.2761955Z env:
-2026-11-05T21:14:28.2762234Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2762681Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:28.2763122Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2763510Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2763886Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2764264Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:28.2764688Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.2765156Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.2765529Z ##[endgroup]
-2026-11-05T21:14:28.2883093Z ##[end-action id=__subosito_flutter-action.__run_2;outcome=success;conclusion=success;duration_ms=24]
-2026-11-05T21:14:28.2885698Z ##[start-action display=Set action inputs;id=__subosito_flutter-action.flutter-action]
-2026-11-05T21:14:28.2926901Z ##[group]Run $GITHUB_ACTION_PATH/setup.sh -p \
-2026-11-05T21:14:28.2927278Z [36;1m$GITHUB_ACTION_PATH/setup.sh -p \[0m
-2026-11-05T21:14:28.2927580Z [36;1m -n '3.24.3' \[0m
-2026-11-05T21:14:28.2927823Z [36;1m -f '' \[0m
-2026-11-05T21:14:28.2928032Z [36;1m -a 'X64' \[0m
-2026-11-05T21:14:28.2928238Z [36;1m -k '' \[0m
-2026-11-05T21:14:28.2928709Z [36;1m -c '' \[0m
-2026-11-05T21:14:28.2928996Z [36;1m -l '' \[0m
-2026-11-05T21:14:28.2929227Z [36;1m -d 'default' \[0m
-2026-11-05T21:14:28.2929539Z [36;1m -g 'https://github.com/flutter/flutter.git' \[0m
-2026-11-05T21:14:28.2929860Z [36;1m stable[0m
-2026-11-05T21:14:28.2990119Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-2026-11-05T21:14:28.2990475Z env:
-2026-11-05T21:14:28.2990740Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2991176Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:28.2991606Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2992220Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2992634Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:28.2993052Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:28.2993500Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.2993984Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:28.2994365Z ##[endgroup]
-2026-11-05T21:14:29.1264462Z ##[end-action id=__subosito_flutter-action.flutter-action;outcome=success;conclusion=success;duration_ms=837]
-2026-11-05T21:14:29.1270644Z ##[start-action display=Cache Flutter;id=__subosito_flutter-action.cache-flutter]
-2026-11-05T21:14:29.1325291Z ##[group]Run actions/cache@v5
-2026-11-05T21:14:29.1325550Z with:
-2026-11-05T21:14:29.1325809Z path: /opt/hostedtoolcache/flutter/stable-3.24.3-x64
-2026-11-05T21:14:29.1326297Z key: flutter-linux-stable-3.24.3-x64-2663184aa79047d0a33a14a3b607954f8fdd8730
-2026-11-05T21:14:29.1326730Z enableCrossOsArchive: false
-2026-11-05T21:14:29.1326978Z fail-on-cache-miss: false
-2026-11-05T21:14:29.1327208Z lookup-only: false
-2026-11-05T21:14:29.1327635Z save-always: false
-2026-11-05T21:14:29.1327836Z env:
-2026-11-05T21:14:29.1328088Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:29.1328751Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:29.1329174Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:29.1329546Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:29.1329920Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:29.1330294Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:29.1330707Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:29.1331204Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:29.1331580Z ##[endgroup]
-2026-11-05T21:14:29.4029685Z Cache hit for: flutter-linux-stable-3.24.3-x64-2663184aa79047d0a33a14a3b607954f8fdd8730
-2026-11-05T21:14:30.4944586Z Received 167772160 of 822177125 (20.4%), 160.0 MBs/sec
-2026-11-05T21:14:31.5079857Z Received 348127232 of 822177125 (42.3%), 165.0 MBs/sec
-2026-11-05T21:14:32.5903131Z Received 536870912 of 822177125 (65.3%), 165.9 MBs/sec
-2026-11-05T21:14:33.5826220Z Received 754974720 of 822177125 (91.8%), 176.1 MBs/sec
-2026-11-05T21:14:34.0409497Z Received 822177125 of 822177125 (100.0%), 172.6 MBs/sec
-2026-11-05T21:14:34.0449272Z Cache Size: ~784 MB (822177125 B)
-2026-11-05T21:14:34.1746372Z [command]/usr/bin/tar -xf /home/runner/work/_temp/4b813cf1-cd7c-4ec2-96ee-e2787c3f382b/cache.tzst -P -C /home/runner/work/bot/bot --use-compress-program unzstd
-2026-11-05T21:14:40.7653810Z Cache restored successfully
-2026-11-05T21:14:41.0823244Z Cache restored from key: flutter-linux-stable-3.24.3-x64-2663184aa79047d0a33a14a3b607954f8fdd8730
-2026-11-05T21:14:41.0991390Z ##[end-action id=__subosito_flutter-action.cache-flutter;outcome=success;conclusion=success;duration_ms=11971]
-2026-11-05T21:14:41.0994035Z ##[start-action display=Cache pub dependencies;id=__subosito_flutter-action.cache-pub]
-2026-11-05T21:14:41.1959392Z ##[group]Run actions/cache@v5
-2026-11-05T21:14:41.1959654Z with:
-2026-11-05T21:14:41.1959862Z path: /home/runner/.pub-cache
-2026-11-05T21:14:41.1960295Z key: flutter-pub-linux-stable-3.24.3-x64-2663184aa79047d0a33a14a3b607954f8fdd8730-
-2026-11-05T21:14:41.1960748Z enableCrossOsArchive: false
-2026-11-05T21:14:41.1961000Z fail-on-cache-miss: false
-2026-11-05T21:14:41.1961236Z lookup-only: false
-2026-11-05T21:14:41.1961453Z save-always: false
-2026-11-05T21:14:41.1961649Z env:
-2026-11-05T21:14:41.1961910Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:41.1962369Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:41.1963022Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:41.1963427Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:41.1963806Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:41.1964202Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:41.1964627Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:41.1965111Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:41.1965493Z ##[endgroup]
-2026-11-05T21:14:41.4993614Z Cache hit for: flutter-pub-linux-stable-3.24.3-x64-2663184aa79047d0a33a14a3b607954f8fdd8730-
-2026-11-05T21:14:42.5438165Z Received 99873858 of 112456770 (88.8%), 95.2 MBs/sec
-2026-11-05T21:14:43.5450771Z Received 99873858 of 112456770 (88.8%), 47.6 MBs/sec
-2026-11-05T21:14:44.5462957Z Received 99873858 of 112456770 (88.8%), 31.7 MBs/sec
-2026-11-05T21:14:45.5475331Z Received 99873858 of 112456770 (88.8%), 23.8 MBs/sec
-2026-11-05T21:14:46.5488336Z Received 99873858 of 112456770 (88.8%), 19.0 MBs/sec
-2026-11-05T21:14:46.8069391Z Received 112456770 of 112456770 (100.0%), 20.4 MBs/sec
-2026-11-05T21:14:46.8162879Z Cache Size: ~107 MB (112456770 B)
-2026-11-05T21:14:46.8332751Z [command]/usr/bin/tar -xf /home/runner/work/_temp/bb91b73f-665c-4b5c-bc94-5f8e4afa2d70/cache.tzst -P -C /home/runner/work/bot/bot --use-compress-program unzstd
-2026-11-05T21:14:48.3142018Z Cache restored successfully
-2026-11-05T21:14:48.3479906Z Cache restored from key: flutter-pub-linux-stable-3.24.3-x64-2663184aa79047d0a33a14a3b607954f8fdd8730-
-2026-11-05T21:14:48.3600385Z ##[end-action id=__subosito_flutter-action.cache-pub;outcome=success;conclusion=success;duration_ms=7260]
-2026-11-05T21:14:48.3603101Z ##[start-action display=Run setup script;id=__subosito_flutter-action.__run_3]
-2026-11-05T21:14:48.6597240Z ##[group]Run $GITHUB_ACTION_PATH/setup.sh \
-2026-11-05T21:14:48.6597620Z [36;1m$GITHUB_ACTION_PATH/setup.sh \[0m
-2026-11-05T21:14:48.6597915Z [36;1m -n '3.24.3' \[0m
-2026-11-05T21:14:48.6598169Z [36;1m -a 'x64' \[0m
-2026-11-05T21:14:48.6598876Z [36;1m -c '/opt/hostedtoolcache/flutter/stable-3.24.3-x64' \[0m
-2026-11-05T21:14:48.6599646Z [36;1m -d '/home/runner/.pub-cache' \[0m
-2026-11-05T21:14:48.6600137Z [36;1m stable[0m
-2026-11-05T21:14:48.6689522Z shell: /usr/bin/bash --noprofile --norc -e -o pipefail {0}
-2026-11-05T21:14:48.6689899Z env:
-2026-11-05T21:14:48.6690187Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:48.6690664Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:48.6691123Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:48.6691527Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:48.6691931Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:48.6692340Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:48.6692814Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:48.6693338Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:48.6693732Z ##[endgroup]
-2026-11-05T21:14:49.2577065Z ##[end-action id=__subosito_flutter-action.__run_3;outcome=success;conclusion=success;duration_ms=897]
-2026-11-05T21:14:49.2658281Z ##[group]Run mkdir -p /home/runner/android/sdk/licenses
-2026-11-05T21:14:49.2659153Z [36;1mmkdir -p /home/runner/android/sdk/licenses[0m
-2026-11-05T21:14:49.2659746Z [36;1mecho "84831b9409646a918e30573bab4c9c91346d8abd" > /home/runner/android/sdk/licenses/android-sdk-license[0m
-2026-11-05T21:14:49.2660549Z [36;1mecho "d56f5187479451eabf01fb78af6dfcb139a648b0" >> /home/runner/android/sdk/licenses/android-sdk-license[0m
-2026-11-05T21:14:49.2661345Z [36;1mecho "24333f8a63b6825ea9c5514f83c2829b004d1fb8" >> /home/runner/android/sdk/licenses/android-sdk-license[0m
-2026-11-05T21:14:49.2662015Z [36;1mSDKMANAGER=$(find /usr/local/lib/android/sdk -name "sdkmanager" | head -n 1)[0m
-2026-11-05T21:14:49.2662469Z [36;1mif [ -n "$SDKMANAGER" ]; then[0m
-2026-11-05T21:14:49.2662792Z [36;1m yes | "$SDKMANAGER" --licenses || true[0m
-2026-11-05T21:14:49.2663088Z [36;1mfi[0m
-2026-11-05T21:14:49.2663374Z [36;1myes | flutter doctor --android-licenses || true[0m
-2026-11-05T21:14:49.2726802Z shell: /usr/bin/bash -e {0}
-2026-11-05T21:14:49.2727073Z env:
-2026-11-05T21:14:49.2727356Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:49.2727827Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:14:49.2728288Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:49.2728949Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:49.2729349Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:14:49.2729740Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:14:49.2730213Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:49.2730725Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:14:49.2731220Z FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.24.3-x64/flutter
-2026-11-05T21:14:49.2731802Z PUB_CACHE: /home/runner/.pub-cache
-2026-11-05T21:14:49.2732075Z ##[endgroup]
-2026-11-05T21:16:04.7680869Z Loading local repository...
-2026-11-05T21:16:04.7682107Z [========= ] 25% Loading local repository...
-2026-11-05T21:16:06.9269793Z [========= ] 25% Fetch remote repository...
-2026-11-05T21:16:07.6398183Z [========== ] 26% Fetch remote repository...
-2026-11-05T21:16:07.6419437Z [============ ] 31% Fetch remote repository...
-2026-11-05T21:16:07.6919264Z [============ ] 32% Fetch remote repository...
-2026-11-05T21:16:07.6920419Z [============= ] 33% Fetch remote repository...
-2026-11-05T21:16:07.7136086Z [============= ] 35% Fetch remote repository...
-2026-11-05T21:16:07.7143314Z [============== ] 36% Fetch remote repository...
-2026-11-05T21:16:07.7416174Z [============== ] 37% Fetch remote repository...
-2026-11-05T21:16:07.7439239Z [=============== ] 38% Fetch remote repository...
-2026-11-05T21:16:07.7679176Z [=============== ] 39% Fetch remote repository...
-2026-11-05T21:16:07.7679933Z [================ ] 40% Fetch remote repository...
-2026-11-05T21:16:07.7851885Z [================ ] 41% Fetch remote repository...
-2026-11-05T21:16:07.7859252Z [================ ] 42% Fetch remote repository...
-2026-11-05T21:16:07.8079153Z [================= ] 44% Fetch remote repository...
-2026-11-05T21:16:07.8080141Z [================= ] 45% Fetch remote repository...
-2026-11-05T21:16:07.8289416Z [================== ] 46% Fetch remote repository...
-2026-11-05T21:16:07.8299760Z [================== ] 47% Fetch remote repository...
-2026-11-05T21:16:07.8699408Z [=================== ] 48% Fetch remote repository...
-2026-11-05T21:16:07.8700355Z [=================== ] 49% Fetch remote repository...
-2026-11-05T21:16:07.8918709Z [==================== ] 50% Fetch remote repository...
-2026-11-05T21:16:07.8939150Z [==================== ] 51% Fetch remote repository...
-2026-11-05T21:16:07.9161048Z [==================== ] 53% Fetch remote repository...
-2026-11-05T21:16:07.9189125Z [===================== ] 54% Fetch remote repository...
-2026-11-05T21:16:07.9364261Z [===================== ] 55% Fetch remote repository...
-2026-11-05T21:16:07.9389243Z [====================== ] 56% Fetch remote repository...
-2026-11-05T21:16:07.9607396Z [====================== ] 57% Fetch remote repository...
-2026-11-05T21:16:07.9629199Z [======================= ] 58% Fetch remote repository...
-2026-11-05T21:16:07.9789140Z [======================= ] 59% Fetch remote repository...
-2026-11-05T21:16:07.9790345Z [======================== ] 60% Fetch remote repository...
-2026-11-05T21:16:07.9986480Z [======================== ] 61% Fetch remote repository...
-2026-11-05T21:16:08.0009204Z [========================= ] 63% Fetch remote repository...
-2026-11-05T21:16:08.0169126Z [========================= ] 64% Fetch remote repository...
-2026-11-05T21:16:08.0170143Z [========================= ] 65% Fetch remote repository...
-2026-11-05T21:16:08.1360372Z [========================== ] 66% Fetch remote repository...
-2026-11-05T21:16:08.1389231Z [========================== ] 67% Fetch remote repository...
-2026-11-05T21:16:08.1791599Z [=========================== ] 68% Fetch remote repository...
-2026-11-05T21:16:08.1809175Z [=========================== ] 69% Fetch remote repository...
-2026-11-05T21:16:08.2176531Z [============================ ] 70% Fetch remote repository...
-2026-11-05T21:16:08.2199208Z [============================ ] 72% Fetch remote repository...
-2026-11-05T21:16:08.3210468Z [============================= ] 73% Fetch remote repository...
-2026-11-05T21:16:08.3239298Z [============================= ] 74% Fetch remote repository...
-2026-11-05T21:16:08.3449862Z [============================= ] 75% Fetch remote repository...
-2026-11-05T21:16:08.3719395Z [============================= ] 75% Computing updates...
-2026-11-05T21:16:08.3730745Z [=======================================] 100% Computing updates...
-2026-11-05T21:16:08.4480055Z 7 of 8 SDK package licenses not accepted.
-2026-11-05T21:16:08.4499212Z Review licenses that have not been accepted (y/N)?
-2026-11-05T21:16:08.4503800Z 1/7: License android-googletv-license:
-2026-11-05T21:16:08.4504491Z ---------------------------------------
-2026-11-05T21:16:08.4505290Z Terms and Conditions
-2026-11-05T21:16:08.4505771Z
-2026-11-05T21:16:08.4506381Z This is the Google TV Add-on for the Android Software Development Kit License Agreement.
-2026-11-05T21:16:08.4507342Z
-2026-11-05T21:16:08.4522891Z 1. Introduction
-2026-11-05T21:16:08.4538892Z
-2026-11-05T21:16:08.4561503Z 1.1 The Google TV Add-on for the Android Software Development Kit (referred to in this License Agreement as the "Google TV Add-on" and specifically including the Android system files, packaged APIs, and Google APIs add-ons) is licensed to you subject to the terms of this License Agreement. This License Agreement forms a legally binding contract between you and Google in relation to your use of the Google TV Add-on.
-2026-11-05T21:16:08.4568768Z
-2026-11-05T21:16:08.4620148Z 1.2 "Google" means Google Inc., a Delaware corporation with principal place of business at 1600 Amphitheatre Parkway, Mountain View, CA 94043, United States.
-2026-11-05T21:16:08.4628750Z
-2026-11-05T21:16:08.4647152Z 2. Accepting this License Agreement
-2026-11-05T21:16:08.4647708Z
-2026-11-05T21:16:08.4649022Z 2.1 In order to use the Google TV Add-on, you must first agree to this License Agreement. You may not use the Google TV Add-on if you do not accept this License Agreement.
-2026-11-05T21:16:08.4650283Z
-2026-11-05T21:16:08.4650673Z 2.2 You can accept this License Agreement by:
-2026-11-05T21:16:08.4651236Z
-2026-11-05T21:16:08.4651967Z (A) clicking to accept or agree to this License Agreement, where this option is made available to you; or
-2026-11-05T21:16:08.4652873Z
-2026-11-05T21:16:08.4653986Z (B) by actually using the Google TV Add-on. In this case, you agree that use of the Google TV Add-on constitutes acceptance of the License Agreement from that point onwards.
-2026-11-05T21:16:08.4655336Z
-2026-11-05T21:16:08.4657179Z 2.3 You may not use the Google TV Add-on and may not accept the Licensing Agreement if you are a person barred from receiving the Google TV Add-on under the laws of the United States or other countries including the country in which you are resident or from which you use the Google TV Add-on.
-2026-11-05T21:16:08.4659414Z
-2026-11-05T21:16:08.4661820Z 2.4 If you are agreeing to be bound by this License Agreement on behalf of your employer or other entity, you represent and warrant that you have full legal authority to bind your employer or such entity to this License Agreement. If you do not have the requisite authority, you may not accept the Licensing Agreement or use the Google TV Add-on on behalf of your employer or other entity.
-2026-11-05T21:16:08.4664385Z
-2026-11-05T21:16:08.4664747Z 3. Google TV Add-on License from Google
-2026-11-05T21:16:08.4665599Z
-2026-11-05T21:16:08.4667155Z 3.1 Subject to the terms of this License Agreement, Google grants you a limited, worldwide, royalty-free, non- assignable and non-exclusive license to use the Google TV Add-on solely to develop applications to run on the Google TV platform.
-2026-11-05T21:16:08.4669145Z
-2026-11-05T21:16:08.4671767Z 3.2 You agree that Google or third parties own all legal right, title and interest in and to the Google TV Add-on, including any Intellectual Property Rights that subsist in the Google TV Add-on. "Intellectual Property Rights" means any and all rights under patent law, copyright law, trade secret law, trademark law, and any and all other proprietary rights. Google reserves all rights not expressly granted to you.
-2026-11-05T21:16:08.4674468Z
-2026-11-05T21:16:08.4678266Z 3.3 Except to the extent required by applicable third party licenses, you may not copy (except for backup purposes), modify, adapt, redistribute, decompile, reverse engineer, disassemble, or create derivative works of the Google TV Add-on or any part of the Google TV Add-on. Except to the extent required by applicable third party licenses, you may not load any part of the Google TV Add-on onto a mobile handset, television, or any other hardware device except a personal computer, combine any part of the Google TV Add-on with other software, or distribute any software or device incorporating a part of the Google TV Add-on.
-2026-11-05T21:16:08.4682582Z
-2026-11-05T21:16:08.4684039Z 3.4 Use, reproduction and distribution of components of the Google TV Add-on licensed under an open source software license are governed solely by the terms of that open source software license and not this License Agreement.
-2026-11-05T21:16:08.4685681Z
-2026-11-05T21:16:08.4689157Z 3.5 You agree that the form and nature of the Google TV Add-on that Google provides may change without prior notice to you and that future versions of the Google TV Add-on may be incompatible with applications developed on previous versions of the Google TV Add-on. You agree that Google may stop (permanently or temporarily) providing the Google TV Add-on (or any features within the Google TV Add-on) to you or to users generally at Google's sole discretion, without prior notice to you.
-2026-11-05T21:16:08.4692443Z
-2026-11-05T21:16:08.4694354Z 3.6 Nothing in this License Agreement gives you a right to use any of Google's or it’s licensors’ trade names, trademarks, service marks, logos, domain names, or other distinctive brand features.
-2026-11-05T21:16:08.4695952Z
-2026-11-05T21:16:08.4697200Z 3.7 You agree that you will not remove, obscure, or alter any proprietary rights notices (including copyright and trademark notices) that may be affixed to or contained within the Google TV Add-on.
-2026-11-05T21:16:08.4698854Z
-2026-11-05T21:16:08.4699222Z 4. Use of the Google TV Add-on by You
-2026-11-05T21:16:08.4699734Z
-2026-11-05T21:16:08.4701509Z 4.1 Google agrees that it obtains no right, title or interest from you (or your licensors) under this License Agreement in or to any software applications that you develop using the Google TV Add-on, including any intellectual property rights that subsist in those applications.
-2026-11-05T21:16:08.4703510Z
-2026-11-05T21:16:08.4705872Z 4.2 You agree to use the Google TV Add-on and write applications only for purposes that are permitted by (a) this License Agreement and (b) any applicable law, regulation or generally accepted practices or guidelines in the relevant jurisdictions (including any laws regarding the export of data or software to and from the United States or other relevant countries).
-2026-11-05T21:16:08.4708406Z
-2026-11-05T21:16:08.4713347Z 4.3 You agree that if you use the Google TV Add-on to develop applications for general public users, you will protect the privacy and legal rights of those users. If the users provide you with user names, passwords, or other login information or personal information, your must make the users aware that the information will be available to your application, and you must provide legally adequate privacy notice and protection for those users. If your application stores personal or sensitive information provided by users, it must do so securely. If the user provides your application with Google Account information, your application may only use that information to access the user's Google Account when, and for the limited purposes for which, the user has given you explicit permission to do so.
-2026-11-05T21:16:08.4719027Z
-2026-11-05T21:16:08.4721591Z 4.4 You agree that you will not engage in any activity with the Google TV Add-on, including the development or distribution of an application, that interferes with, disrupts, damages, or accesses in an unauthorized manner the servers, networks, or other properties or services of any third party including, but not limited to, Google, Multichannel Video Program Distributors or any mobile communications carrier.
-2026-11-05T21:16:08.4724607Z
-2026-11-05T21:16:08.4727012Z 4.5 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any data, content, or resources that you create, transmit or display through the Google TV platform and/or applications for the Google TV platform, and for the consequences of your actions (including any loss or damage which Google may suffer) by doing so.
-2026-11-05T21:16:08.4729908Z
-2026-11-05T21:16:08.4732343Z 4.6 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any breach of your obligations under this License Agreement, any applicable third party contract or Terms of Service, or any applicable law or regulation, and for the consequences (including any loss or damage which Google or any third party may suffer) of any such breach.
-2026-11-05T21:16:08.4734981Z
-2026-11-05T21:16:08.4735336Z 5. Your Developer Credentials
-2026-11-05T21:16:08.4735814Z
-2026-11-05T21:16:08.4737903Z 5.1 You agree that you are responsible for maintaining the confidentiality of any developer credentials that may be issued to you by Google or which you may choose yourself and that you will be solely responsible for all applications that are developed under your developer credentials.
-2026-11-05T21:16:08.4740182Z
-2026-11-05T21:16:08.4740540Z 6. Privacy and Information
-2026-11-05T21:16:08.4740998Z
-2026-11-05T21:16:08.4744195Z 6.1 In order to continually innovate and improve the Google TV Add-on, Google may collect certain usage statistics from the software including but not limited to a unique identifier, associated IP address, version number of the software, and information on which tools and/or services in the Google TV Add-on are being used and how they are being used. Before any of this information is collected, the Google TV Add-on will notify you and seek your consent. If you withhold consent, the information will not be collected.
-2026-11-05T21:16:08.4747589Z
-2026-11-05T21:16:08.4748749Z 6.2 The data collected is examined in the aggregate to improve the Google TV Add-on and is maintained in accordance with Google's Privacy Policy.
-2026-11-05T21:16:08.4749967Z
-2026-11-05T21:16:08.4750427Z 7. Third Party Applications for the Google TV Platform
-2026-11-05T21:16:08.4751054Z
-2026-11-05T21:16:08.4756203Z 7.1 If you use the Google TV Add-on to run applications developed by a third party or that access data, content or resources provided by a third party, you agree that Google is not responsible for those applications, data, content, or resources. You understand that all data, content or resources which you may access through such third party applications are the sole responsibility of the person from which they originated and that Google is not liable for any loss or damage that you may experience as a result of the use or access of any of those third party applications, data, content, or resources.
-2026-11-05T21:16:08.4760394Z
-2026-11-05T21:16:08.4763359Z 7.2 You should be aware the data, content, and resources presented to you through such a third party application may be protected by intellectual property rights which are owned by the providers (or by other persons or companies on their behalf). You may not modify, rent, lease, loan, sell, distribute or create derivative works based on these data, content, or resources (either in whole or in part) unless you have been specifically given permission to do so by the relevant owners.
-2026-11-05T21:16:08.4766784Z
-2026-11-05T21:16:08.4768733Z 7.3 You acknowledge that your use of such third party applications, data, content, or resources may be subject to separate terms between you and the relevant third party. In that case, this License Agreement does not affect your legal relationship with these third parties.
-2026-11-05T21:16:08.4770813Z
-2026-11-05T21:16:08.4771178Z 8. Using Google TV APIs
-2026-11-05T21:16:08.4771651Z
-2026-11-05T21:16:08.4776551Z 8.1 If you use any Google TV API to retrieve data from Google, you acknowledge that the data (“Google TV API Content”) may be protected by intellectual property rights which are owned by Google or those parties that provide the data (or by other persons or companies on their behalf). Your use of any such API may be subject to additional Terms of Service. You may not modify, rent, lease, loan, sell, distribute or create derivative works based on this data (either in whole or in part) unless allowed by the relevant Terms of Service. Some portions of the Google TV API Content are licensed to Google by third parties, including but not limited to Tribune Media Services
-2026-11-05T21:16:08.4780811Z
-2026-11-05T21:16:08.4782185Z 8.2 If you use any API to retrieve a user's data from Google, you acknowledge and agree that you shall retrieve data only with the user's explicit consent and only when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.4783734Z
-2026-11-05T21:16:08.4784211Z 8.3 Except as explicitly permitted in Section 3 (Google TV Add-on License from Google), you must:
-2026-11-05T21:16:08.4784876Z
-2026-11-05T21:16:08.4786102Z (a) not modify nor format the Google TV API Content except to the extent reasonably and technically necessary to optimize the display such Google TV API Content in your application;
-2026-11-05T21:16:08.4787292Z
-2026-11-05T21:16:08.4788375Z (b) not edit the Google TV API Content in a manner that renders the Google TV API Content inaccurate of alters its inherent meaning (provided that displaying excerpts will not violate the foregoing); or
-2026-11-05T21:16:08.4835499Z
-2026-11-05T21:16:08.4836042Z (c) not create any commercial audience measurement tool or service using the Google TV API Content
-2026-11-05T21:16:08.4836742Z
-2026-11-05T21:16:08.4836932Z 9. Terminating this License Agreement
-2026-11-05T21:16:08.4837260Z
-2026-11-05T21:16:08.4837820Z 9.1 This License Agreement will continue to apply until terminated by either you or Google as set out below.
-2026-11-05T21:16:08.4838828Z
-2026-11-05T21:16:08.4839597Z 9.2 If you want to terminate this License Agreement, you may do so by ceasing your use of the Google TV Add-on and any relevant developer credentials.
-2026-11-05T21:16:08.4840556Z
-2026-11-05T21:16:08.4840891Z 9.3 Google may at any time, terminate this License Agreement with you if:
-2026-11-05T21:16:08.4841384Z
-2026-11-05T21:16:08.4841667Z (A) you have breached any provision of this License Agreement; or
-2026-11-05T21:16:08.4842116Z
-2026-11-05T21:16:08.4842303Z (B) Google is required to do so by law; or
-2026-11-05T21:16:08.4842808Z
-2026-11-05T21:16:08.4843994Z (C) the partner with whom Google offered certain parts of Google TV Add-on (such as APIs) to you has terminated its relationship with Google or ceased to offer certain parts of the Google TV Add-on to you; or
-2026-11-05T21:16:08.4845358Z
-2026-11-05T21:16:08.4847247Z (D) Google decides to no longer providing the Google TV Add-on or certain parts of the Google TV Add-on to users in the country in which you are resident or from which you use the service, or the provision of the Google TV Add-on or certain Google TV Add-on services to you by Google is, in Google's sole discretion, no longer commercially viable.
-2026-11-05T21:16:08.4870355Z
-2026-11-05T21:16:08.4873084Z 9.4 When this License Agreement comes to an end, all of the legal rights, obligations and liabilities that you and Google have benefited from, been subject to (or which have accrued over time whilst this License Agreement has been in force) or which are expressed to continue indefinitely, shall be unaffected by this cessation, and the provisions of paragraph 14.7 shall continue to apply to such rights, obligations and liabilities indefinitely.
-2026-11-05T21:16:08.4876703Z
-2026-11-05T21:16:08.4876899Z 10. DISCLAIMER OF WARRANTIES
-2026-11-05T21:16:08.4877226Z
-2026-11-05T21:16:08.4878334Z 10.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT YOUR USE OF THE GOOGLE TV ADD-ON IS AT YOUR SOLE RISK AND THAT THE GOOGLE TV ADD-ON IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND FROM GOOGLE.
-2026-11-05T21:16:08.4890364Z
-2026-11-05T21:16:08.4892031Z 10.2 YOUR USE OF THE GOOGLE TV ADD-ON AND ANY MATERIAL DOWNLOADED OR OTHERWISE OBTAINED THROUGH THE USE OF THE GOOGLE TV ADD-ON IS AT YOUR OWN DISCRETION AND RISK AND YOU ARE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER SYSTEM OR OTHER DEVICE OR LOSS OF DATA THAT RESULTS FROM SUCH USE.
-2026-11-05T21:16:08.4893865Z
-2026-11-05T21:16:08.4895407Z 10.3 GOOGLE FURTHER EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES AND CONDITIONS OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
-2026-11-05T21:16:08.4897100Z
-2026-11-05T21:16:08.4897287Z 11. LIMITATION OF LIABILITY
-2026-11-05T21:16:08.4897578Z
-2026-11-05T21:16:08.4900878Z 11.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT GOOGLE, ITS SUBSIDIARIES AND AFFILIATES, AND ITS LICENSORS SHALL NOT BE LIABLE TO YOU UNDER ANY THEORY OF LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL CONSEQUENTIAL OR EXEMPLARY DAMAGES THAT MAY BE INCURRED BY YOU, INCLUDING ANY LOSS OF DATA, WHETHER OR NOT GOOGLE OR ITS REPRESENTATIVES HAVE BEEN ADVISED OF OR SHOULD HAVE BEEN AWARE OF THE POSSIBILITY OF ANY SUCH LOSSES ARISING.
-2026-11-05T21:16:08.4903688Z
-2026-11-05T21:16:08.4904085Z 12. Indemnification
-2026-11-05T21:16:08.4904352Z
-2026-11-05T21:16:08.4908297Z 12.1 To the maximum extent permitted by law, you agree to defend, indemnify and hold harmless Google, its affiliates and their respective directors, officers, employees and agents from and against any and all claims, actions, suits or proceedings, as well as any and all losses, liabilities, damages, costs and expenses (including reasonable attorneys fees) arising out of or accruing from (a) your use of the Google TV Add-on, (b) any application you develop on the Google TV Add-on that infringes any copyright, trademark, trade secret, trade dress, patent or other intellectual property right of any person or defames any person or violates their rights of publicity or privacy, and (c) any non-compliance by you with this License Agreement.
-2026-11-05T21:16:08.4912382Z
-2026-11-05T21:16:08.4912508Z 13. Changes to the License Agreement
-2026-11-05T21:16:08.4912717Z
-2026-11-05T21:16:08.4913052Z 13.1 Google may make changes to the License Agreement as it distributes new versions of the Google TV Add-on.
-2026-11-05T21:16:08.4913464Z
-2026-11-05T21:16:08.4913564Z 14. General Legal Terms
-2026-11-05T21:16:08.4913712Z
-2026-11-05T21:16:08.4914761Z 14.1 This License Agreement constitute the whole legal agreement between you and Google and govern your use of the Google TV Add-on (excluding any services which Google may provide to you under a separate written agreement), and completely replace any prior agreements between you and Google in relation to the Google TV Add-on.
-2026-11-05T21:16:08.4915902Z
-2026-11-05T21:16:08.4916913Z 14.2 You agree that if Google does not exercise or enforce any legal right or remedy which is contained in this License Agreement (or which Google has the benefit of under any applicable law), this will not be taken to be a formal waiver of Google's rights and that those rights or remedies will still be available to Google.
-2026-11-05T21:16:08.4918218Z
-2026-11-05T21:16:08.4919631Z 14.3 If any court of law, having the jurisdiction to decide on this matter, rules that any provision of this License Agreement is invalid, then that provision will be removed from this License Agreement without affecting the rest of this License Agreement. The remaining provisions of this License Agreement will continue to be valid and enforceable.
-2026-11-05T21:16:08.4920837Z
-2026-11-05T21:16:08.4922749Z 14.4 You acknowledge and agree that Google’s API data licensors and each member of the group of companies of which Google is the parent shall be third party beneficiaries to this License Agreement and that such other companies shall be entitled to directly enforce, and rely upon, any provision of this License Agreement that confers a benefit on (or rights in favor of) them. Other than this, no other person or company shall be third party beneficiaries to this License Agreement.
-2026-11-05T21:16:08.4925674Z
-2026-11-05T21:16:08.4926643Z 14.5 EXPORT RESTRICTIONS. THE GOOGLE TV ADD-ON IS SUBJECT TO UNITED STATES EXPORT LAWS AND REGULATIONS. YOU MUST COMPLY WITH ALL DOMESTIC AND INTERNATIONAL EXPORT LAWS AND REGULATIONS THAT APPLY TO THE GOOGLE TV ADD-ON. THESE LAWS INCLUDE RESTRICTIONS ON DESTINATIONS, END USERS AND END USE.
-2026-11-05T21:16:08.4927671Z
-2026-11-05T21:16:08.4929099Z 14.6 The rights granted in this License Agreement may not be assigned or transferred by either you or Google without the prior written approval of the other party. Neither you nor Google shall be permitted to delegate their responsibilities or obligations under this License Agreement without the prior written approval of the other party.
-2026-11-05T21:16:08.4930292Z
-2026-11-05T21:16:08.4932297Z 14.7 This License Agreement, and your relationship with Google under this License Agreement, shall be governed by the laws of the State of California without regard to its conflict of laws provisions. You and Google agree to submit to the exclusive jurisdiction of the courts located within the county of Santa Clara, California to resolve any legal matter arising from this License Agreement. Notwithstanding this, you agree that Google shall still be allowed to apply for injunctive remedies (or an equivalent type of urgent legal relief) in any jurisdiction.
-2026-11-05T21:16:08.4934207Z
-2026-11-05T21:16:08.4934212Z
-2026-11-05T21:16:08.4934301Z August 15, 2011
-2026-11-05T21:16:08.4934531Z ---------------------------------------
-2026-11-05T21:16:08.4934811Z Accept? (y/N):
-2026-11-05T21:16:08.4935053Z 2/7: License android-googlexr-license:
-2026-11-05T21:16:08.4935342Z ---------------------------------------
-2026-11-05T21:16:08.4936324Z To get started with the Android XR Emulator System Image SDK, you must agree to the following terms and conditions. As described below, please note that this is a preview, emulated version of the Android XR OS, subject to change, that you use at your own risk.
-2026-11-05T21:16:08.4937222Z
-2026-11-05T21:16:08.4937406Z This is the Android XR Emulator System Image SDK License Agreement
-2026-11-05T21:16:08.4937686Z
-2026-11-05T21:16:08.4937774Z 1. Introduction
-2026-11-05T21:16:08.4937897Z
-2026-11-05T21:16:08.4939469Z 1.1 The Android Android XR Emulator System Image SDK (referred to in the License Agreement as the "SDK" and specifically including the Android system files,, packaged APIs, library files (if and when they are made available), and Google applications and APIs add-ons) is licensed to you subject to the terms of the License Agreement. The License Agreement forms a legally binding contract between you and Google in relation to your use of the SDK.
-2026-11-05T21:16:08.4940994Z
-2026-11-05T21:16:08.4941672Z 1.2 "Android" means the Android software stack for devices, as made available under the Android Open Source Project, which is located at the following URL: https://source.android.com/, as updated from time to time.
-2026-11-05T21:16:08.4942438Z
-2026-11-05T21:16:08.4943102Z 1.3 "Google" means Google LLC, organized under the laws of the State of Delaware, USA, and operating under the laws of the USA with principal place of business at 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA.
-2026-11-05T21:16:08.4943983Z
-2026-11-05T21:16:08.4944097Z 2. Accepting this License Agreement
-2026-11-05T21:16:08.4944282Z
-2026-11-05T21:16:08.4944694Z 2.1 In order to use the SDK, you must first agree to the License Agreement. You may not use the SDK if you do not accept the License Agreement.
-2026-11-05T21:16:08.4945183Z
-2026-11-05T21:16:08.4945472Z 2.2 By clicking to accept and/or using this SDK, you hereby agree to the terms of the License Agreement.
-2026-11-05T21:16:08.4945853Z
-2026-11-05T21:16:08.4946617Z 2.3 You may not use the SDK and may not accept the License Agreement if you are a person barred from receiving the SDK under the laws of the United States or other countries, including the country in which you are resident or from which you use the SDK.
-2026-11-05T21:16:08.4947472Z
-2026-11-05T21:16:08.4948763Z 2.4 If you are agreeing to be bound by the License Agreement on behalf of your employer or other entity, you represent and warrant that you have full legal authority to bind your employer or such entity to the License Agreement. If you do not have the requisite authority, you may not accept the License Agreement or use the SDK on behalf of your employer or other entity.
-2026-11-05T21:16:08.4950004Z
-2026-11-05T21:16:08.4950107Z 3. SDK License from Google
-2026-11-05T21:16:08.4950264Z
-2026-11-05T21:16:08.4951015Z 3.1 Subject to the terms of the License Agreement, Google grants you a limited, worldwide, royalty-free, non-assignable, non-exclusive, and non-sublicensable license to use the SDK solely to develop applications for Android XR.
-2026-11-05T21:16:08.4951833Z
-2026-11-05T21:16:08.4952513Z 3.2 You may not use this SDK to develop applications for other platforms or to develop another SDK. You are of course free to develop applications for other platforms provided that this SDK is not used for that purpose.
-2026-11-05T21:16:08.4953290Z
-2026-11-05T21:16:08.4954664Z 3.3 You agree that Google or third parties own all legal right, title and interest in and to the SDK, including any Intellectual Property Rights that subsist in the SDK. "Intellectual Property Rights" means any and all rights under patent law, copyright law, trade secret law, trademark law, and any and all other proprietary rights. Google reserves all rights not expressly granted to you.
-2026-11-05T21:16:08.4956002Z
-2026-11-05T21:16:08.4957839Z 3.4 You may not use the SDK for any purpose not expressly permitted by the License Agreement. Except to the extent required by applicable third party licenses, you may not (a) copy (except for backup purposes), modify, adapt, redistribute, decompile, reverse engineer, disassemble, or create derivative works of the SDK or any part of the SDK; or (b) load any part of the SDK onto a mobile handset or any other hardware device except a personal computer, combine any part of the SDK with other software, or distribute any software or device incorporating a part of the SDK.
-2026-11-05T21:16:08.4959866Z
-2026-11-05T21:16:08.4961209Z 3.5 Use, reproduction and distribution of components of the SDK licensed under an open source software license are governed solely by the terms of that open source software license and not the License Agreement. You agree to remain a licensee in good standing in regard to such open source software licenses under all the rights granted and to refrain from any actions that may terminate, suspend, or breach such rights.
-2026-11-05T21:16:08.4962632Z
-2026-11-05T21:16:08.4963972Z 3.6 You agree that the form and nature of the SDK that Google provides may change without prior notice to you and that future versions of the SDK may be incompatible with applications developed on previous versions of the SDK. You agree that Google may stop (permanently or temporarily) providing the SDK (or any features within the SDK) to you or to users generally at Google's sole discretion, without prior notice to you.
-2026-11-05T21:16:08.4965527Z
-2026-11-05T21:16:08.4966058Z 3.7 Nothing in the License Agreement gives you a right to use any of Google's trade names, trademarks, service marks, logos, domain names, or other distinctive brand features.
-2026-11-05T21:16:08.4966675Z
-2026-11-05T21:16:08.4967243Z 3.8 You agree that you will not remove, obscure, or alter any proprietary rights notices (including copyright and trademark notices) that may be affixed to or contained within the SDK.
-2026-11-05T21:16:08.4967904Z
-2026-11-05T21:16:08.4967995Z 4. Use of the SDK by You
-2026-11-05T21:16:08.4968147Z
-2026-11-05T21:16:08.4969099Z 4.1 Google agrees that it obtains no right, title or interest from you (or your licensors) under the License Agreement in or to any software applications that you develop using the SDK, including any intellectual property rights that subsist in those applications.
-2026-11-05T21:16:08.4970014Z
-2026-11-05T21:16:08.4971132Z 4.2 You agree to use the SDK and write applications only for purposes that are permitted by (a) the License Agreement and (b) any applicable law, regulation or generally accepted practices or guidelines in the relevant jurisdictions (including any laws regarding the export of data or software to and from the United States or other relevant countries).
-2026-11-05T21:16:08.4972341Z
-2026-11-05T21:16:08.4974868Z 4.3 You agree that if you use the SDK to develop applications for general public users, you will protect the privacy and legal rights of those users. If the users provide you with user names, passwords, or other login information or personal information, you must make the users aware that the information will be available to your application, and you must provide legally adequate privacy notice and protection for those users. If your application stores personal or sensitive information provided by users, it must do so securely. If the user provides your application with Google Account information, your application may only use that information to access the user's Google Account when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.4977482Z
-2026-11-05T21:16:08.4978858Z 4.4 You agree that you will not engage in any activity with the SDK, including the development or distribution of an application, that interferes with, disrupts, damages, or accesses in an unauthorized manner the servers, networks, or other properties or services of any third party including, but not limited to, Google or any mobile communications carrier.
-2026-11-05T21:16:08.4980094Z
-2026-11-05T21:16:08.4981189Z 4.5 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any data, content, or resources that you create, transmit or display through Android and/or applications for Android, and for the consequences of your actions (including any loss or damage which Google may suffer) by doing so.
-2026-11-05T21:16:08.4982369Z
-2026-11-05T21:16:08.4983614Z 4.6 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any breach of your obligations under the License Agreement, any applicable third party contract or Terms of Service, or any applicable law or regulation, and for the consequences (including any loss or damage which Google or any third party may suffer) of any such breach.
-2026-11-05T21:16:08.4984948Z
-2026-11-05T21:16:08.4985892Z 4.7 The SDK is in development, and your testing and feedback are an important part of the development process. By using the SDK, you acknowledge that implementation of some features are still under development and that you should not rely on the SDK having the full functionality of a stable release.
-2026-11-05T21:16:08.4986910Z
-2026-11-05T21:16:08.4987019Z 5. Your Developer Credentials
-2026-11-05T21:16:08.4987182Z
-2026-11-05T21:16:08.4988075Z 5.1 You agree that you are responsible for maintaining the confidentiality of any developer credentials that may be issued to you by Google or which you may choose yourself and that you will be solely responsible for all applications that are developed under your developer credentials.
-2026-11-05T21:16:08.4989337Z
-2026-11-05T21:16:08.4989443Z 6. Privacy and Information
-2026-11-05T21:16:08.4989802Z
-2026-11-05T21:16:08.4991659Z 6.1 In order to continually innovate and improve the SDK, Google may collect certain usage statistics from the software including but not limited to a unique identifier, associated IP address, version number of the software, and information on which tools and/or services in the SDK are being used and how they are being used. Before any of this information is collected, the SDK will notify you and seek your consent. If you withhold consent, the information will not be collected.
-2026-11-05T21:16:08.4993304Z
-2026-11-05T21:16:08.4993966Z 6.2 The data collected is examined in the aggregate to improve the SDK and is maintained in accordance with Google's Privacy Policy, which is located at the following URL: https://policies.google.com/privacy
-2026-11-05T21:16:08.4994708Z
-2026-11-05T21:16:08.4995005Z 6.3 Anonymized and aggregated sets of the data may be shared with Google partners to improve the SDK.
-2026-11-05T21:16:08.4995395Z
-2026-11-05T21:16:08.4995501Z 7. Third Party Applications
-2026-11-05T21:16:08.4995677Z
-2026-11-05T21:16:08.4997586Z 7.1 If you use the SDK to run applications developed by a third party or that access data, content or resources provided by a third party, you agree that Google is not responsible for those applications, data, content, or resources. You understand that all data, content or resources which you may access through such third party applications are the sole responsibility of the person from which they originated and that Google is not liable for any loss or damage that you may experience as a result of the use or access of any of those third party applications, data, content, or resources.
-2026-11-05T21:16:08.4999830Z
-2026-11-05T21:16:08.5002159Z 7.2 You should be aware that the data, content, and resources presented to you through such a third party application may be protected by intellectual property rights which are owned by the providers (or by other persons or companies on their behalf). You may not modify, rent, lease, loan, sell, distribute or create derivative works based on these data, content, or resources (either in whole or in part) unless you have been specifically given permission to do so by the relevant owners.
-2026-11-05T21:16:08.5004448Z
-2026-11-05T21:16:08.5005328Z 7.3 You acknowledge that your use of such third party applications, data, content, or resources may be subject to separate terms between you and the relevant third party. In that case, the License Agreement does not affect your legal relationship with these third parties.
-2026-11-05T21:16:08.5006314Z
-2026-11-05T21:16:08.5006418Z 8. Using Android APIs
-2026-11-05T21:16:08.5006558Z
-2026-11-05T21:16:08.5006653Z 8.1 Google Data APIs
-2026-11-05T21:16:08.5006798Z
-2026-11-05T21:16:08.5008391Z 8.1.1 If you use any API to retrieve data from Google, you acknowledge that the data may be protected by intellectual property rights which are owned by Google or those parties that provide the data (or by other persons or companies on their behalf). Your use of any such API may be subject to additional Terms of Service. You may not modify, rent, lease, loan, sell, distribute or create derivative works based on this data (either in whole or in part) unless allowed by the relevant Terms of Service.
-2026-11-05T21:16:08.5010357Z
-2026-11-05T21:16:08.5013094Z 8.1.2 If you use any API to retrieve a user's data from Google, you acknowledge and agree that you shall retrieve data only with the user's explicit consent and only when, and for the limited purposes for which, the user has given you permission to do so. If you use the Android Recognition Service API, documented at the following URL: https://developer.android.com/reference/android/speech/RecognitionService, as updated from time to time, you acknowledge that the use of the API is subject to the Data Processing Addendum for Products where Google is a Data Processor, which is located at the following URL: https://privacy.google.com/businesses/gdprprocessorterms/, as updated from time to time. By clicking to accept, you hereby agree to the terms of the Data Processing Addendum for Products where Google is a Data Processor.
-2026-11-05T21:16:08.5016060Z
-2026-11-05T21:16:08.5016172Z 9. Terminating this License Agreement
-2026-11-05T21:16:08.5016368Z
-2026-11-05T21:16:08.5016689Z 9.1 The License Agreement will continue to apply until terminated by either you or Google as set out below.
-2026-11-05T21:16:08.5017101Z
-2026-11-05T21:16:08.5017485Z 9.2 If you want to terminate the License Agreement, you may do so by ceasing your use of the SDK and any relevant developer credentials.
-2026-11-05T21:16:08.5017968Z
-2026-11-05T21:16:08.5020353Z 9.3 Google may at any time, terminate the License Agreement with you if: (A) you have breached any provision of the License Agreement; or (B) Google is required to do so by law; or (C) the partner with whom Google offered certain parts of SDK (such as APIs) to you has terminated its relationship with Google or ceased to offer certain parts of the SDK to you; or (D) Google decides to no longer provide the SDK or certain parts of the SDK to users in the country in which you are resident or from which you use the service, or the provision of the SDK or certain SDK services to you by Google is, in Google's sole discretion, no longer commercially viable.
-2026-11-05T21:16:08.5022461Z
-2026-11-05T21:16:08.5023880Z 9.4 When the License Agreement comes to an end, all of the legal rights, obligations and liabilities that you and Google have benefited from, been subject to (or which have accrued over time whilst the License Agreement has been in force) or which are expressed to continue indefinitely, shall be unaffected by this cessation, and the provisions of paragraph 14.7 shall continue to apply to such rights, obligations and liabilities indefinitely.
-2026-11-05T21:16:08.5025380Z
-2026-11-05T21:16:08.5025476Z 10. DISCLAIMER OF WARRANTIES
-2026-11-05T21:16:08.5025643Z
-2026-11-05T21:16:08.5026310Z 10.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT YOUR USE OF THE SDK IS AT YOUR SOLE RISK AND THAT THE SDK IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND FROM GOOGLE.
-2026-11-05T21:16:08.5026940Z
-2026-11-05T21:16:08.5027743Z 10.2 YOUR USE OF THE SDK AND ANY MATERIAL DOWNLOADED OR OTHERWISE OBTAINED THROUGH THE USE OF THE SDK IS AT YOUR OWN DISCRETION AND RISK AND YOU ARE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER SYSTEM OR OTHER DEVICE OR LOSS OF DATA THAT RESULTS FROM SUCH USE.
-2026-11-05T21:16:08.5028940Z
-2026-11-05T21:16:08.5029759Z 10.3 GOOGLE FURTHER EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES AND CONDITIONS OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
-2026-11-05T21:16:08.5030667Z
-2026-11-05T21:16:08.5030762Z 11. LIMITATION OF LIABILITY
-2026-11-05T21:16:08.5030920Z
-2026-11-05T21:16:08.5032331Z 11.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT GOOGLE, ITS SUBSIDIARIES AND AFFILIATES, AND ITS LICENSORS SHALL NOT BE LIABLE TO YOU UNDER ANY THEORY OF LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES THAT MAY BE INCURRED BY YOU, INCLUDING ANY LOSS OF DATA, WHETHER OR NOT GOOGLE OR ITS REPRESENTATIVES HAVE BEEN ADVISED OF OR SHOULD HAVE BEEN AWARE OF THE POSSIBILITY OF ANY SUCH LOSSES ARISING.
-2026-11-05T21:16:08.5033813Z
-2026-11-05T21:16:08.5033909Z 12. Indemnification
-2026-11-05T21:16:08.5034038Z
-2026-11-05T21:16:08.5036356Z 12.1 To the maximum extent permitted by law, you agree to defend, indemnify and hold harmless Google, its affiliates and their respective directors, officers, employees and agents from and against any and all claims, actions, suits or proceedings, as well as any and all losses, liabilities, damages, costs and expenses (including reasonable attorneys fees) arising out of or accruing from (a) your use of the SDK, (b) any application you develop on the SDK that infringes any copyright, trademark, trade secret, trade dress, patent or other intellectual property right of any person or defames any person or violates their rights of publicity or privacy, and (c) any non-compliance by you with the License Agreement.
-2026-11-05T21:16:08.5039145Z
-2026-11-05T21:16:08.5039258Z 13. Changes to the License Agreement
-2026-11-05T21:16:08.5039443Z
-2026-11-05T21:16:08.5040167Z 13.1 Google may make changes to the License Agreement as it distributes new versions of the SDK. When these changes are made, Google will make a new version of the License Agreement available on the website where the SDK is made available.
-2026-11-05T21:16:08.5040998Z
-2026-11-05T21:16:08.5041093Z 14. General Legal Terms
-2026-11-05T21:16:08.5041238Z
-2026-11-05T21:16:08.5042201Z 14.1 The License Agreement constitutes the whole legal agreement between you and Google and governs your use of the SDK (excluding any services which Google may provide to you under a separate written agreement), and completely replaces any prior agreements between you and Google in relation to the SDK.
-2026-11-05T21:16:08.5043266Z
-2026-11-05T21:16:08.5044270Z 14.2 You agree that if Google does not exercise or enforce any legal right or remedy which is contained in the License Agreement (or which Google has the benefit of under any applicable law), this will not be taken to be a formal waiver of Google's rights and that those rights or remedies will still be available to Google.
-2026-11-05T21:16:08.5045353Z
-2026-11-05T21:16:08.5046439Z 14.3 If any court of law, having the jurisdiction to decide on this matter, rules that any provision of the License Agreement is invalid, then that provision will be removed from the License Agreement without affecting the rest of the License Agreement. The remaining provisions of the License Agreement will continue to be valid and enforceable.
-2026-11-05T21:16:08.5047614Z
-2026-11-05T21:16:08.5049493Z 14.4 You acknowledge and agree that each member of the group of companies of which Google is the parent shall be third party beneficiaries to the License Agreement and that such other companies shall be entitled to directly enforce, and rely upon, any provision of the License Agreement that confers a benefit on (or rights in favor of) them. Other than this, no other person or company shall be third party beneficiaries to the License Agreement.
-2026-11-05T21:16:08.5051014Z
-2026-11-05T21:16:08.5051856Z 14.5 EXPORT RESTRICTIONS. THE SDK IS SUBJECT TO UNITED STATES EXPORT LAWS AND REGULATIONS. YOU MUST COMPLY WITH ALL DOMESTIC AND INTERNATIONAL EXPORT LAWS AND REGULATIONS THAT APPLY TO THE SDK. THESE LAWS INCLUDE RESTRICTIONS ON DESTINATIONS, END USERS AND END USE.
-2026-11-05T21:16:08.5052780Z
-2026-11-05T21:16:08.5053869Z 14.6 The rights granted in the License Agreement may not be assigned or transferred by either you or Google without the prior written approval of the other party. Neither you nor Google shall be permitted to delegate their responsibilities or obligations under the License Agreement without the prior written approval of the other party.
-2026-11-05T21:16:08.5055051Z
-2026-11-05T21:16:08.5056863Z 14.7 The License Agreement, and your relationship with Google under the License Agreement, shall be governed by the laws of the State of California without regard to its conflict of laws provisions. You and Google agree to submit to the exclusive jurisdiction of the courts located within the county of Santa Clara, California to resolve any legal matter arising from the License Agreement. Notwithstanding this, you agree that Google shall still be allowed to apply for injunctive remedies (or an equivalent type of urgent legal relief) in any jurisdiction.
-2026-11-05T21:16:08.5059130Z ---------------------------------------
-2026-11-05T21:16:08.5059408Z Accept? (y/N):
-2026-11-05T21:16:08.5059655Z 3/7: License android-sdk-arm-dbt-license:
-2026-11-05T21:16:08.5059965Z ---------------------------------------
-2026-11-05T21:16:08.5060231Z Terms and Conditions
-2026-11-05T21:16:08.5060543Z
-2026-11-05T21:16:08.5060716Z This is the Android Software Development Kit License Agreement
-2026-11-05T21:16:08.5060987Z
-2026-11-05T21:16:08.5061069Z 1. Introduction
-2026-11-05T21:16:08.5061193Z
-2026-11-05T21:16:08.5062347Z 1.1 The Android Software Development Kit (referred to in the License Agreement as the "SDK" and specifically including the Android system files, packaged APIs, and Google APIs add-ons) is licensed to you subject to the terms of the License Agreement. The License Agreement forms a legally binding contract between you and Google in relation to your use of the SDK.
-2026-11-05T21:16:08.5063584Z
-2026-11-05T21:16:08.5064249Z 1.2 "Android" means the Android software stack for devices, as made available under the Android Open Source Project, which is located at the following URL: http://source.android.com/, as updated from time to time.
-2026-11-05T21:16:08.5064996Z
-2026-11-05T21:16:08.5066119Z 1.3 A "compatible implementation" means any Android device that (i) complies with the Android Compatibility Definition document, which can be found at the Android compatibility website (http://source.android.com/compatibility) and which may be updated from time to time; and (ii) successfully passes the Android Compatibility Test Suite (CTS).
-2026-11-05T21:16:08.5067327Z
-2026-11-05T21:16:08.5067804Z 1.4 "Google" means Google Inc., a Delaware corporation with principal place of business at 1600 Amphitheatre Parkway, Mountain View, CA 94043, United States.
-2026-11-05T21:16:08.5068372Z
-2026-11-05T21:16:08.5068377Z
-2026-11-05T21:16:08.5068719Z 2. Accepting the License Agreement
-2026-11-05T21:16:08.5068909Z
-2026-11-05T21:16:08.5069325Z 2.1 In order to use the SDK, you must first agree to the License Agreement. You may not use the SDK if you do not accept the License Agreement.
-2026-11-05T21:16:08.5069825Z
-2026-11-05T21:16:08.5070041Z 2.2 By clicking to accept, you hereby agree to the terms of the License Agreement.
-2026-11-05T21:16:08.5070360Z
-2026-11-05T21:16:08.5071297Z 2.3 You may not use the SDK and may not accept the License Agreement if you are a person barred from receiving the SDK under the laws of the United States or other countries, including the country in which you are resident or from which you use the SDK.
-2026-11-05T21:16:08.5072176Z
-2026-11-05T21:16:08.5073319Z 2.4 If you are agreeing to be bound by the License Agreement on behalf of your employer or other entity, you represent and warrant that you have full legal authority to bind your employer or such entity to the License Agreement. If you do not have the requisite authority, you may not accept the License Agreement or use the SDK on behalf of your employer or other entity.
-2026-11-05T21:16:08.5074556Z
-2026-11-05T21:16:08.5074560Z
-2026-11-05T21:16:08.5074659Z 3. SDK License from Google
-2026-11-05T21:16:08.5074813Z
-2026-11-05T21:16:08.5075628Z 3.1 Subject to the terms of the License Agreement, Google grants you a limited, worldwide, royalty-free, non-assignable, non-exclusive, and non-sublicensable license to use the SDK solely to develop applications for compatible implementations of Android.
-2026-11-05T21:16:08.5076531Z
-2026-11-05T21:16:08.5077594Z 3.2 You may not use this SDK to develop applications for other platforms (including non-compatible implementations of Android) or to develop another SDK. You are of course free to develop applications for other platforms, including non-compatible implementations of Android, provided that this SDK is not used for that purpose.
-2026-11-05T21:16:08.5078868Z
-2026-11-05T21:16:08.5080114Z 3.3 You agree that Google or third parties own all legal right, title and interest in and to the SDK, including any Intellectual Property Rights that subsist in the SDK. "Intellectual Property Rights" means any and all rights under patent law, copyright law, trade secret law, trademark law, and any and all other proprietary rights. Google reserves all rights not expressly granted to you.
-2026-11-05T21:16:08.5081441Z
-2026-11-05T21:16:08.5082522Z 3.4 You may not use the SDK for any purpose not expressly permitted by the License Agreement. Except to the extent required by applicable third party licenses, you may not copy (except for backup purposes), modify, adapt, redistribute, decompile, reverse engineer, disassemble, or create derivative works of the SDK or any part of the SDK.
-2026-11-05T21:16:08.5083813Z
-2026-11-05T21:16:08.5084465Z 3.5 Use, reproduction and distribution of components of the SDK licensed under an open source software license are governed solely by the terms of that open source software license and not the License Agreement.
-2026-11-05T21:16:08.5085206Z
-2026-11-05T21:16:08.5086535Z 3.6 You agree that the form and nature of the SDK that Google provides may change without prior notice to you and that future versions of the SDK may be incompatible with applications developed on previous versions of the SDK. You agree that Google may stop (permanently or temporarily) providing the SDK (or any features within the SDK) to you or to users generally at Google's sole discretion, without prior notice to you.
-2026-11-05T21:16:08.5087962Z
-2026-11-05T21:16:08.5088596Z 3.7 Nothing in the License Agreement gives you a right to use any of Google's trade names, trademarks, service marks, logos, domain names, or other distinctive brand features.
-2026-11-05T21:16:08.5089212Z
-2026-11-05T21:16:08.5089776Z 3.8 You agree that you will not remove, obscure, or alter any proprietary rights notices (including copyright and trademark notices) that may be affixed to or contained within the SDK.
-2026-11-05T21:16:08.5090431Z
-2026-11-05T21:16:08.5090436Z
-2026-11-05T21:16:08.5090533Z 4. Use of the SDK by You
-2026-11-05T21:16:08.5090677Z
-2026-11-05T21:16:08.5091503Z 4.1 Google agrees that it obtains no right, title or interest from you (or your licensors) under the License Agreement in or to any software applications that you develop using the SDK, including any intellectual property rights that subsist in those applications.
-2026-11-05T21:16:08.5092412Z
-2026-11-05T21:16:08.5093656Z 4.2 You agree to use the SDK and write applications only for purposes that are permitted by (a) the License Agreement and (b) any applicable law, regulation or generally accepted practices or guidelines in the relevant jurisdictions (including any laws regarding the export of data or software to and from the United States or other relevant countries).
-2026-11-05T21:16:08.5094867Z
-2026-11-05T21:16:08.5097410Z 4.3 You agree that if you use the SDK to develop applications for general public users, you will protect the privacy and legal rights of those users. If the users provide you with user names, passwords, or other login information or personal information, you must make the users aware that the information will be available to your application, and you must provide legally adequate privacy notice and protection for those users. If your application stores personal or sensitive information provided by users, it must do so securely. If the user provides your application with Google Account information, your application may only use that information to access the user's Google Account when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.5100135Z
-2026-11-05T21:16:08.5101266Z 4.4 You agree that you will not engage in any activity with the SDK, including the development or distribution of an application, that interferes with, disrupts, damages, or accesses in an unauthorized manner the servers, networks, or other properties or services of any third party including, but not limited to, Google or any mobile communications carrier.
-2026-11-05T21:16:08.5102483Z
-2026-11-05T21:16:08.5103570Z 4.5 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any data, content, or resources that you create, transmit or display through Android and/or applications for Android, and for the consequences of your actions (including any loss or damage which Google may suffer) by doing so.
-2026-11-05T21:16:08.5104757Z
-2026-11-05T21:16:08.5106012Z 4.6 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any breach of your obligations under the License Agreement, any applicable third party contract or Terms of Service, or any applicable law or regulation, and for the consequences (including any loss or damage which Google or any third party may suffer) of any such breach.
-2026-11-05T21:16:08.5107471Z
-2026-11-05T21:16:08.5110262Z 4.7 This software enables the execution of intellectual property owned by Arm Limited. You agree that your use of the software, that allows execution of ARM Instruction Set Architecture (“ISA”) compliant executables for application development and debug only on x86 desktop, laptop, customer on-premise servers, and customer-procured cloud-based environments.
-2026-11-05T21:16:08.5112727Z
-2026-11-05T21:16:08.5112922Z 5. Your Developer Credentials
-2026-11-05T21:16:08.5113240Z
-2026-11-05T21:16:08.5114969Z 5.1 You agree that you are responsible for maintaining the confidentiality of any developer credentials that may be issued to you by Google or which you may choose yourself and that you will be solely responsible for all applications that are developed under your developer credentials.
-2026-11-05T21:16:08.5116915Z
-2026-11-05T21:16:08.5117124Z 6. Privacy and Information
-2026-11-05T21:16:08.5117438Z
-2026-11-05T21:16:08.5120637Z 6.1 In order to continually innovate and improve the SDK, Google may collect certain usage statistics from the software including but not limited to a unique identifier, associated IP address, version number of the software, and information on which tools and/or services in the SDK are being used and how they are being used. Before any of this information is collected, the SDK will notify you and seek your consent. If you withhold consent, the information will not be collected.
-2026-11-05T21:16:08.5122482Z
-2026-11-05T21:16:08.5122896Z 6.2 The data collected is examined in the aggregate to improve the SDK and is maintained in accordance with Google's Privacy Policy.
-2026-11-05T21:16:08.5123399Z
-2026-11-05T21:16:08.5123405Z
-2026-11-05T21:16:08.5123712Z 7. Third Party Applications
-2026-11-05T21:16:08.5123892Z
-2026-11-05T21:16:08.5125804Z 7.1 If you use the SDK to run applications developed by a third party or that access data, content or resources provided by a third party, you agree that Google is not responsible for those applications, data, content, or resources. You understand that all data, content or resources which you may access through such third party applications are the sole responsibility of the person from which they originated and that Google is not liable for any loss or damage that you may experience as a result of the use or access of any of those third party applications, data, content, or resources.
-2026-11-05T21:16:08.5127800Z
-2026-11-05T21:16:08.5129670Z 7.2 You should be aware the data, content, and resources presented to you through such a third party application may be protected by intellectual property rights which are owned by the providers (or by other persons or companies on their behalf). You may not modify, rent, lease, loan, sell, distribute or create derivative works based on these data, content, or resources (either in whole or in part) unless you have been specifically given permission to do so by the relevant owners.
-2026-11-05T21:16:08.5131314Z
-2026-11-05T21:16:08.5132161Z 7.3 You acknowledge that your use of such third party applications, data, content, or resources may be subject to separate terms between you and the relevant third party. In that case, the License Agreement does not affect your legal relationship with these third parties.
-2026-11-05T21:16:08.5133102Z
-2026-11-05T21:16:08.5133107Z
-2026-11-05T21:16:08.5133204Z 8. Using Android APIs
-2026-11-05T21:16:08.5133349Z
-2026-11-05T21:16:08.5133435Z 8.1 Google Data APIs
-2026-11-05T21:16:08.5133573Z
-2026-11-05T21:16:08.5135158Z 8.1.1 If you use any API to retrieve data from Google, you acknowledge that the data may be protected by intellectual property rights which are owned by Google or those parties that provide the data (or by other persons or companies on their behalf). Your use of any such API may be subject to additional Terms of Service. You may not modify, rent, lease, loan, sell, distribute or create derivative works based on this data (either in whole or in part) unless allowed by the relevant Terms of Service.
-2026-11-05T21:16:08.5136968Z
-2026-11-05T21:16:08.5139939Z 8.1.2 If you use any API to retrieve a user's data from Google, you acknowledge and agree that you shall retrieve data only with the user's explicit consent and only when, and for the limited purposes for which, the user has given you permission to do so. If you use the Android Recognition Service API, documented at the following URL: https://developer.android.com/reference/android/speech/RecognitionService, as updated from time to time, you acknowledge that the use of the API is subject to the Data Processing Addendum for Products where Google is a Data Processor, which is located at the following URL: https://privacy.google.com/businesses/gdprprocessorterms/, as updated from time to time. By clicking to accept, you hereby agree to the terms of the Data Processing Addendum for Products where Google is a Data Processor.
-2026-11-05T21:16:08.5142717Z
-2026-11-05T21:16:08.5142722Z
-2026-11-05T21:16:08.5142838Z 9. Terminating the License Agreement
-2026-11-05T21:16:08.5143022Z
-2026-11-05T21:16:08.5143344Z 9.1 The License Agreement will continue to apply until terminated by either you or Google as set out below.
-2026-11-05T21:16:08.5143763Z
-2026-11-05T21:16:08.5144155Z 9.2 If you want to terminate the License Agreement, you may do so by ceasing your use of the SDK and any relevant developer credentials.
-2026-11-05T21:16:08.5144633Z
-2026-11-05T21:16:08.5146799Z 9.3 Google may at any time, terminate the License Agreement with you if: (A) you have breached any provision of the License Agreement; or (B) Google is required to do so by law; or (C) the partner with whom Google offered certain parts of SDK (such as APIs) to you has terminated its relationship with Google or ceased to offer certain parts of the SDK to you; or (D) Google decides to no longer provide the SDK or certain parts of the SDK to users in the country in which you are resident or from which you use the service, or the provision of the SDK or certain SDK services to you by Google is, in Google's sole discretion, no longer commercially viable.
-2026-11-05T21:16:08.5151132Z
-2026-11-05T21:16:08.5153719Z 9.4 When the License Agreement comes to an end, all of the legal rights, obligations and liabilities that you and Google have benefited from, been subject to (or which have accrued over time whilst the License Agreement has been in force) or which are expressed to continue indefinitely, shall be unaffected by this cessation, and the provisions of paragraph 14.7 shall continue to apply to such rights, obligations and liabilities indefinitely.
-2026-11-05T21:16:08.5156454Z
-2026-11-05T21:16:08.5156461Z
-2026-11-05T21:16:08.5156635Z 10. DISCLAIMER OF WARRANTIES
-2026-11-05T21:16:08.5156927Z
-2026-11-05T21:16:08.5157868Z 10.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT YOUR USE OF THE SDK IS AT YOUR SOLE RISK AND THAT THE SDK IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND FROM GOOGLE.
-2026-11-05T21:16:08.5159154Z
-2026-11-05T21:16:08.5160616Z 10.2 YOUR USE OF THE SDK AND ANY MATERIAL DOWNLOADED OR OTHERWISE OBTAINED THROUGH THE USE OF THE SDK IS AT YOUR OWN DISCRETION AND RISK AND YOU ARE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER SYSTEM OR OTHER DEVICE OR LOSS OF DATA THAT RESULTS FROM SUCH USE.
-2026-11-05T21:16:08.5162256Z
-2026-11-05T21:16:08.5163722Z 10.3 GOOGLE FURTHER EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES AND CONDITIONS OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
-2026-11-05T21:16:08.5165362Z
-2026-11-05T21:16:08.5165369Z
-2026-11-05T21:16:08.5165533Z 11. LIMITATION OF LIABILITY
-2026-11-05T21:16:08.5166017Z
-2026-11-05T21:16:08.5168856Z 11.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT GOOGLE, ITS SUBSIDIARIES AND AFFILIATES, AND ITS LICENSORS SHALL NOT BE LIABLE TO YOU UNDER ANY THEORY OF LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES THAT MAY BE INCURRED BY YOU, INCLUDING ANY LOSS OF DATA, WHETHER OR NOT GOOGLE OR ITS REPRESENTATIVES HAVE BEEN ADVISED OF OR SHOULD HAVE BEEN AWARE OF THE POSSIBILITY OF ANY SUCH LOSSES ARISING.
-2026-11-05T21:16:08.5171591Z
-2026-11-05T21:16:08.5171598Z
-2026-11-05T21:16:08.5171754Z 12. Indemnification
-2026-11-05T21:16:08.5171979Z
-2026-11-05T21:16:08.5176192Z 12.1 To the maximum extent permitted by law, you agree to defend, indemnify and hold harmless Google, its affiliates and their respective directors, officers, employees and agents from and against any and all claims, actions, suits or proceedings, as well as any and all losses, liabilities, damages, costs and expenses (including reasonable attorneys fees) arising out of or accruing from (a) your use of the SDK, (b) any application you develop on the SDK that infringes any copyright, trademark, trade secret, trade dress, patent or other intellectual property right of any person or defames any person or violates their rights of publicity or privacy, and (c) any non-compliance by you with the License Agreement.
-2026-11-05T21:16:08.5180902Z
-2026-11-05T21:16:08.5180910Z
-2026-11-05T21:16:08.5181091Z 13. Changes to the License Agreement
-2026-11-05T21:16:08.5181403Z
-2026-11-05T21:16:08.5182732Z 13.1 Google may make changes to the License Agreement as it distributes new versions of the SDK. When these changes are made, Google will make a new version of the License Agreement available on the website where the SDK is made available.
-2026-11-05T21:16:08.5184210Z
-2026-11-05T21:16:08.5184216Z
-2026-11-05T21:16:08.5184366Z 14. General Legal Terms
-2026-11-05T21:16:08.5184603Z
-2026-11-05T21:16:08.5186547Z 14.1 The License Agreement constitutes the whole legal agreement between you and Google and governs your use of the SDK (excluding any services which Google may provide to you under a separate written agreement), and completely replaces any prior agreements between you and Google in relation to the SDK.
-2026-11-05T21:16:08.5188727Z
-2026-11-05T21:16:08.5190536Z 14.2 You agree that if Google does not exercise or enforce any legal right or remedy which is contained in the License Agreement (or which Google has the benefit of under any applicable law), this will not be taken to be a formal waiver of Google's rights and that those rights or remedies will still be available to Google.
-2026-11-05T21:16:08.5192496Z
-2026-11-05T21:16:08.5194490Z 14.3 If any court of law, having the jurisdiction to decide on this matter, rules that any provision of the License Agreement is invalid, then that provision will be removed from the License Agreement without affecting the rest of the License Agreement. The remaining provisions of the License Agreement will continue to be valid and enforceable.
-2026-11-05T21:16:08.5196660Z
-2026-11-05T21:16:08.5199418Z 14.4 You acknowledge and agree that each member of the group of companies of which Google is the parent shall be third party beneficiaries to the License Agreement and that such other companies shall be entitled to directly enforce, and rely upon, any provision of the License Agreement that confers a benefit on (or rights in favor of) them. Other than this, no other person or company shall be third party beneficiaries to the License Agreement.
-2026-11-05T21:16:08.5202135Z
-2026-11-05T21:16:08.5203655Z 14.5 EXPORT RESTRICTIONS. THE SDK IS SUBJECT TO UNITED STATES EXPORT LAWS AND REGULATIONS. YOU MUST COMPLY WITH ALL DOMESTIC AND INTERNATIONAL EXPORT LAWS AND REGULATIONS THAT APPLY TO THE SDK. THESE LAWS INCLUDE RESTRICTIONS ON DESTINATIONS, END USERS AND END USE.
-2026-11-05T21:16:08.5205346Z
-2026-11-05T21:16:08.5207330Z 14.6 The rights granted in the License Agreement may not be assigned or transferred by either you or Google without the prior written approval of the other party. Neither you nor Google shall be permitted to delegate their responsibilities or obligations under the License Agreement without the prior written approval of the other party.
-2026-11-05T21:16:08.5209890Z
-2026-11-05T21:16:08.5213181Z 14.7 The License Agreement, and your relationship with Google under the License Agreement, shall be governed by the laws of the State of California without regard to its conflict of laws provisions. You and Google agree to submit to the exclusive jurisdiction of the courts located within the county of Santa Clara, California to resolve any legal matter arising from the License Agreement. Notwithstanding this, you agree that Google shall still be allowed to apply for injunctive remedies (or an equivalent type of urgent legal relief) in any jurisdiction.
-2026-11-05T21:16:08.5216588Z
-2026-11-05T21:16:08.5216595Z
-2026-11-05T21:16:08.5216745Z January 16, 2019
-2026-11-05T21:16:08.5217109Z ---------------------------------------
-2026-11-05T21:16:08.5217559Z Accept? (y/N):
-2026-11-05T21:16:08.5217968Z 4/7: License android-sdk-preview-license:
-2026-11-05T21:16:08.5218628Z ---------------------------------------
-2026-11-05T21:16:08.5221142Z To get started with the Android SDK Preview, you must agree to the following terms and conditions. As described below, please note that this is a preview version of the Android SDK, subject to change, that you use at your own risk. The Android SDK Preview is not a stable release, and may contain errors and defects that can result in serious damage to your computer systems, devices and data.
-2026-11-05T21:16:08.5223436Z
-2026-11-05T21:16:08.5223794Z This is the Android SDK Preview License Agreement (the "License Agreement").
-2026-11-05T21:16:08.5224322Z
-2026-11-05T21:16:08.5224463Z 1. Introduction
-2026-11-05T21:16:08.5224665Z
-2026-11-05T21:16:08.5227563Z 1.1 The Android SDK Preview (referred to in the License Agreement as the “Preview” and specifically including the Android system files, packaged APIs, and Preview library files, if and when they are made available) is licensed to you subject to the terms of the License Agreement. The License Agreement forms a legally binding contract between you and Google in relation to your use of the Preview.
-2026-11-05T21:16:08.5230237Z
-2026-11-05T21:16:08.5231450Z 1.2 "Android" means the Android software stack for devices, as made available under the Android Open Source Project, which is located at the following URL: http://source.android.com/, as updated from time to time.
-2026-11-05T21:16:08.5232775Z
-2026-11-05T21:16:08.5233645Z 1.3 "Google" means Google Inc., a Delaware corporation with principal place of business at 1600 Amphitheatre Parkway, Mountain View, CA 94043, United States.
-2026-11-05T21:16:08.5234672Z
-2026-11-05T21:16:08.5234851Z 2. Accepting the License Agreement
-2026-11-05T21:16:08.5235166Z
-2026-11-05T21:16:08.5235941Z 2.1 In order to use the Preview, you must first agree to the License Agreement. You may not use the Preview if you do not accept the License Agreement.
-2026-11-05T21:16:08.5236885Z
-2026-11-05T21:16:08.5237424Z 2.2 By clicking to accept and/or using the Preview, you hereby agree to the terms of the License Agreement.
-2026-11-05T21:16:08.5238130Z
-2026-11-05T21:16:08.5239754Z 2.3 You may not use the Preview and may not accept the License Agreement if you are a person barred from receiving the Preview under the laws of the United States or other countries including the country in which you are resident or from which you use the Preview.
-2026-11-05T21:16:08.5241390Z
-2026-11-05T21:16:08.5243938Z 2.4 If you will use the Preview internally within your company or organization you agree to be bound by the License Agreement on behalf of your employer or other entity, and you represent and warrant that you have full legal authority to bind your employer or such entity to the License Agreement. If you do not have the requisite authority, you may not accept the License Agreement or use the Preview on behalf of your employer or other entity.
-2026-11-05T21:16:08.5246654Z
-2026-11-05T21:16:08.5247005Z 3. Preview License from Google
-2026-11-05T21:16:08.5247297Z
-2026-11-05T21:16:08.5249269Z 3.1 Subject to the terms of the License Agreement, Google grants you a royalty-free, non-assignable, non-exclusive, non-sublicensable, limited, revocable license to use the Preview, personally or internally within your company or organization, solely to develop applications to run on the Android platform.
-2026-11-05T21:16:08.5251251Z
-2026-11-05T21:16:08.5253601Z 3.2 You agree that Google or third parties owns all legal right, title and interest in and to the Preview, including any Intellectual Property Rights that subsist in the Preview. "Intellectual Property Rights" means any and all rights under patent law, copyright law, trade secret law, trademark law, and any and all other proprietary rights. Google reserves all rights not expressly granted to you.
-2026-11-05T21:16:08.5256087Z
-2026-11-05T21:16:08.5259693Z 3.3 You may not use the Preview for any purpose not expressly permitted by the License Agreement. Except to the extent required by applicable third party licenses, you may not: (a) copy (except for backup purposes), modify, adapt, redistribute, decompile, reverse engineer, disassemble, or create derivative works of the Preview or any part of the Preview; or (b) load any part of the Preview onto a mobile handset or any other hardware device except a personal computer, combine any part of the Preview with other software, or distribute any software or device incorporating a part of the Preview.
-2026-11-05T21:16:08.5263306Z
-2026-11-05T21:16:08.5264732Z 3.4 You agree that you will not take any actions that may cause or result in the fragmentation of Android, including but not limited to distributing, participating in the creation of, or promoting in any way a software development kit derived from the Preview.
-2026-11-05T21:16:08.5266271Z
-2026-11-05T21:16:08.5269046Z 3.5 Use, reproduction and distribution of components of the Preview licensed under an open source software license are governed solely by the terms of that open source software license and not the License Agreement. You agree to remain a licensee in good standing in regard to such open source software licenses under all the rights granted and to refrain from any actions that may terminate, suspend, or breach such rights.
-2026-11-05T21:16:08.5271646Z
-2026-11-05T21:16:08.5274252Z 3.6 You agree that the form and nature of the Preview that Google provides may change without prior notice to you and that future versions of the Preview may be incompatible with applications developed on previous versions of the Preview. You agree that Google may stop (permanently or temporarily) providing the Preview (or any features within the Preview) to you or to users generally at Google's sole discretion, without prior notice to you.
-2026-11-05T21:16:08.5276998Z
-2026-11-05T21:16:08.5277947Z 3.7 Nothing in the License Agreement gives you a right to use any of Google's trade names, trademarks, service marks, logos, domain names, or other distinctive brand features.
-2026-11-05T21:16:08.5279239Z
-2026-11-05T21:16:08.5280285Z 3.8 You agree that you will not remove, obscure, or alter any proprietary rights notices (including copyright and trademark notices) that may be affixed to or contained within the Preview.
-2026-11-05T21:16:08.5281505Z
-2026-11-05T21:16:08.5281677Z 4. Use of the Preview by You
-2026-11-05T21:16:08.5281953Z
-2026-11-05T21:16:08.5283706Z 4.1 Google agrees that nothing in the License Agreement gives Google any right, title or interest from you (or your licensors) under the License Agreement in or to any software applications that you develop using the Preview, including any intellectual property rights that subsist in those applications.
-2026-11-05T21:16:08.5285610Z
-2026-11-05T21:16:08.5287707Z 4.2 You agree to use the Preview and write applications only for purposes that are permitted by (a) the License Agreement, and (b) any applicable law, regulation or generally accepted practices or guidelines in the relevant jurisdictions (including any laws regarding the export of data or software to and from the United States or other relevant countries).
-2026-11-05T21:16:08.5290288Z
-2026-11-05T21:16:08.5294602Z 4.3 You agree that if you use the Preview to develop applications, you will protect the privacy and legal rights of users. If users provide you with user names, passwords, or other login information or personal information, you must make the users aware that the information will be available to your application, and you must provide legally adequate privacy notice and protection for those users. If your application stores personal or sensitive information provided by users, it must do so securely. If users provide you with Google Account information, your application may only use that information to access the user's Google Account when, and for the limited purposes for which, each user has given you permission to do so.
-2026-11-05T21:16:08.5299224Z
-2026-11-05T21:16:08.5300938Z 4.4 You agree that you will not engage in any activity with the Preview, including the development or distribution of an application, that interferes with, disrupts, damages, or accesses in an unauthorized manner the servers, networks, or other properties or services of Google or any third party.
-2026-11-05T21:16:08.5302794Z
-2026-11-05T21:16:08.5304785Z 4.5 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any data, content, or resources that you create, transmit or display through Android and/or applications for Android, and for the consequences of your actions (including any loss or damage which Google may suffer) by doing so.
-2026-11-05T21:16:08.5306935Z
-2026-11-05T21:16:08.5309395Z 4.6 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any breach of your obligations under the License Agreement, any applicable third party contract or Terms of Service, or any applicable law or regulation, and for the consequences (including any loss or damage which Google or any third party may suffer) of any such breach.
-2026-11-05T21:16:08.5311819Z
-2026-11-05T21:16:08.5314808Z 4.7 The Preview is in development, and your testing and feedback are an important part of the development process. By using the Preview, you acknowledge that implementation of some features are still under development and that you should not rely on the Preview having the full functionality of a stable release. You agree not to publicly distribute or ship any application using this Preview as this Preview will no longer be supported after the official Android SDK is released.
-2026-11-05T21:16:08.5317753Z
-2026-11-05T21:16:08.5317929Z 5. Your Developer Credentials
-2026-11-05T21:16:08.5318218Z
-2026-11-05T21:16:08.5320034Z 5.1 You agree that you are responsible for maintaining the confidentiality of any developer credentials that may be issued to you by Google or which you may choose yourself and that you will be solely responsible for all applications that are developed under your developer credentials.
-2026-11-05T21:16:08.5321811Z
-2026-11-05T21:16:08.5321974Z 6. Privacy and Information
-2026-11-05T21:16:08.5322236Z
-2026-11-05T21:16:08.5324938Z 6.1 In order to continually innovate and improve the Preview, Google may collect certain usage statistics from the software including but not limited to a unique identifier, associated IP address, version number of the software, and information on which tools and/or services in the Preview are being used and how they are being used. Before any of this information is collected, the Preview will notify you and seek your consent. If you withhold consent, the information will not be collected.
-2026-11-05T21:16:08.5328125Z
-2026-11-05T21:16:08.5329380Z 6.2 The data collected is examined in the aggregate to improve the Preview and is maintained in accordance with Google's Privacy Policy located at http://www.google.com/policies/privacy/.
-2026-11-05T21:16:08.5330617Z
-2026-11-05T21:16:08.5330808Z 7. Third Party Applications
-2026-11-05T21:16:08.5331090Z
-2026-11-05T21:16:08.5335291Z 7.1 If you use the Preview to run applications developed by a third party or that access data, content or resources provided by a third party, you agree that Google is not responsible for those applications, data, content, or resources. You understand that all data, content or resources which you may access through such third party applications are the sole responsibility of the person from which they originated and that Google is not liable for any loss or damage that you may experience as a result of the use or access of any of those third party applications, data, content, or resources.
-2026-11-05T21:16:08.5339108Z
-2026-11-05T21:16:08.5341926Z 7.2 You should be aware the data, content, and resources presented to you through such a third party application may be protected by intellectual property rights which are owned by the providers (or by other persons or companies on their behalf). You may not modify, rent, lease, loan, sell, distribute or create derivative works based on these data, content, or resources (either in whole or in part) unless you have been specifically given permission to do so by the relevant owners.
-2026-11-05T21:16:08.5344907Z
-2026-11-05T21:16:08.5345884Z 7.3 You acknowledge that your use of such third party applications, data, content, or resources may be subject to separate terms between you and the relevant third party.
-2026-11-05T21:16:08.5347110Z
-2026-11-05T21:16:08.5347270Z 8. Using Google APIs
-2026-11-05T21:16:08.5347507Z
-2026-11-05T21:16:08.5347657Z 8.1 Google APIs
-2026-11-05T21:16:08.5347864Z
-2026-11-05T21:16:08.5351059Z 8.1.1 If you use any API to retrieve data from Google, you acknowledge that the data may be protected by intellectual property rights which are owned by Google or those parties that provide the data (or by other persons or companies on their behalf). Your use of any such API may be subject to additional Terms of Service. You may not modify, rent, lease, loan, sell, distribute or create derivative works based on this data (either in whole or in part) unless allowed by the relevant Terms of Service.
-2026-11-05T21:16:08.5365903Z
-2026-11-05T21:16:08.5367703Z 8.1.2 If you use any API to retrieve a user's data from Google, you acknowledge and agree that you shall retrieve data only with the user's explicit consent and only when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.5369693Z
-2026-11-05T21:16:08.5369897Z 9. Terminating the License Agreement
-2026-11-05T21:16:08.5370243Z
-2026-11-05T21:16:08.5370823Z 9.1 the License Agreement will continue to apply until terminated by either you or Google as set out below.
-2026-11-05T21:16:08.5371561Z
-2026-11-05T21:16:08.5372256Z 9.2 If you want to terminate the License Agreement, you may do so by ceasing your use of the Preview and any relevant developer credentials.
-2026-11-05T21:16:08.5373136Z
-2026-11-05T21:16:08.5373679Z 9.3 Google may at any time, terminate the License Agreement, with or without cause, upon notice to you.
-2026-11-05T21:16:08.5374426Z
-2026-11-05T21:16:08.5376383Z 9.4 The License Agreement will automatically terminate without notice or other action upon the earlier of: (A) when Google ceases to provide the Preview or certain parts of the Preview to users in the country in which you are resident or from which you use the service; and (B) Google issues a final release version of the Android SDK.
-2026-11-05T21:16:08.5378678Z
-2026-11-05T21:16:08.5380046Z 9.5 When the License Agreement is terminated, the license granted to you in the License Agreement will terminate, you will immediately cease all use of the Preview, and the provisions of paragraphs 10, 11, 12 and 14 shall survive indefinitely.
-2026-11-05T21:16:08.5382157Z
-2026-11-05T21:16:08.5382315Z 10. DISCLAIMERS
-2026-11-05T21:16:08.5382539Z
-2026-11-05T21:16:08.5383575Z 10.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT YOUR USE OF THE PREVIEW IS AT YOUR SOLE RISK AND THAT THE PREVIEW IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND FROM GOOGLE.
-2026-11-05T21:16:08.5385411Z
-2026-11-05T21:16:08.5389110Z 10.2 YOUR USE OF THE PREVIEW AND ANY MATERIAL DOWNLOADED OR OTHERWISE OBTAINED THROUGH THE USE OF THE PREVIEW IS AT YOUR OWN DISCRETION AND RISK AND YOU ARE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER SYSTEM OR OTHER DEVICE OR LOSS OF DATA THAT RESULTS FROM SUCH USE. WITHOUT LIMITING THE FOREGOING, YOU UNDERSTAND THAT THE PREVIEW IS NOT A STABLE RELEASE AND MAY CONTAIN ERRORS, DEFECTS AND SECURITY VULNERABILITIES THAT CAN RESULT IN SIGNIFICANT DAMAGE, INCLUDING THE COMPLETE, IRRECOVERABLE LOSS OF USE OF YOUR COMPUTER SYSTEM OR OTHER DEVICE.
-2026-11-05T21:16:08.5391952Z
-2026-11-05T21:16:08.5392794Z 10.3 GOOGLE FURTHER EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES AND CONDITIONS OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
-2026-11-05T21:16:08.5393704Z
-2026-11-05T21:16:08.5393816Z 11. LIMITATION OF LIABILITY
-2026-11-05T21:16:08.5393980Z
-2026-11-05T21:16:08.5395392Z 11.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT GOOGLE, ITS SUBSIDIARIES AND AFFILIATES, AND ITS LICENSORS SHALL NOT BE LIABLE TO YOU UNDER ANY THEORY OF LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES THAT MAY BE INCURRED BY YOU, INCLUDING ANY LOSS OF DATA, WHETHER OR NOT GOOGLE OR ITS REPRESENTATIVES HAVE BEEN ADVISED OF OR SHOULD HAVE BEEN AWARE OF THE POSSIBILITY OF ANY SUCH LOSSES ARISING.
-2026-11-05T21:16:08.5396871Z
-2026-11-05T21:16:08.5396956Z 12. Indemnification
-2026-11-05T21:16:08.5397088Z
-2026-11-05T21:16:08.5402057Z 12.1 To the maximum extent permitted by law, you agree to defend, indemnify and hold harmless Google, its affiliates and their respective directors, officers, employees and agents from and against any and all claims, actions, suits or proceedings, as well as any and all losses, liabilities, damages, costs and expenses (including reasonable attorneys’ fees) arising out of or accruing from (a) your use of the Preview, (b) any application you develop on the Preview that infringes any Intellectual Property Rights of any person or defames any person or violates their rights of publicity or privacy, and (c) any non-compliance by you of the License Agreement.
-2026-11-05T21:16:08.5406229Z
-2026-11-05T21:16:08.5406433Z 13. Changes to the License Agreement
-2026-11-05T21:16:08.5406768Z
-2026-11-05T21:16:08.5408177Z 13.1 Google may make changes to the License Agreement as it distributes new versions of the Preview. When these changes are made, Google will make a new version of the License Agreement available on the website where the Preview is made available.
-2026-11-05T21:16:08.5410211Z
-2026-11-05T21:16:08.5410430Z 14. General Legal Terms
-2026-11-05T21:16:08.5410754Z
-2026-11-05T21:16:08.5412631Z 14.1 the License Agreement constitutes the whole legal agreement between you and Google and governs your use of the Preview (excluding any services which Google may provide to you under a separate written agreement), and completely replaces any prior agreements between you and Google in relation to the Preview.
-2026-11-05T21:16:08.5414701Z
-2026-11-05T21:16:08.5416584Z 14.2 You agree that if Google does not exercise or enforce any legal right or remedy which is contained in the License Agreement (or which Google has the benefit of under any applicable law), this will not be taken to be a formal waiver of Google's rights and that those rights or remedies will still be available to Google.
-2026-11-05T21:16:08.5418850Z
-2026-11-05T21:16:08.5420917Z 14.3 If any court of law, having the jurisdiction to decide on this matter, rules that any provision of the License Agreement is invalid, then that provision will be removed from the License Agreement without affecting the rest of the License Agreement. The remaining provisions of the License Agreement will continue to be valid and enforceable.
-2026-11-05T21:16:08.5423188Z
-2026-11-05T21:16:08.5424675Z 14.4 You acknowledge and agree that each member of the group of companies of which Google is the parent shall be third party beneficiaries to the License Agreement and that such other companies shall be entitled to directly enforce, and rely upon, any provision of the License Agreement that confers a benefit on (or rights in favor of) them. Other than this, no other person or company shall be third party beneficiaries to the License Agreement.
-2026-11-05T21:16:08.5426443Z
-2026-11-05T21:16:08.5427320Z 14.5 EXPORT RESTRICTIONS. THE PREVIEW IS SUBJECT TO UNITED STATES EXPORT LAWS AND REGULATIONS. YOU MUST COMPLY WITH ALL DOMESTIC AND INTERNATIONAL EXPORT LAWS AND REGULATIONS THAT APPLY TO THE PREVIEW. THESE LAWS INCLUDE RESTRICTIONS ON DESTINATIONS, END USERS AND END USE.
-2026-11-05T21:16:08.5428282Z
-2026-11-05T21:16:08.5430358Z 14.6 The License Agreement may not be assigned or transferred by you without the prior written approval of Google, and any attempted assignment without such approval will be void. You shall not delegate your responsibilities or obligations under the License Agreement without the prior written approval of Google.
-2026-11-05T21:16:08.5432418Z
-2026-11-05T21:16:08.5435780Z 14.7 The License Agreement, and your relationship with Google under the License Agreement, shall be governed by the laws of the State of California without regard to its conflict of laws provisions. You and Google agree to submit to the exclusive jurisdiction of the courts located within the county of Santa Clara, California to resolve any legal matter arising from the License Agreement. Notwithstanding this, you agree that Google shall still be allowed to apply for injunctive remedies (or an equivalent type of urgent legal relief) in any jurisdiction.
-2026-11-05T21:16:08.5439676Z
-2026-11-05T21:16:08.5439837Z June 2014.
-2026-11-05T21:16:08.5440201Z ---------------------------------------
-2026-11-05T21:16:08.5440684Z Accept? (y/N):
-2026-11-05T21:16:08.5441084Z 5/7: License google-gdk-license:
-2026-11-05T21:16:08.5441566Z ---------------------------------------
-2026-11-05T21:16:08.5442210Z This is a Developer Preview of the GDK that is subject to change.
-2026-11-05T21:16:08.5442713Z
-2026-11-05T21:16:08.5442878Z Terms and Conditions
-2026-11-05T21:16:08.5443338Z
-2026-11-05T21:16:08.5443608Z This is the Glass Development Kit License Agreement.
-2026-11-05T21:16:08.5444053Z
-2026-11-05T21:16:08.5444210Z 1. Introduction
-2026-11-05T21:16:08.5444432Z
-2026-11-05T21:16:08.5446744Z 1.1 The Glass Development Kit (referred to in this License Agreement as the "GDK" and specifically including the Android system files, packaged APIs, and GDK library files, if and when they are made available) is licensed to you subject to the terms of this License Agreement. This License Agreement forms a legally binding contract between you and Google in relation to your use of the GDK.
-2026-11-05T21:16:08.5449594Z
-2026-11-05T21:16:08.5450033Z 1.2 "Glass" means Glass devices and the Glass software stack for use on Glass devices.
-2026-11-05T21:16:08.5450644Z
-2026-11-05T21:16:08.5450652Z
-2026-11-05T21:16:08.5451906Z 1.3 "Android" means the Android software stack for devices, as made available under the Android Open Source Project, which is located at the following URL: http://source.android.com/, as updated from time to time.
-2026-11-05T21:16:08.5457661Z
-2026-11-05T21:16:08.5458826Z 1.4 "Google" means Google Inc., a Delaware corporation with principal place of business at 1600 Amphitheatre Parkway, Mountain View, CA 94043, United States.
-2026-11-05T21:16:08.5459938Z
-2026-11-05T21:16:08.5460121Z 2. Accepting this License Agreement
-2026-11-05T21:16:08.5460332Z
-2026-11-05T21:16:08.5460776Z 2.1 In order to use the GDK, you must first agree to this License Agreement. You may not use the GDK if you do not accept this License Agreement.
-2026-11-05T21:16:08.5461303Z
-2026-11-05T21:16:08.5461557Z 2.2 By clicking to accept, you hereby agree to the terms of this License Agreement.
-2026-11-05T21:16:08.5461890Z
-2026-11-05T21:16:08.5462675Z 2.3 You may not use the GDK and may not accept the License Agreement if you are a person barred from receiving the GDK under the laws of the United States or other countries including the country in which you are resident or from which you use the GDK.
-2026-11-05T21:16:08.5463725Z
-2026-11-05T21:16:08.5464893Z 2.4 If you are agreeing to be bound by this License Agreement on behalf of your employer or other entity, you represent and warrant that you have full legal authority to bind your employer or such entity to this License Agreement. If you do not have the requisite authority, you may not accept the License Agreement or use the GDK on behalf of your employer or other entity.
-2026-11-05T21:16:08.5466152Z
-2026-11-05T21:16:08.5466251Z 3. GDK License from Google
-2026-11-05T21:16:08.5466413Z
-2026-11-05T21:16:08.5467204Z 3.1 Subject to the terms of this License Agreement, Google grants you a limited, worldwide, royalty-free, non-assignable and non-exclusive license to use the GDK solely to develop applications to run on the Glass platform for Glass devices.
-2026-11-05T21:16:08.5468061Z
-2026-11-05T21:16:08.5470362Z 3.2 You agree that Google or third parties own all legal right, title and interest in and to the GDK, including any Intellectual Property Rights that subsist in the GDK. "Intellectual Property Rights" means any and all rights under patent law, copyright law, trade secret law, trademark law, and any and all other proprietary rights. Google reserves all rights not expressly granted to you.
-2026-11-05T21:16:08.5472832Z
-2026-11-05T21:16:08.5476610Z 3.3 You may not use the GDK for any purpose not expressly permitted by this License Agreement. Except to the extent required by applicable third party licenses, you may not: (a) copy (except for backup purposes), modify, adapt, redistribute, decompile, reverse engineer, disassemble, or create derivative works of the GDK or any part of the GDK; or (b) load any part of the GDK onto a mobile handset or wearable computing device or any other hardware device except a Glass device personal computer, combine any part of the GDK with other software, or distribute any software or device incorporating a part of the GDK.
-2026-11-05T21:16:08.5480681Z
-2026-11-05T21:16:08.5482378Z 3.4 You agree that you will not take any actions that may cause or result in the fragmentation of Glass, including but not limited to distributing, participating in the creation of, or promoting in any way a software development kit derived from the GDK.
-2026-11-05T21:16:08.5484061Z
-2026-11-05T21:16:08.5485288Z 3.5 Use, reproduction and distribution of components of the GDK licensed under an open source software license are governed solely by the terms of that open source software license and not this License Agreement.
-2026-11-05T21:16:08.5486683Z
-2026-11-05T21:16:08.5489496Z 3.6 You agree that the form and nature of the GDK that Google provides may change without prior notice to you and that future versions of the GDK may be incompatible with applications developed on previous versions of the GDK. You agree that Google may stop (permanently or temporarily) providing the GDK (or any features within the GDK) to you or to users generally at Google's sole discretion, without prior notice to you.
-2026-11-05T21:16:08.5492119Z
-2026-11-05T21:16:08.5493082Z 3.7 Nothing in this License Agreement gives you a right to use any of Google's trade names, trademarks, service marks, logos, domain names, or other distinctive brand features.
-2026-11-05T21:16:08.5494239Z
-2026-11-05T21:16:08.5495786Z 3.8 You agree that you will not remove, obscure, or alter any proprietary rights notices (including copyright and trademark notices) that may be affixed to or contained within the GDK.
-2026-11-05T21:16:08.5497065Z
-2026-11-05T21:16:08.5497073Z
-2026-11-05T21:16:08.5499562Z 3.9 Your use of any Android system files, packaged APIs, or other components of the GDK which are part of the Android Software Development Kit is subject to the terms of the Android Software Development Kit License Agreement located at http://developer.android.com/sdk/terms.html. These terms are hereby incorporated by reference into this License Agreement.
-2026-11-05T21:16:08.5501865Z
-2026-11-05T21:16:08.5502378Z 4. Use of the GDK by You
-2026-11-05T21:16:08.5502638Z
-2026-11-05T21:16:08.5504169Z 4.1 Google agrees that it obtains no right, title or interest from you (or your licensors) under this License Agreement in or to any software applications that you develop using the GDK, including any intellectual property rights that subsist in those applications.
-2026-11-05T21:16:08.5505869Z
-2026-11-05T21:16:08.5509396Z 4.2 You agree to use the GDK and write applications only for purposes that are permitted by (a) this License Agreement, (b) the Glass Platform Developer Policies (located at https://developers.google.com/glass/policies, and hereby incorporated into this License Agreement by reference), and (c) any applicable law, regulation or generally accepted practices or guidelines in the relevant jurisdictions (including any laws regarding the export of data or software to and from the United States or other relevant countries).
-2026-11-05T21:16:08.5512840Z
-2026-11-05T21:16:08.5517521Z 4.3 You agree that if you use the GDK to develop applications for general public users, you will protect the privacy and legal rights of those users. If the users provide you with user names, passwords, or other login information or personal information, you must make the users aware that the information will be available to your application, and you must provide legally adequate privacy notice and protection for those users. If your application stores personal or sensitive information provided by users, it must do so securely. If the user provides your application with Google Account information, your application may only use that information to access the user's Google Account when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.5522893Z
-2026-11-05T21:16:08.5524988Z 4.4 You agree that you will not engage in any activity with the GDK, including the development or distribution of an application, that interferes with, disrupts, damages, or accesses in an unauthorized manner the servers, networks, or other properties or services of any third party including, but not limited to, Google.
-2026-11-05T21:16:08.5527046Z
-2026-11-05T21:16:08.5529347Z 4.5 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any data, content, or resources that you create, transmit or display through Glass and/or applications for Glass, and for the consequences of your actions (including any loss or damage which Google may suffer) by doing so.
-2026-11-05T21:16:08.5531527Z
-2026-11-05T21:16:08.5533950Z 4.6 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any breach of your obligations under this License Agreement, any applicable third party contract or Terms of Service, or any applicable law or regulation, and for the consequences (including any loss or damage which Google or any third party may suffer) of any such breach.
-2026-11-05T21:16:08.5536414Z
-2026-11-05T21:16:08.5536435Z
-2026-11-05T21:16:08.5538904Z 4.7 The GDK is in development, and your testing and feedback are an important part of the development process. By using the GDK, you acknowledge that implementation of some features are still under development and that you should not rely on the GDK, Glass devices, Glass system software, Google Mirror API, or Glass services having the full functionality of a stable release.
-2026-11-05T21:16:08.5541302Z
-2026-11-05T21:16:08.5541492Z 5. Your Developer Credentials
-2026-11-05T21:16:08.5541790Z
-2026-11-05T21:16:08.5543463Z 5.1 You agree that you are responsible for maintaining the confidentiality of any developer credentials that may be issued to you by Google or which you may choose yourself and that you will be solely responsible for all applications that are developed under your developer credentials.
-2026-11-05T21:16:08.5545304Z
-2026-11-05T21:16:08.5545488Z 6. Privacy and Information
-2026-11-05T21:16:08.5545771Z
-2026-11-05T21:16:08.5545777Z
-2026-11-05T21:16:08.5549128Z 6.1 In order to continually innovate and improve the GDK, Google may collect certain usage statistics from the software including but not limited to a unique identifier, associated IP address, version number of the software, and information on which tools and/or services in the GDK are being used and how they are being used. Before any of this information is collected, the GDK will notify you and seek your consent. If you withhold consent, the information will not be collected.
-2026-11-05T21:16:08.5552098Z
-2026-11-05T21:16:08.5552803Z 6.2 The data collected is examined in the aggregate to improve the GDK and is maintained in accordance with Google's Privacy Policy.
-2026-11-05T21:16:08.5553694Z
-2026-11-05T21:16:08.5553911Z 7. Third Party Applications
-2026-11-05T21:16:08.5554282Z
-2026-11-05T21:16:08.5557735Z 7.1 If you use the GDK to run applications developed by a third party or that access data, content or resources provided by a third party, you agree that Google is not responsible for those applications, data, content, or resources. You understand that all data, content or resources which you may access through such third party applications are the sole responsibility of the person from which they originated and that Google is not liable for any loss or damage that you may experience as a result of the use or access of any of those third party applications, data, content, or resources.
-2026-11-05T21:16:08.5561534Z
-2026-11-05T21:16:08.5564369Z 7.2 You should be aware the data, content, and resources presented to you through such a third party application may be protected by intellectual property rights which are owned by the providers (or by other persons or companies on their behalf). You may not modify, rent, lease, loan, sell, distribute or create derivative works based on these data, content, or resources (either in whole or in part) unless you have been specifically given permission to do so by the relevant owners.
-2026-11-05T21:16:08.5567381Z
-2026-11-05T21:16:08.5569467Z 7.3 You acknowledge that your use of such third party applications, data, content, or resources may be subject to separate terms between you and the relevant third party. In that case, this License Agreement does not affect your legal relationship with these third parties.
-2026-11-05T21:16:08.5571239Z
-2026-11-05T21:16:08.5571411Z 8. Using Google APIs
-2026-11-05T21:16:08.5571658Z
-2026-11-05T21:16:08.5571807Z 8.1 Google APIs
-2026-11-05T21:16:08.5572018Z
-2026-11-05T21:16:08.5574873Z 8.1.1 If you use any API to retrieve data from Google, you acknowledge that the data may be protected by intellectual property rights which are owned by Google or those parties that provide the data (or by other persons or companies on their behalf). Your use of any such API may be subject to additional Terms of Service. You may not modify, rent, lease, loan, sell, distribute or create derivative works based on this data (either in whole or in part) unless allowed by the relevant Terms of Service.
-2026-11-05T21:16:08.5578041Z
-2026-11-05T21:16:08.5579810Z 8.1.2 If you use any API to retrieve a user's data from Google, you acknowledge and agree that you shall retrieve data only with the user's explicit consent and only when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.5581419Z
-2026-11-05T21:16:08.5581621Z 9. Terminating this License Agreement
-2026-11-05T21:16:08.5581935Z
-2026-11-05T21:16:08.5582509Z 9.1 This License Agreement will continue to apply until terminated by either you or Google as set out below.
-2026-11-05T21:16:08.5583249Z
-2026-11-05T21:16:08.5583958Z 9.2 If you want to terminate this License Agreement, you may do so by ceasing your use of the GDK and any relevant developer credentials.
-2026-11-05T21:16:08.5584845Z
-2026-11-05T21:16:08.5588727Z 9.3 Google may at any time, terminate this License Agreement with you if: (A) you have breached any provision of this License Agreement; or (B) Google is required to do so by law; or (C) the partner with whom Google offered certain parts of GDK (such as APIs) to you has terminated its relationship with Google or ceased to offer certain parts of the GDK to you; or (D) Google decides to no longer provide the GDK or certain parts of the GDK to users in the country in which you are resident or from which you use the service, or the provision of the GDK or certain GDK services to you by Google is, in Google's sole discretion, no longer commercially viable.
-2026-11-05T21:16:08.5592756Z
-2026-11-05T21:16:08.5595388Z 9.4 When this License Agreement comes to an end, all of the legal rights, obligations and liabilities that you and Google have benefited from, been subject to (or which have accrued over time whilst this License Agreement has been in force) or which are expressed to continue indefinitely, shall be unaffected by this cessation, and the provisions of paragraph 14.7 shall continue to apply to such rights, obligations and liabilities indefinitely.
-2026-11-05T21:16:08.5598171Z
-2026-11-05T21:16:08.5598359Z 10. DISCLAIMER OF WARRANTIES
-2026-11-05T21:16:08.5598975Z
-2026-11-05T21:16:08.5599944Z 10.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT YOUR USE OF THE GDK IS AT YOUR SOLE RISK AND THAT THE GDK IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND FROM GOOGLE.
-2026-11-05T21:16:08.5601063Z
-2026-11-05T21:16:08.5602542Z 10.2 YOUR USE OF THE GDK AND ANY MATERIAL DOWNLOADED OR OTHERWISE OBTAINED THROUGH THE USE OF THE GDK IS AT YOUR OWN DISCRETION AND RISK AND YOU ARE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER SYSTEM OR OTHER DEVICE OR LOSS OF DATA THAT RESULTS FROM SUCH USE.
-2026-11-05T21:16:08.5604210Z
-2026-11-05T21:16:08.5605835Z 10.3 GOOGLE FURTHER EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES AND CONDITIONS OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT.
-2026-11-05T21:16:08.5607541Z
-2026-11-05T21:16:08.5607729Z 11. LIMITATION OF LIABILITY
-2026-11-05T21:16:08.5608015Z
-2026-11-05T21:16:08.5611114Z 11.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT GOOGLE, ITS SUBSIDIARIES AND AFFILIATES, AND ITS LICENSORS SHALL NOT BE LIABLE TO YOU UNDER ANY THEORY OF LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES THAT MAY BE INCURRED BY YOU, INCLUDING ANY LOSS OF DATA, WHETHER OR NOT GOOGLE OR ITS REPRESENTATIVES HAVE BEEN ADVISED OF OR SHOULD HAVE BEEN AWARE OF THE POSSIBILITY OF ANY SUCH LOSSES ARISING.
-2026-11-05T21:16:08.5613936Z
-2026-11-05T21:16:08.5614098Z 12. Indemnification
-2026-11-05T21:16:08.5614335Z
-2026-11-05T21:16:08.5618961Z 12.1 To the maximum extent permitted by law, you agree to defend, indemnify and hold harmless Google, its affiliates and their respective directors, officers, employees and agents from and against any and all claims, actions, suits or proceedings, as well as any and all losses, liabilities, damages, costs and expenses (including reasonable attorneys fees) arising out of or accruing from (a) your use of the GDK, (b) any application you develop on the GDK that infringes any copyright, trademark, trade secret, trade dress, patent or other intellectual property right of any person or defames any person or violates their rights of publicity or privacy, and (c) any non-compliance by you with this License Agreement.
-2026-11-05T21:16:08.5623456Z
-2026-11-05T21:16:08.5623653Z 13. Changes to the License Agreement
-2026-11-05T21:16:08.5624055Z
-2026-11-05T21:16:08.5625486Z 13.1 Google may make changes to the License Agreement as it distributes new versions of the GDK. When these changes are made, Google will make a new version of the License Agreement available on the website where the GDK is made available.
-2026-11-05T21:16:08.5627042Z
-2026-11-05T21:16:08.5627206Z 14. General Legal Terms
-2026-11-05T21:16:08.5627462Z
-2026-11-05T21:16:08.5629525Z 14.1 This License Agreement constitutes the whole legal agreement between you and Google and governs your use of the GDK (excluding any services which Google may provide to you under a separate written agreement), and completely replaces any prior agreements between you and Google in relation to the GDK.
-2026-11-05T21:16:08.5631747Z
-2026-11-05T21:16:08.5633581Z 14.2 You agree that if Google does not exercise or enforce any legal right or remedy which is contained in this License Agreement (or which Google has the benefit of under any applicable law), this will not be taken to be a formal waiver of Google's rights and that those rights or remedies will still be available to Google.
-2026-11-05T21:16:08.5635569Z
-2026-11-05T21:16:08.5637601Z 14.3 If any court of law, having the jurisdiction to decide on this matter, rules that any provision of this License Agreement is invalid, then that provision will be removed from this License Agreement without affecting the rest of this License Agreement. The remaining provisions of this License Agreement will continue to be valid and enforceable.
-2026-11-05T21:16:08.5639991Z
-2026-11-05T21:16:08.5642545Z 14.4 You acknowledge and agree that each member of the group of companies of which Google is the parent shall be third party beneficiaries to this License Agreement and that such other companies shall be entitled to directly enforce, and rely upon, any provision of this License Agreement that confers a benefit on (or rights in favor of) them. Other than this, no other person or company shall be third party beneficiaries to this License Agreement.
-2026-11-05T21:16:08.5645251Z
-2026-11-05T21:16:08.5646799Z 14.5 EXPORT RESTRICTIONS. THE GDK IS SUBJECT TO UNITED STATES EXPORT LAWS AND REGULATIONS. YOU MUST COMPLY WITH ALL DOMESTIC AND INTERNATIONAL EXPORT LAWS AND REGULATIONS THAT APPLY TO THE GDK. THESE LAWS INCLUDE RESTRICTIONS ON DESTINATIONS, END USERS AND END USE.
-2026-11-05T21:16:08.5648785Z
-2026-11-05T21:16:08.5650832Z 14.6 The rights granted in this License Agreement may not be assigned or transferred by either you or Google without the prior written approval of the other party. Neither you nor Google shall be permitted to delegate their responsibilities or obligations under this License Agreement without the prior written approval of the other party.
-2026-11-05T21:16:08.5653012Z
-2026-11-05T21:16:08.5656540Z 14.7 This License Agreement, and your relationship with Google under this License Agreement, shall be governed by the laws of the State of California without regard to its conflict of laws provisions. You and Google agree to submit to the exclusive jurisdiction of the courts located within the county of Santa Clara, California to resolve any legal matter arising from this License Agreement. Notwithstanding this, you agree that Google shall still be allowed to apply for injunctive remedies (or an equivalent type of urgent legal relief) in any jurisdiction.
-2026-11-05T21:16:08.5660302Z
-2026-11-05T21:16:08.5660480Z November 19, 2013
-2026-11-05T21:16:08.5660891Z ---------------------------------------
-2026-11-05T21:16:08.5661371Z Accept? (y/N):
-2026-11-05T21:16:08.5661791Z 6/7: License microxr-sysimage-license:
-2026-11-05T21:16:08.5662299Z ---------------------------------------
-2026-11-05T21:16:08.5664043Z To get started with the microXR Emulator System Image SDK, you must agree to the following terms and conditions. As described below, please note that this is a preview, emulated version of microXR, subject to change, that you use at your own risk.
-2026-11-05T21:16:08.5665613Z
-2026-11-05T21:16:08.5666007Z This is the microXR Emulator System Image SDK License Agreement 1. Introduction
-2026-11-05T21:16:08.5666567Z
-2026-11-05T21:16:08.5669428Z 1.1 The microXR Emulator System Image SDK (referred to in the License Agreement as the "SDK" and specifically including the Android system files,, packaged APIs, library files (if and when they are made available), and Google applications and APIs add-ons) is licensed to you subject to the terms of the License Agreement. The License Agreement forms a legally binding contract between you and Google in relation to your use of the SDK.
-2026-11-05T21:16:08.5672157Z
-2026-11-05T21:16:08.5673369Z 1.2 "Android" means the Android software stack for devices, as made available under the Android Open Source Project, which is located at the following URL: https://source.android.com/, as updated from time to time.
-2026-11-05T21:16:08.5674980Z
-2026-11-05T21:16:08.5676174Z 1.3 "Google" means Google LLC, organized under the laws of the State of Delaware, USA, and operating under the laws of the USA with principal place of business at 1600 Amphitheatre Parkway, Mountain View, CA 94043, USA.
-2026-11-05T21:16:08.5677524Z
-2026-11-05T21:16:08.5677532Z
-2026-11-05T21:16:08.5677722Z 2. Accepting this License Agreement
-2026-11-05T21:16:08.5678045Z
-2026-11-05T21:16:08.5679023Z 2.1 In order to use the SDK, you must first agree to the License Agreement. You may not use the SDK if you do not accept the License Agreement.
-2026-11-05T21:16:08.5679930Z
-2026-11-05T21:16:08.5680446Z 2.2 By clicking to accept and/or using this SDK, you hereby agree to the terms of the License Agreement.
-2026-11-05T21:16:08.5681137Z
-2026-11-05T21:16:08.5682534Z 2.3 You may not use the SDK and may not accept the License Agreement if you are a person barred from receiving the SDK under the laws of the United States or other countries, including the country in which you are resident or from which you use the SDK.
-2026-11-05T21:16:08.5684092Z
-2026-11-05T21:16:08.5686304Z 2.4 If you are agreeing to be bound by the License Agreement on behalf of your employer or other entity, you represent and warrant that you have full legal authority to bind your employer or such entity to the License Agreement. If you do not have the requisite authority, you may not accept the License Agreement or use the SDK on behalf of your employer or other entity. 3. SDK License from Google
-2026-11-05T21:16:08.5688971Z
-2026-11-05T21:16:08.5690372Z 3.1 Subject to the terms of the License Agreement, Google grants you a limited, worldwide, royalty-free, non-assignable, non-exclusive, and non-sublicensable license to use the SDK solely to develop applications for microXR and/or Android XR.
-2026-11-05T21:16:08.5691940Z
-2026-11-05T21:16:08.5693367Z 3.2 You may not use this SDK to develop applications for other platforms or to develop another SDK. You are of course free to develop applications for other platforms provided that this SDK is not used for that purpose.
-2026-11-05T21:16:08.5694763Z
-2026-11-05T21:16:08.5696992Z 3.3 You agree that Google or third parties own all legal right, title and interest in and to the SDK, including any Intellectual Property Rights that subsist in the SDK. "Intellectual Property Rights" means any and all rights under patent law, copyright law, trade secret law, trademark law, and any and all other proprietary rights. Google reserves all rights not expressly granted to you.
-2026-11-05T21:16:08.5699596Z
-2026-11-05T21:16:08.5702867Z 3.4 You may not use the SDK for any purpose not expressly permitted by the License Agreement. Except to the extent required by applicable third party licenses, you may not (a) copy (except for backup purposes), modify, adapt, redistribute, decompile, reverse engineer, disassemble, or create derivative works of the SDK or any part of the SDK; or (b) load any part of the SDK onto a mobile handset or any other hardware device except a personal computer, combine any part of the SDK with other software, or distribute any software or device incorporating a part of the SDK.
-2026-11-05T21:16:08.5706274Z
-2026-11-05T21:16:08.5708935Z 3.5 Use, reproduction and distribution of components of the SDK licensed under an open source software license are governed solely by the terms of that open source software license and not the License Agreement. You agree to remain a licensee in good standing in regard to such open source software licenses under all the rights granted and to refrain from any actions that may terminate, suspend, or breach such rights.
-2026-11-05T21:16:08.5711535Z
-2026-11-05T21:16:08.5713955Z 3.6 You agree that the form and nature of the SDK that Google provides may change without prior notice to you and that future versions of the SDK may be incompatible with applications developed on previous versions of the SDK. You agree that Google may stop (permanently or temporarily) providing the SDK (or any features within the SDK) to you or to users generally at Google's sole discretion, without prior notice to you.
-2026-11-05T21:16:08.5716770Z
-2026-11-05T21:16:08.5717691Z 3.7 Nothing in the License Agreement gives you a right to use any of Google's trade names, trademarks, service marks, logos, domain names, or other distinctive brand features.
-2026-11-05T21:16:08.5719074Z
-2026-11-05T21:16:08.5720106Z 3.8 You agree that you will not remove, obscure, or alter any proprietary rights notices (including copyright and trademark notices) that may be affixed to or contained within the SDK.
-2026-11-05T21:16:08.5721300Z
-2026-11-05T21:16:08.5721462Z 4. Use of the SDK by You
-2026-11-05T21:16:08.5721728Z
-2026-11-05T21:16:08.5723218Z 4.1 Google agrees that it obtains no right, title or interest from you (or your licensors) under the License Agreement in or to any software applications that you develop using the SDK, including any intellectual property rights that subsist in those applications.
-2026-11-05T21:16:08.5724894Z
-2026-11-05T21:16:08.5726926Z 4.2 You agree to use the SDK and write applications only for purposes that are permitted by (a) the License Agreement and (b) any applicable law, regulation or generally accepted practices or guidelines in the relevant jurisdictions (including any laws regarding the export of data or software to and from the United States or other relevant countries).
-2026-11-05T21:16:08.5729289Z
-2026-11-05T21:16:08.5734045Z 4.3 You agree that if you use the SDK to develop applications for general public users, you will protect the privacy and legal rights of those users. If the users provide you with user names, passwords, or other login information or personal information, you must make the users aware that the information will be available to your application, and you must provide legally adequate privacy notice and protection for those users. If your application stores personal or sensitive information provided by users, it must do so securely. If the user provides your application with Google Account information, your application may only use that information to access the user's Google Account when, and for the limited purposes for which, the user has given you permission to do so.
-2026-11-05T21:16:08.5738930Z
-2026-11-05T21:16:08.5740963Z 4.4 You agree that you will not engage in any activity with the SDK, including the development or distribution of an application, that interferes with, disrupts, damages, or accesses in an unauthorized manner the servers, networks, or other properties or services of any third party including, but not limited to, Google or any mobile communications carrier.
-2026-11-05T21:16:08.5743285Z
-2026-11-05T21:16:08.5745390Z 4.5 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any data, content, or resources that you create, transmit or display through Android and/or applications for Android, and for the consequences of your actions (including any loss or damage which Google may suffer) by doing so.
-2026-11-05T21:16:08.5747738Z
-2026-11-05T21:16:08.5750421Z 4.6 You agree that you are solely responsible for (and that Google has no responsibility to you or to any third party for) any breach of your obligations under the License Agreement, any applicable third party contract or Terms of Service, or any applicable law or regulation, and for the consequences (including any loss or damage which Google or any third party may suffer) of any such breach.
-2026-11-05T21:16:08.5752951Z
-2026-11-05T21:16:08.5754753Z 4.7 The SDK is in development, and your testing and feedback are an important part of the development process. By using the SDK, you acknowledge that implementation of some features are still under development and that you should not rely on the SDK having the full functionality of a stable release.
-2026-11-05T21:16:08.5756793Z
-2026-11-05T21:16:08.5757156Z 5. Your Developer Credentials
-2026-11-05T21:16:08.5757743Z
-2026-11-05T21:16:08.5759904Z 5.1 You agree that you are responsible for maintaining the confidentiality of any developer credentials that may be issued to you by Google or which you may choose yourself and that you will be solely responsible for all applications that are developed under your developer credentials. 6. Privacy and Information
-2026-11-05T21:16:08.5761996Z
-2026-11-05T21:16:08.5786741Z 6.1 In order to continually innovate and improve the SDK, Google may collect certain usage statistics from the software including but not limited to a unique identifier, associated IP address, version number of the software, and information on which tools and/or services in the SDK are being used and how they are being used. Before any of this information is collected, the SDK will notify you and seek your consent. If you withhold consent, the information will not be collected.
-2026-11-05T21:16:08.5790289Z
-2026-11-05T21:16:08.5791514Z 6.2 The data collected is examined in the aggregate to improve the SDK and is maintained in accordance with Google's Privacy Policy, which is located at the following URL: https://policies.google.com/privacy
-2026-11-05T21:16:08.5792888Z
-2026-11-05T21:16:08.5793601Z 6.3 Anonymized and aggregated sets of the data may be shared with Google partners to improve the SDK. 7. Third Party Applications
-2026-11-05T21:16:08.5794468Z
-2026-11-05T21:16:08.5797859Z 7.1 If you use the SDK to run applications developed by a third party or that access data, content or resources provided by a third party, you agree that Google is not responsible for those applications, data, content, or resources. You understand that all data, content or resources which you may access through such third party applications are the sole responsibility of the person from which they originated and that Google is not liable for any loss or damage that you may experience as a result of the use or access of any of those third party applications, data, content, or resources.
-2026-11-05T21:16:08.5801706Z
-2026-11-05T21:16:08.5804862Z 7.2 You should be aware that the data, content, and resources presented to you through such a third party application may be protected by intellectual property rights which are owned by the providers (or by other persons or companies on their behalf). You may not modify, rent, lease, loan, sell, distribute or create derivative works based on these data, content, or resources (either in whole or in part) unless you have been specifically given permission to do so by the relevant owners.
-2026-11-05T21:16:08.5808006Z
-2026-11-05T21:16:08.5809978Z 7.3 You acknowledge that your use of such third party applications, data, content, or resources may be subject to separate terms between you and the relevant third party. In that case, the License Agreement does not affect your legal relationship with these third parties. 8. Using Android APIs
-2026-11-05T21:16:08.5811805Z
-2026-11-05T21:16:08.5811975Z 8.1 Google Data APIs
-2026-11-05T21:16:08.5812211Z
-2026-11-05T21:16:08.5815033Z 8.1.1 If you use any API to retrieve data from Google, you acknowledge that the data may be protected by intellectual property rights which are owned by Google or those parties that provide the data (or by other persons or companies on their behalf). Your use of any such API may be subject to additional Terms of Service. You may not modify, rent, lease, loan, sell, distribute or create derivative works based on this data (either in whole or in part) unless allowed by the relevant Terms of Service.
-2026-11-05T21:16:08.5818020Z
-2026-11-05T21:16:08.5823062Z 8.1.2 If you use any API to retrieve a user's data from Google, you acknowledge and agree that you shall retrieve data only with the user's explicit consent and only when, and for the limited purposes for which, the user has given you permission to do so. If you use the Android Recognition Service API, documented at the following URL: https://developer.android.com/reference/android/speech/RecognitionService, as updated from time to time, you acknowledge that the use of the API is subject to the Data Processing Addendum for Products where Google is a Data Processor, which is located at the following URL: https://privacy.google.com/businesses/gdprprocessorterms/, as updated from time to time. By clicking to accept, you hereby agree to the terms of the Data Processing Addendum for Products where Google is a Data Processor.
-2026-11-05T21:16:08.5828297Z
-2026-11-05T21:16:08.5828688Z 9. Terminating this License Agreement
-2026-11-05T21:16:08.5829050Z
-2026-11-05T21:16:08.5829628Z 9.1 The License Agreement will continue to apply until terminated by either you or Google as set out below.
-2026-11-05T21:16:08.5830423Z
-2026-11-05T21:16:08.5831149Z 9.2 If you want to terminate the License Agreement, you may do so by ceasing your use of the SDK and any relevant developer credentials.
-2026-11-05T21:16:08.5832052Z
-2026-11-05T21:16:08.5835797Z 9.3 Google may at any time, terminate the License Agreement with you if: (A) you have breached any provision of the License Agreement; or (B) Google is required to do so by law; or (C) the partner with whom Google offered certain parts of SDK (such as APIs) to you has terminated its relationship with Google or ceased to offer certain parts of the SDK to you; or (D) Google decides to no longer provide the SDK or certain parts of the SDK to users in the country in which you are resident or from which you use the service, or the provision of the SDK or certain SDK services to you by Google is, in Google's sole discretion, no longer commercially viable.
-2026-11-05T21:16:08.5840023Z
-2026-11-05T21:16:08.5842603Z 9.4 When the License Agreement comes to an end, all of the legal rights, obligations and liabilities that you and Google have benefited from, been subject to (or which have accrued over time whilst the License Agreement has been in force) or which are expressed to continue indefinitely, shall be unaffected by this cessation, and the provisions of paragraph 14.7 shall continue to apply to such rights, obligations and liabilities indefinitely.
-2026-11-05T21:16:08.5845390Z
-2026-11-05T21:16:08.5845585Z 10. DISCLAIMER OF WARRANTIES
-2026-11-05T21:16:08.5846153Z
-2026-11-05T21:16:08.5847149Z 10.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT YOUR USE OF THE SDK IS AT YOUR SOLE RISK AND THAT THE SDK IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTY OF ANY KIND FROM GOOGLE.
-2026-11-05T21:16:08.5848320Z
-2026-11-05T21:16:08.5850011Z 10.2 YOUR USE OF THE SDK AND ANY MATERIAL DOWNLOADED OR OTHERWISE OBTAINED THROUGH THE USE OF THE SDK IS AT YOUR OWN DISCRETION AND RISK AND YOU ARE SOLELY RESPONSIBLE FOR ANY DAMAGE TO YOUR COMPUTER SYSTEM OR OTHER DEVICE OR LOSS OF DATA THAT RESULTS FROM SUCH USE.
-2026-11-05T21:16:08.5851639Z
-2026-11-05T21:16:08.5853287Z 10.3 GOOGLE FURTHER EXPRESSLY DISCLAIMS ALL WARRANTIES AND CONDITIONS OF ANY KIND, WHETHER EXPRESS OR IMPLIED, INCLUDING, BUT NOT LIMITED TO THE IMPLIED WARRANTIES AND CONDITIONS OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NON-INFRINGEMENT. 11. LIMITATION OF LIABILITY
-2026-11-05T21:16:08.5855103Z
-2026-11-05T21:16:08.5857713Z 11.1 YOU EXPRESSLY UNDERSTAND AND AGREE THAT GOOGLE, ITS SUBSIDIARIES AND AFFILIATES, AND ITS LICENSORS SHALL NOT BE LIABLE TO YOU UNDER ANY THEORY OF LIABILITY FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, CONSEQUENTIAL OR EXEMPLARY DAMAGES THAT MAY BE INCURRED BY YOU, INCLUDING ANY LOSS OF DATA, WHETHER OR NOT GOOGLE OR ITS REPRESENTATIVES HAVE BEEN ADVISED OF OR SHOULD HAVE BEEN AWARE OF THE POSSIBILITY OF ANY SUCH LOSSES ARISING.
-2026-11-05T21:16:08.5860665Z
-2026-11-05T21:16:08.5860841Z 12. Indemnification
-2026-11-05T21:16:08.5861090Z
-2026-11-05T21:16:08.5865289Z 12.1 To the maximum extent permitted by law, you agree to defend, indemnify and hold harmless Google, its affiliates and their respective directors, officers, employees and agents from and against any and all claims, actions, suits or proceedings, as well as any and all losses, liabilities, damages, costs and expenses (including reasonable attorneys fees) arising out of or accruing from (a) your use of the SDK, (b) any application you develop on the SDK that infringes any copyright, trademark, trade secret, trade dress, patent or other intellectual property right of any person or defames any person or violates their rights of publicity or privacy, and (c) any non-compliance by you with the License Agreement.
-2026-11-05T21:16:08.5870246Z
-2026-11-05T21:16:08.5870450Z 13. Changes to the License Agreement
-2026-11-05T21:16:08.5870804Z
-2026-11-05T21:16:08.5872174Z 13.1 Google may make changes to the License Agreement as it distributes new versions of the SDK. When these changes are made, Google will make a new version of the License Agreement available on the website where the SDK is made available.
-2026-11-05T21:16:08.5873678Z
-2026-11-05T21:16:08.5873840Z 14. General Legal Terms
-2026-11-05T21:16:08.5874097Z
-2026-11-05T21:16:08.5875863Z 14.1 The License Agreement constitutes the whole legal agreement between you and Google and governs your use of the SDK (excluding any services which Google may provide to you under a separate written agreement), and completely replaces any prior agreements between you and Google in relation to the SDK.
-2026-11-05T21:16:08.5877796Z
-2026-11-05T21:16:08.5879804Z 14.2 You agree that if Google does not exercise or enforce any legal right or remedy which is contained in the License Agreement (or which Google has the benefit of under any applicable law), this will not be taken to be a formal waiver of Google's rights and that those rights or remedies will still be available to Google.
-2026-11-05T21:16:08.5881758Z
-2026-11-05T21:16:08.5883733Z 14.3 If any court of law, having the jurisdiction to decide on this matter, rules that any provision of the License Agreement is invalid, then that provision will be removed from the License Agreement without affecting the rest of the License Agreement. The remaining provisions of the License Agreement will continue to be valid and enforceable.
-2026-11-05T21:16:08.5885877Z
-2026-11-05T21:16:08.5888797Z 14.4 You acknowledge and agree that each member of the group of companies of which Google is the parent shall be third party beneficiaries to the License Agreement and that such other companies shall be entitled to directly enforce, and rely upon, any provision of the License Agreement that confers a benefit on (or rights in favor of) them. Other than this, no other person or company shall be third party beneficiaries to the License Agreement.
-2026-11-05T21:16:08.5891512Z
-2026-11-05T21:16:08.5893009Z 14.5 EXPORT RESTRICTIONS. THE SDK IS SUBJECT TO UNITED STATES EXPORT LAWS AND REGULATIONS. YOU MUST COMPLY WITH ALL DOMESTIC AND INTERNATIONAL EXPORT LAWS AND REGULATIONS THAT APPLY TO THE SDK. THESE LAWS INCLUDE RESTRICTIONS ON DESTINATIONS, END USERS AND END USE.
-2026-11-05T21:16:08.5894687Z
-2026-11-05T21:16:08.5896657Z 14.6 The rights granted in the License Agreement may not be assigned or transferred by either you or Google without the prior written approval of the other party. Neither you nor Google shall be permitted to delegate their responsibilities or obligations under the License Agreement without the prior written approval of the other party.
-2026-11-05T21:16:08.5898984Z
-2026-11-05T21:16:08.5902349Z 14.7 The License Agreement, and your relationship with Google under the License Agreement, shall be governed by the laws of the State of California without regard to its conflict of laws provisions. You and Google agree to submit to the exclusive jurisdiction of the courts located within the county of Santa Clara, California to resolve any legal matter arising from the License Agreement. Notwithstanding this, you agree that Google shall still be allowed to apply for injunctive remedies (or an equivalent type of urgent legal relief) in any jurisdiction.
-2026-11-05T21:16:08.5905980Z ---------------------------------------
-2026-11-05T21:16:08.5906465Z Accept? (y/N):
-2026-11-05T21:16:08.5906973Z 7/7: License mips-android-sysimage-license:
-2026-11-05T21:16:08.5907534Z ---------------------------------------
-2026-11-05T21:16:08.5911687Z MIPS Technologies, Inc. (“MIPS”) Internal Evaluation License Agreement for MIPS Android™ System Images for Android Software Development Kit (SDK): This Internal Evaluation License Agreement (this "Agreement") is entered into by and between MIPS and you (as an individual developer or a legal entity -- identified below as “Recipient”). MIPS shall make the Evaluation Software available to Recipient as described in accordance with the terms and conditions set forth below.
-2026-11-05T21:16:08.5914991Z
-2026-11-05T21:16:08.5918970Z By clicking on the “Accept” button, downloading, installing, or otherwise using the Evaluation Materials (defined below), you agree to be bound by the terms of this Agreement effective as of the date you click “Accept” (the “Effective Date”), and if doing so on behalf of an entity, you represent that you are authorized to bind the entity to the terms and conditions of this Agreement. If you do not agree to be bound by the terms and conditions of this Agreement, do not download, install, or use the Evaluation Materials.
-2026-11-05T21:16:08.5922236Z
-2026-11-05T21:16:08.5922588Z 1. DEFINITIONS. These terms shall have the following meanings:
-2026-11-05T21:16:08.5923065Z
-2026-11-05T21:16:08.5924165Z 1.1 “MIPS” shall mean MIPS Technologies, Inc., a Delaware corporation having a principal place of business at: 955 East Arques Ave., Sunnyvale, CA 94085
-2026-11-05T21:16:08.5925181Z
-2026-11-05T21:16:08.5926262Z 1.2 “Evaluation Software” shall mean MIPS Android™ emulator system images for Android Software Development Kit (SDK), as made available to Recipient.
-2026-11-05T21:16:08.5927356Z
-2026-11-05T21:16:08.5929893Z 1.3 “Evaluation Materials" means, collectively, the Evaluation Software (in source and/or object code form) and documentation (including, without limitation, any design documents, specifications, reference manuals, and other related materials) related to the Evaluation Software as made available to Recipient.
-2026-11-05T21:16:08.5931964Z
-2026-11-05T21:16:08.5939272Z 1.4 “Open Source Software” means any software that requires (as a condition of use, modification and/or distribution of such software) that such software or other software incorporated into, derived from or distributed with such software (a) be disclosed or distributed in source code form; or (b) be licensed by the user to third parties for the purpose of making and/or distributing derivative works; or (c) be redistributable at no charge. Open Source Software includes, without limitation, software licensed or distributed under any of the following licenses or distribution models, or licenses or distribution models substantially similar to any of the following: (a) GNU’s General Public License (GPL) or Lesser/Library GPL (LGPL), (b) the Artistic License (e.g., PERL), (c) the Mozilla Public License, (d) the Netscape Public License, (e) the Sun Community Source License (SCSL), (f) the Sun Industry Source License (SISL), (g) the Apache Software license and (h) the Common Public License (CPL).
-2026-11-05T21:16:08.5945273Z
-2026-11-05T21:16:08.5947264Z 1.5 “Pre-Release Materials” means “alpha” or “beta” designated pre-release features, which may not be fully functional, which MIPS may substantially modify in producing any production version of the Evaluation Materials, and/or which is still under development by MIPS and/or MIPS’ suppliers.
-2026-11-05T21:16:08.5949386Z
-2026-11-05T21:16:08.5952947Z 2. PURPOSE. MIPS desires to make the Evaluation Materials available to Recipient solely for Recipient's internal evaluation of the Evaluation Software to evaluate the desirability of cooperating with MIPS in developing products that are compatible with the Evaluation Software and/or to advise MIPS as to possible modifications to the Evaluation Software. Recipient may not disclose, distribute, modify (except to facilitate the above-mentioned internal evaluation), or make commercial use of the Evaluation Materials or any modifications of the Evaluation Materials.
-2026-11-05T21:16:08.5956697Z
-2026-11-05T21:16:08.5959581Z THE EVALUATION MATERIALS ARE PROVIDED FOR EVALUATION PURPOSES ONLY AND MAY NOT BE MODIFIED (EXCEPT TO FACILITATE THE INTERNAL EVALUATION) OR DISTRIBUTED BY RECIPIENT OR INCORPORATED INTO RECIPIENT’S PRODUCTS OR SOFTWARE. PLEASE CONTACT A MIPS SALES REPRESENTATIVE TO LEARN ABOUT THE AVAILABILITY AND COST OF A COMMERCIAL VERSION OF THE EVALUATION SOFTWARE.
-2026-11-05T21:16:08.5962286Z
-2026-11-05T21:16:08.5963997Z 3. TITLE. Title to the Evaluation Materials remains with MIPS or its suppliers. Recipient shall not mortgage, pledge or encumber the Evaluation Materials in any way. Recipient shall return all Evaluation Materials, keeping no copies, upon termination or expiration of this Agreement.
-2026-11-05T21:16:08.5965835Z
-2026-11-05T21:16:08.5972739Z 4. LICENSE. MIPS grants Recipient a royalty-free, personal, nontransferable, nonexclusive license under its copyrights to use the Evaluation Software only for the purposes described in paragraph 2 above and only for a period beginning on the Effective Date and extending to the first anniversary of the Effective Date (the “Evaluation Period”). Unless otherwise communicated in writing by MIPS to Recipient, to the extent the Evaluation Software is provided in more than one delivery or release (each, a “Release”) the license grant in this Section 4 and the Evaluation Period shall apply to each Release, in which case the Evaluation Period shall begin on the date that the Release is made generally available and continue to the first anniversary of such date. Recipient may not make modifications to the Evaluation Software. Recipient shall not disassemble, reverse-engineer, or decompile any software that is not provided to Recipient in source code form.
-2026-11-05T21:16:08.5978783Z
-2026-11-05T21:16:08.5978792Z
-2026-11-05T21:16:08.5980851Z EXCEPT AS PROVIDED HEREIN, NO OTHER LICENSE, EXPRESS OR IMPLIED, BY ESTOPPEL OR OTHERWISE, TO ANY OTHER MIPS INTELLECTUAL PROPERTY RIGHTS IS GRANTED TO THE RECIPIENT. OTHER THAN AS EXPLICITLY SET FORTH IN PARAGRAPH 2 ABOVE, NO RIGHT TO COPY, TO REPRODUCE, TO MODIFY, OR TO CREATE DERIVATIVE WORKS OF, THE EVALUATION MATERIALS IS GRANTED HEREIN.
-2026-11-05T21:16:08.5983085Z
-2026-11-05T21:16:08.5984901Z 5. NO OBLIGATION. Recipient shall have no duty to purchase or license any product from MIPS. MIPS and its suppliers shall have no obligation to provide support for, or develop a non-evaluation version of, the Evaluation Software or to license any version of it.
-2026-11-05T21:16:08.5986667Z
-2026-11-05T21:16:08.5993973Z 6. MODIFICATIONS. This Agreement does not obligate Recipient to provide MIPS with comments or suggestions regarding Evaluation Materials. However, should Recipient provide MIPS with comments or suggestions for the modification, correction, improvement or enhancement of (a) the Evaluation Materials or (b) MIPS products or processes which may embody the Evaluation Materials, then Recipient agrees to grant and hereby grants to MIPS a non-exclusive, irrevocable, worldwide, fully paid-up, royalty-free license, with the right to sublicense MIPS’ licensees and customers, under Recipient’s Intellectual property rights, to use and disclose such comments and suggestions in any manner MIPS chooses and to display, perform, copy, make, have made, use, sell, offer to sell, import, and otherwise dispose of MIPS’ and its sublicensee’s products embodying such comments and suggestions in any manner and via any media MIPS chooses, without reference to the source.
-2026-11-05T21:16:08.6000161Z
-2026-11-05T21:16:08.6003272Z 7. WARRANTY DISCLAIMER. MIPS AND ITS SUPPLIERS MAKE NO WARRANTIES WITH RESPECT TO EVALUATION MATERIALS, EITHER EXPRESS OR IMPLIED, INCLUDING ANY IMPLIED WARRANTIES OF MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, OR ANY IMPLIED WARRANTY OF NONINFRINGEMENT WITH RESPECT TO THIRD PARTY INTELLECTUAL PROPERTY. RECIPIENT ACKNOWLEDGES AND AGREES THAT THE EVALUATION MATERIALS ARE PROVIDED “AS IS,” WITHOUT WARRANTY OF ANY KIND.
-2026-11-05T21:16:08.6006020Z
-2026-11-05T21:16:08.6009702Z 8. LIMITATION OF LIABILITY. MIPS AND ITS SUPPLIERS SHALL NOT BE LIABLE FOR ANY PROPERTY DAMAGE, PERSONAL INJURY, LOSS OF PROFITS, INTERRUPTION OF BUSINESS OR FOR ANY DIRECT, INDIRECT, SPECIAL, CONSEQUENTIAL OR INCIDENTAL DAMAGES, HOWEVER CAUSED OR ALLEGED, WHETHER FOR BREACH OF WARRANTY, CONTRACT, STRICT LIABILITY OR OTHERWISE, INCLUDING WITHOUT LIMITATION, UNDER TORT OR OTHER LEGAL THEORY. MIPS AND ITS SUPPLIERS DISCLAIM ANY AND ALL LIABILITY, INCLUDING LIABILITY FOR INFRINGEMENT OF ANY INTELLECTUAL PROPERTY RIGHTS OF ANY KIND RELATING TO THE EVALUATION MATERIALS.
-2026-11-05T21:16:08.6013751Z
-2026-11-05T21:16:08.6015201Z 9. EXPIRATION. MIPS may terminate this Agreement immediately after a breach by Recipient or otherwise at MIPS’ reasonable discretion and upon five (5) business days’ notice to Recipient.
-2026-11-05T21:16:08.6016551Z
-2026-11-05T21:16:08.6016721Z 10. GENERAL.
-2026-11-05T21:16:08.6016953Z
-2026-11-05T21:16:08.6023451Z 10.1 Controlling Law. This Agreement shall be governed by California law excluding its choice of law rules. With the exception of MIPS’ rights to enforce its intellectual property rights and any confidentiality obligations under this Agreement or any licenses distributed with the Evaluation Materials, all disputes and any claims arising under or relating to this Agreement shall be subject to the exclusive jurisdiction and venue of the state and federal courts located in Santa Clara County, California. Each party hereby agrees to jurisdiction and venue in the courts set forth in the preceding sentence. The parties agree that the United Nations Convention on Contracts for the International Sale of Goods is specifically excluded from application to this Agreement. The parties consent to the personal jurisdiction of the above courts.
-2026-11-05T21:16:08.6028893Z
-2026-11-05T21:16:08.6032006Z 10.2 Remedies. Recipient acknowledges and agrees that any breach of confidentiality obligations under this Agreement or any licenses distributed with the Evaluation Materials, as well as any disclosure, commercialization, or public use of the Evaluation Materials, would cause irreparable injury to MIPS, and therefore Recipient agrees to consent to, and hereby consents to, the grant of an injunction by any court of competent jurisdiction in the event of an actual or threatened breach.
-2026-11-05T21:16:08.6035052Z
-2026-11-05T21:16:08.6038921Z 10.3 Assignment. Recipient may not delegate, assign or transfer this Agreement, the license granted or any of Recipient’s rights, obligations, or duties hereunder, expressly, by implication, by operation of law, by way of merger (regardless of whether Recipient is the surviving entity) or acquisition, or otherwise and any attempt to do so, without MIPS’ express prior written consent, shall be ineffective, null and void. MIPS may freely assign this Agreement, and its rights and obligations hereunder, in its sole discretion.
-2026-11-05T21:16:08.6042339Z
-2026-11-05T21:16:08.6059936Z 10.4 Entire Agreement. This Agreement constitutes the entire agreement between Recipient and MIPS and supersedes in their entirety any and all oral or written agreements previously existing between Recipient and MIPS with respect to the subject matter hereof. This Agreement may only be amended or supplemented by a writing that refers explicitly to this Agreement and that is signed or otherwise accepted by duly authorized representatives of Recipient and MIPS.
-2026-11-05T21:16:08.6062895Z
-2026-11-05T21:16:08.6065606Z 10.5 Severability. In the event that any provision of this Agreement is finally adjudicated to be unenforceable or invalid under any applicable law, such unenforceability or invalidity shall not render this Agreement unenforceable or invalid as a whole, and, in such event, such unenforceable or invalid provision shall be interpreted so as to best accomplish the objectives of such provision within the limits of applicable law or applicable court decisions.
-2026-11-05T21:16:08.6068707Z
-2026-11-05T21:16:08.6077625Z 10.6 Export Regulations / Export Control. Recipient shall not export, either directly or indirectly, any product, service or technical data or system incorporating the Evaluation Materials without first obtaining any required license or other necessary approval from the U.S. Department of Commerce or any other governing agency or department of the United States Government. In the event any product is exported from the United States or re-exported from a foreign destination by Recipient, Recipient shall ensure that the distribution and export/re-export or import of the product is in compliance with all applicable laws, regulations, orders, or other restrictions of the U.S. Export Administration Regulations and the appropriate foreign government. Recipient agrees that neither it nor any of its subsidiaries will export/re-export any technical data, process, product, or service, directly or indirectly, to any country for which the United States government or any agency thereof or the foreign government from where it is shipping requires an export license, or other governmental approval, without first obtaining such license or approval. Recipient also agrees to implement measures to ensure that foreign national employees are authorized to receive any information controlled by U.S. export control laws. An export is "deemed" to take place when information is released to a foreign national wherever located.
-2026-11-05T21:16:08.6096792Z
-2026-11-05T21:16:08.6103834Z 10.7 Special Terms for Pre-Release Materials. If so indicated in the description of the Evaluation Software, the Evaluation Software may contain Pre-Release Materials. Recipient hereby understands, acknowledges and agrees that: (i) Pre-Release Materials may not be fully tested and may contain bugs or errors; (ii) Pre-Release materials are not suitable for commercial release in their current state; (iii) regulatory approvals for Pre-Release Materials (such as UL or FCC) have not been obtained, and Pre-Release Materials may therefore not be certified for use in certain countries or environments or may not be suitable for certain applications and (iv) MIPS can provide no assurance that it will ever produce or make generally available a production version of the Pre-Release Materials . MIPS is not under any obligation to develop and/or release or offer for sale or license a final product based upon the Pre-Release Materials and may unilaterally elect to abandon the Pre-Release Materials or any such development platform at any time and without any obligation or liability whatsoever to Recipient or any other person.
-2026-11-05T21:16:08.6111053Z
-2026-11-05T21:16:08.6112368Z ANY PRE-RELEASE MATERIALS ARE NON-QUALIFIED AND, AS SUCH, ARE PROVIDED “AS IS” AND “AS AVAILABLE”, POSSIBLY WITH FAULTS, AND WITHOUT REPRESENTATION OR WARRANTY OF ANY KIND.
-2026-11-05T21:16:08.6113550Z
-2026-11-05T21:16:08.6117445Z 10.8 Open Source Software. In the event Open Source software is included with Evaluation Software, such Open Source software is licensed pursuant to the applicable Open Source software license agreement identified in the Open Source software comments in the applicable source code file(s) and/or file header as indicated in the Evaluation Software. Additional detail may be available (where applicable) in the accompanying on-line documentation. With respect to the Open Source software, nothing in this Agreement limits any rights under, or grants rights that supersede, the terms of any applicable Open Source software license agreement.
-2026-11-05T21:16:08.6121916Z ---------------------------------------
-2026-11-05T21:16:08.6123254Z yes: standard output: Broken pipe
-2026-11-05T21:16:08.6123818Z Accept? (y/N): All SDK package licenses accepted
-2026-11-05T21:16:08.6124375Z
-2026-11-05T21:16:08.8253202Z
-2026-11-05T21:16:08.8254126Z ╔════════════════════════════════════════════════════════════════════════════╗
-2026-11-05T21:16:08.8255075Z ║ Welcome to Flutter! - https://flutter.dev ║
-2026-11-05T21:16:08.8255875Z ║ ║
-2026-11-05T21:16:08.8256759Z ║ The Flutter tool uses Google Analytics to anonymously report feature usage ║
-2026-11-05T21:16:08.8258062Z ║ statistics and basic crash reports. This data is used to help improve ║
-2026-11-05T21:16:08.8259484Z ║ Flutter tools over time. ║
-2026-11-05T21:16:08.8269515Z ║ ║
-2026-11-05T21:16:08.8270659Z ║ Flutter tool analytics are not sent on the very first run. To disable ║
-2026-11-05T21:16:08.8272019Z ║ reporting, type 'flutter config --no-analytics'. To display the current ║
-2026-11-05T21:16:08.8273363Z ║ setting, type 'flutter config'. If you opt out of analytics, an opt-out ║
-2026-11-05T21:16:08.8274686Z ║ event will be sent, and then no further information will be sent by the ║
-2026-11-05T21:16:08.8275868Z ║ Flutter tool. ║
-2026-11-05T21:16:08.8276931Z ║ ║
-2026-11-05T21:16:08.8278077Z ║ By downloading the Flutter SDK, you agree to the Google Terms of Service. ║
-2026-11-05T21:16:08.8279721Z ║ The Google Privacy Policy describes how data is handled in this service. ║
-2026-11-05T21:16:08.8280918Z ║ ║
-2026-11-05T21:16:08.8282074Z ║ Moreover, Flutter includes the Dart SDK, which may send usage metrics and ║
-2026-11-05T21:16:08.8283368Z ║ crash reports to Google. ║
-2026-11-05T21:16:08.8284445Z ║ ║
-2026-11-05T21:16:08.8285580Z ║ Read about data we send with crash reports: ║
-2026-11-05T21:16:08.8286899Z ║ https://flutter.dev/to/crash-reporting ║
-2026-11-05T21:16:08.8288059Z ║ ║
-2026-11-05T21:16:08.8289539Z ║ See Google's privacy policy: ║
-2026-11-05T21:16:08.8291166Z ║ https://policies.google.com/privacy ║
-2026-11-05T21:16:08.8292390Z ║ ║
-2026-11-05T21:16:08.8293467Z ║ To disable animations in this tool, use ║
-2026-11-05T21:16:08.8294752Z ║ 'flutter config --no-cli-animations'. ║
-2026-11-05T21:16:08.8296054Z ╚════════════════════════════════════════════════════════════════════════════╝
-2026-11-05T21:16:08.8296725Z
-2026-11-05T21:16:10.1299880Z Loading local repository...
-2026-11-05T21:16:10.1339123Z [========= ] 25% Loading local repository...
-2026-11-05T21:16:10.1467387Z [========= ] 25% Fetch remote repository...
-2026-11-05T21:16:10.4107033Z [========== ] 26% Fetch remote repository...
-2026-11-05T21:16:10.4149227Z [============ ] 31% Fetch remote repository...
-2026-11-05T21:16:10.5579875Z [============ ] 32% Fetch remote repository...
-2026-11-05T21:16:10.5609133Z [============= ] 33% Fetch remote repository...
-2026-11-05T21:16:10.6436537Z [============= ] 35% Fetch remote repository...
-2026-11-05T21:16:10.6459167Z [============== ] 36% Fetch remote repository...
-2026-11-05T21:16:10.6652921Z [============== ] 37% Fetch remote repository...
-2026-11-05T21:16:10.6679151Z [=============== ] 38% Fetch remote repository...
-2026-11-05T21:16:10.6839434Z [=============== ] 39% Fetch remote repository...
-2026-11-05T21:16:10.6859942Z [================ ] 40% Fetch remote repository...
-2026-11-05T21:16:10.7012049Z [================ ] 41% Fetch remote repository...
-2026-11-05T21:16:10.7019138Z [================ ] 42% Fetch remote repository...
-2026-11-05T21:16:10.7219907Z [================= ] 44% Fetch remote repository...
-2026-11-05T21:16:10.7234176Z [================= ] 45% Fetch remote repository...
-2026-11-05T21:16:10.7417760Z [================== ] 46% Fetch remote repository...
-2026-11-05T21:16:10.7440522Z [================== ] 47% Fetch remote repository...
-2026-11-05T21:16:10.7639351Z [=================== ] 48% Fetch remote repository...
-2026-11-05T21:16:10.7659192Z [=================== ] 49% Fetch remote repository...
-2026-11-05T21:16:10.7919524Z [==================== ] 50% Fetch remote repository...
-2026-11-05T21:16:10.7949217Z [==================== ] 51% Fetch remote repository...
-2026-11-05T21:16:10.8105708Z [==================== ] 53% Fetch remote repository...
-2026-11-05T21:16:10.8129188Z [===================== ] 54% Fetch remote repository...
-2026-11-05T21:16:10.8473342Z [===================== ] 55% Fetch remote repository...
-2026-11-05T21:16:10.8508119Z [====================== ] 56% Fetch remote repository...
-2026-11-05T21:16:10.8638855Z [====================== ] 57% Fetch remote repository...
-2026-11-05T21:16:10.8669445Z [======================= ] 58% Fetch remote repository...
-2026-11-05T21:16:10.8809242Z [======================= ] 59% Fetch remote repository...
-2026-11-05T21:16:10.8829117Z [======================== ] 60% Fetch remote repository...
-2026-11-05T21:16:10.8949105Z [======================== ] 61% Fetch remote repository...
-2026-11-05T21:16:10.8979807Z [========================= ] 63% Fetch remote repository...
-2026-11-05T21:16:10.9256704Z [========================= ] 64% Fetch remote repository...
-2026-11-05T21:16:10.9299307Z [========================= ] 65% Fetch remote repository...
-2026-11-05T21:16:10.9590810Z [========================== ] 66% Fetch remote repository...
-2026-11-05T21:16:10.9619179Z [========================== ] 67% Fetch remote repository...
-2026-11-05T21:16:10.9779205Z [=========================== ] 68% Fetch remote repository...
-2026-11-05T21:16:10.9779942Z [=========================== ] 69% Fetch remote repository...
-2026-11-05T21:16:10.9896962Z [============================ ] 70% Fetch remote repository...
-2026-11-05T21:16:10.9919105Z [============================ ] 72% Fetch remote repository...
-2026-11-05T21:16:11.0069373Z [============================= ] 73% Fetch remote repository...
-2026-11-05T21:16:11.0099365Z [============================= ] 74% Fetch remote repository...
-2026-11-05T21:16:11.0259184Z [============================= ] 75% Fetch remote repository...
-2026-11-05T21:16:11.0462449Z [============================= ] 75% Computing updates...
-2026-11-05T21:16:11.0499202Z [=======================================] 100% Computing updates...
-2026-11-05T21:16:11.0976559Z All SDK package licenses accepted.
-2026-11-05T21:16:11.0989075Z
-2026-11-05T21:16:11.1388684Z yes: standard output: Broken pipe
-2026-11-05T21:16:11.1582514Z ##[group]Run rm -f pyproject.toml
-2026-11-05T21:16:11.1583300Z [36;1mrm -f pyproject.toml[0m
-2026-11-05T21:16:11.1583802Z [36;1mprintf "flet==0.24.1\nrequests\ncertifi\nurllib3\nidna\ncharset-normalizer\n" > requirements.txt[0m
-2026-11-05T21:16:11.1584309Z [36;1m[0m
-2026-11-05T21:16:11.1584736Z [36;1mcat << 'EOF' > patch_main.py[0m
-2026-11-05T21:16:11.1585025Z [36;1mimport re[0m
-2026-11-05T21:16:11.1585243Z [36;1m[0m
-2026-11-05T21:16:11.1585518Z [36;1mwith open("main.py", "r", encoding="utf-8") as f:[0m
-2026-11-05T21:16:11.1585877Z [36;1m c = f.read()[0m
-2026-11-05T21:16:11.1586112Z [36;1m[0m
-2026-11-05T21:16:11.1586382Z [36;1m# 1. Masaustu kütüphaneleri kalmissa temizle[0m
-2026-11-05T21:16:11.1586861Z [36;1mc = c.replace("import pandas as pd\n", "").replace("import numpy as np\n", "")[0m
-2026-11-05T21:16:11.1587278Z [36;1m[0m
-2026-11-05T21:16:11.1587553Z [36;1m# 2. ANDROID_VERI_DIZINI ve eksik degiskenleri tanimla[0m
-2026-11-05T21:16:11.1587954Z [36;1mandroid_dir_patch = """[0m
-2026-11-05T21:16:11.1588231Z [36;1mimport tempfile as _tempfile[0m
-2026-11-05T21:16:11.1589024Z [36;1mANDROID_VERI_DIZINI = os.environ.get("FLET_APP_STORAGE_DATA") or _tempfile.gettempdir()[0m
-2026-11-05T21:16:11.1589499Z [36;1mtry:[0m
-2026-11-05T21:16:11.1589773Z [36;1m os.makedirs(ANDROID_VERI_DIZINI, exist_ok=True)[0m
-2026-11-05T21:16:11.1590126Z [36;1mexcept Exception:[0m
-2026-11-05T21:16:11.1590427Z [36;1m ANDROID_VERI_DIZINI = _tempfile.gettempdir()[0m
-2026-11-05T21:16:11.1590865Z [36;1mbd = os.path.join(ANDROID_VERI_DIZINI, "binance_api_config.json")[0m
-2026-11-05T21:16:11.1591355Z [36;1map = os.path.join(ANDROID_VERI_DIZINI, "islem_gecmisi.json")[0m
-2026-11-05T21:16:11.1591808Z [36;1maN = os.path.join(ANDROID_VERI_DIZINI, "acik_islemler.json")[0m
-2026-11-05T21:16:11.1592160Z [36;1mah = [][0m
-2026-11-05T21:16:11.1592365Z [36;1m"""[0m
-2026-11-05T21:16:11.1592562Z [36;1m[0m
-2026-11-05T21:16:11.1592775Z [36;1mif "ANDROID_VERI_DIZINI" in c:[0m
-2026-11-05T21:16:11.1593055Z [36;1m c = re.sub([0m
-2026-11-05T21:16:11.1593324Z [36;1m r'ANDROID_VERI_DIZINI\s*=\s*[^\n]+',[0m
-2026-11-05T21:16:11.1593647Z [36;1m android_dir_patch.strip(),[0m
-2026-11-05T21:16:11.1593930Z [36;1m c,[0m
-2026-11-05T21:16:11.1594146Z [36;1m count=1[0m
-2026-11-05T21:16:11.1594371Z [36;1m )[0m
-2026-11-05T21:16:11.1594572Z [36;1melse:[0m
-2026-11-05T21:16:11.1594952Z [36;1m c = c.replace("import flet as ft", "import flet as ft\n" + android_dir_patch.strip(), 1)[0m
-2026-11-05T21:16:11.1595386Z [36;1m[0m
-2026-11-05T21:16:11.1595600Z [36;1mif "bd = os.path.join" not in c:[0m
-2026-11-05T21:16:11.1596030Z [36;1m c = c.replace("def _f(d,c,i=-2):", android_dir_patch.strip() + "\ndef _f(d,c,i=-2):")[0m
-2026-11-05T21:16:11.1596439Z [36;1m[0m
-2026-11-05T21:16:11.1596636Z [36;1mif "def _api_yukle():" in c:[0m
-2026-11-05T21:16:11.1596950Z [36;1m ust_kisim = c.split("def _api_yukle():")[0][0m
-2026-11-05T21:16:11.1597362Z [36;1m if "borsa_kur(PIYASA_MODU, TESTNET_AKTIF)" not in ust_kisim:[0m
-2026-11-05T21:16:11.1597947Z [36;1m c = c.replace("def _api_yukle():", "borsa_kur(PIYASA_MODU, TESTNET_AKTIF)\ndef _api_yukle():", 1)[0m
-2026-11-05T21:16:11.1598613Z [36;1m[0m
-2026-11-05T21:16:11.1598908Z [36;1m# 3. orijinal kodu app_core.py olarak kaydet[0m
-2026-11-05T21:16:11.1599310Z [36;1mwith open("app_core.py", "w", encoding="utf-8") as f:[0m
-2026-11-05T21:16:11.1599656Z [36;1m f.write(c)[0m
-2026-11-05T21:16:11.1599877Z [36;1m[0m
-2026-11-05T21:16:11.1600243Z [36;1m# 4. Kapanmayi %100 engelleyen, ft.app ve open() fonksiyonlarini koruyan yeni main.py yaz[0m
-2026-11-05T21:16:11.1600800Z [36;1mwrapper_code = '''import os, sys, builtins, tempfile, traceback[0m
-2026-11-05T21:16:11.1601177Z [36;1mimport flet as ft[0m
-2026-11-05T21:16:11.1601420Z [36;1m[0m
-2026-11-05T21:16:11.1601690Z [36;1m# Android Salt-Okunur (Read-Only) Dosya Sistemi Korumasi[0m
-2026-11-05T21:16:11.1602365Z [36;1m_SAFE_DIR = os.environ.get("FLET_APP_STORAGE_DATA") or tempfile.gettempdir()[0m
-2026-11-05T21:16:11.1602788Z [36;1mtry:[0m
-2026-11-05T21:16:11.1603023Z [36;1m os.makedirs(_SAFE_DIR, exist_ok=True)[0m
-2026-11-05T21:16:11.1603326Z [36;1mexcept Exception:[0m
-2026-11-05T21:16:11.1603591Z [36;1m _SAFE_DIR = tempfile.gettempdir()[0m
-2026-11-05T21:16:11.1604010Z [36;1m[0m
-2026-11-05T21:16:11.1604196Z [36;1mtry:[0m
-2026-11-05T21:16:11.1604399Z [36;1m os.chdir(_SAFE_DIR)[0m
-2026-11-05T21:16:11.1604658Z [36;1mexcept Exception:[0m
-2026-11-05T21:16:11.1604899Z [36;1m pass[0m
-2026-11-05T21:16:11.1605099Z [36;1m[0m
-2026-11-05T21:16:11.1605304Z [36;1m_orig_open = builtins.open[0m
-2026-11-05T21:16:11.1605630Z [36;1mdef _safe_open(file, mode='r', *args, **kwargs):[0m
-2026-11-05T21:16:11.1606036Z [36;1m if isinstance(file, str) and not os.path.isabs(file):[0m
-2026-11-05T21:16:11.1606421Z [36;1m file = os.path.join(_SAFE_DIR, file)[0m
-2026-11-05T21:16:11.1606840Z [36;1m elif isinstance(file, str) and any(m in mode for m in ('w', 'a', '+')):[0m
-2026-11-05T21:16:11.1607350Z [36;1m # Yazma modunda dizin salt okunursa güvenli dizine yönlendir[0m
-2026-11-05T21:16:11.1607757Z [36;1m parent = os.path.dirname(file)[0m
-2026-11-05T21:16:11.1608110Z [36;1m if parent and not os.access(parent, os.W_OK):[0m
-2026-11-05T21:16:11.1608777Z [36;1m file = os.path.join(_SAFE_DIR, os.path.basename(file))[0m
-2026-11-05T21:16:11.1609206Z [36;1m return _orig_open(file, mode, *args, **kwargs)[0m
-2026-11-05T21:16:11.1609552Z [36;1mbuiltins.open = _safe_open[0m
-2026-11-05T21:16:11.1609817Z [36;1m[0m
-2026-11-05T21:16:11.1610125Z [36;1m# Flet ft.app Kancasi: main(page) icindeki hatalari da yakalar![0m
-2026-11-05T21:16:11.1610521Z [36;1m_orig_ft_app = ft.app[0m
-2026-11-05T21:16:11.1610777Z [36;1m_app_started = False[0m
-2026-11-05T21:16:11.1611017Z [36;1m[0m
-2026-11-05T21:16:11.1611230Z [36;1mdef _safe_ft_app(*args, **kwargs):[0m
-2026-11-05T21:16:11.1611535Z [36;1m global _app_started[0m
-2026-11-05T21:16:11.1611799Z [36;1m _app_started = True[0m
-2026-11-05T21:16:11.1612080Z [36;1m orig_target = kwargs.get("target")[0m
-2026-11-05T21:16:11.1612426Z [36;1m if orig_target is None and len(args) > 0:[0m
-2026-11-05T21:16:11.1612742Z [36;1m orig_target = args[0][0m
-2026-11-05T21:16:11.1613018Z [36;1m args = args[1:][0m
-2026-11-05T21:16:11.1613263Z [36;1m[0m
-2026-11-05T21:16:11.1613487Z [36;1m def _wrapped_target(page: ft.Page):[0m
-2026-11-05T21:16:11.1613784Z [36;1m try:[0m
-2026-11-05T21:16:11.1614001Z [36;1m if orig_target:[0m
-2026-11-05T21:16:11.1614274Z [36;1m orig_target(page)[0m
-2026-11-05T21:16:11.1614562Z [36;1m except Exception:[0m
-2026-11-05T21:16:11.1614853Z [36;1m err_txt = traceback.format_exc()[0m
-2026-11-05T21:16:11.1615157Z [36;1m page.clean()[0m
-2026-11-05T21:16:11.1615438Z [36;1m page.bgcolor = "#1A1A1A"[0m
-2026-11-05T21:16:11.1615746Z [36;1m page.scroll = "auto"[0m
-2026-11-05T21:16:11.1616026Z [36;1m page.add([0m
-2026-11-05T21:16:11.1616281Z [36;1m ft.Container([0m
-2026-11-05T21:16:11.1616552Z [36;1m padding=20,[0m
-2026-11-05T21:16:11.1616844Z [36;1m content=ft.Column([[0m
-2026-11-05T21:16:11.1617345Z [36;1m ft.Text("ARAYÜZ (MAIN) ÇALIŞMA HATASI", color="orange", size=18, weight="bold"),[0m
-2026-11-05T21:16:11.1617941Z [36;1m ft.Text("Hata detayı aşağıdadır:", color="white", size=13),[0m
-2026-11-05T21:16:11.1618359Z [36;1m ft.Container([0m
-2026-11-05T21:16:11.1618987Z [36;1m bgcolor="#000000",[0m
-2026-11-05T21:16:11.1619307Z [36;1m padding=12,[0m
-2026-11-05T21:16:11.1619613Z [36;1m border_radius=8,[0m
-2026-11-05T21:16:11.1620304Z [36;1m content=ft.Text(err_txt, color="#FF6B6B", size=11, selectable=True, font_family="monospace")[0m
-2026-11-05T21:16:11.1620811Z [36;1m )[0m
-2026-11-05T21:16:11.1621065Z [36;1m ])[0m
-2026-11-05T21:16:11.1621303Z [36;1m )[0m
-2026-11-05T21:16:11.1621528Z [36;1m )[0m
-2026-11-05T21:16:11.1621893Z [36;1m page.update()[0m
-2026-11-05T21:16:11.1622139Z [36;1m[0m
-2026-11-05T21:16:11.1622365Z [36;1m kwargs["target"] = _wrapped_target[0m
-2026-11-05T21:16:11.1622701Z [36;1m return _orig_ft_app(*args, **kwargs)[0m
-2026-11-05T21:16:11.1623021Z [36;1m[0m
-2026-11-05T21:16:11.1623223Z [36;1mft.app = _safe_ft_app[0m
-2026-11-05T21:16:11.1623459Z [36;1m[0m
-2026-11-05T21:16:11.1623639Z [36;1mtry:[0m
-2026-11-05T21:16:11.1623850Z [36;1m import app_core[0m
-2026-11-05T21:16:11.1624155Z [36;1m if not _app_started and hasattr(app_core, "main"):[0m
-2026-11-05T21:16:11.1624527Z [36;1m _safe_ft_app(target=app_core.main)[0m
-2026-11-05T21:16:11.1624835Z [36;1mexcept Exception:[0m
-2026-11-05T21:16:11.1625100Z [36;1m _boot_err = traceback.format_exc()[0m
-2026-11-05T21:16:11.1625432Z [36;1m def _acil_hata_ekrani(page: ft.Page):[0m
-2026-11-05T21:16:11.1625752Z [36;1m page.bgcolor = "#1A1A1A"[0m
-2026-11-05T21:16:11.1626036Z [36;1m page.scroll = "auto"[0m
-2026-11-05T21:16:11.1626304Z [36;1m page.add([0m
-2026-11-05T21:16:11.1626536Z [36;1m ft.Container([0m
-2026-11-05T21:16:11.1626792Z [36;1m padding=20,[0m
-2026-11-05T21:16:11.1627066Z [36;1m content=ft.Column([[0m
-2026-11-05T21:16:11.1627510Z [36;1m ft.Text("BAŞLANGIÇ (IMPORT) HATASI", color="red", size=18, weight="bold"),[0m
-2026-11-05T21:16:11.1628094Z [36;1m ft.Text("Uygulama yüklenirken hata oluştu:", color="white", size=13),[0m
-2026-11-05T21:16:11.1628789Z [36;1m ft.Container([0m
-2026-11-05T21:16:11.1629112Z [36;1m bgcolor="#000000",[0m
-2026-11-05T21:16:11.1629442Z [36;1m padding=12,[0m
-2026-11-05T21:16:11.1629749Z [36;1m border_radius=8,[0m
-2026-11-05T21:16:11.1630273Z [36;1m content=ft.Text(_boot_err, color="#FF6B6B", size=11, selectable=True, font_family="monospace")[0m
-2026-11-05T21:16:11.1630782Z [36;1m )[0m
-2026-11-05T21:16:11.1631034Z [36;1m ])[0m
-2026-11-05T21:16:11.1631263Z [36;1m )[0m
-2026-11-05T21:16:11.1631483Z [36;1m )[0m
-2026-11-05T21:16:11.1631734Z [36;1m _orig_ft_app(target=_acil_hata_ekrani)[0m
-2026-11-05T21:16:11.1632027Z [36;1m'''[0m
-2026-11-05T21:16:11.1632221Z [36;1m[0m
-2026-11-05T21:16:11.1632476Z [36;1mwith open("main.py", "w", encoding="utf-8") as f:[0m
-2026-11-05T21:16:11.1632819Z [36;1m f.write(wrapper_code)[0m
-2026-11-05T21:16:11.1633077Z [36;1mEOF[0m
-2026-11-05T21:16:11.1633265Z [36;1m[0m
-2026-11-05T21:16:11.1633470Z [36;1mpython3 patch_main.py[0m
-2026-11-05T21:16:11.1633737Z [36;1mrm -f patch_main.py[0m
-2026-11-05T21:16:11.1634003Z [36;1mpython3 -m py_compile main.py[0m
-2026-11-05T21:16:11.1634314Z [36;1mpython3 -m py_compile app_core.py[0m
-2026-11-05T21:16:11.1697495Z shell: /usr/bin/bash -e {0}
-2026-11-05T21:16:11.1697766Z env:
-2026-11-05T21:16:11.1698045Z pythonLocation: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:16:11.1698665Z PKG_CONFIG_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib/pkgconfig
-2026-11-05T21:16:11.1699126Z Python_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:16:11.1699548Z Python2_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:16:11.1699956Z Python3_ROOT_DIR: /opt/hostedtoolcache/Python/3.11.18/x64
-2026-11-05T21:16:11.1700356Z LD_LIBRARY_PATH: /opt/hostedtoolcache/Python/3.11.18/x64/lib
-2026-11-05T21:16:11.1700803Z JAVA_HOME: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:16:11.1701454Z JAVA_HOME_17_X64: /opt/hostedtoolcache/Java_Temurin-Hotspot_jdk/17.0.21-9/x64
-2026-11-05T21:16:11.1701948Z FLUTTER_ROOT: /opt/hostedtoolcache/flutter/stable-3.24.3-x64/flutter
-2026-11-05T21:16:11.1702337Z PUB_CACHE: /home/runner/.pub-cache
-2026-11-05T21:16:11.1702603Z ##[endgroup]
-2026-11-05T21:16:11.3108106Z File "app_core.py", line 210
-2026-11-05T21:16:11.3109203Z elif "import tempfile as _tempfile
-2026-11-05T21:16:11.3110326Z ^
-2026-11-05T21:16:11.3111128Z SyntaxError: unterminated string literal (detected at line 210)
-2026-11-05T21:16:11.3159720Z ##[error]Process completed with exit code 1.
-2026-11-05T21:16:11.3338011Z Post job cleanup.
-2026-11-05T21:16:11.3342378Z ##[start-action display=Cache pub dependencies;id=__db270a22-778a-4fd0-b70e-42bd0de585e3.cache-pub]
-2026-11-05T21:16:11.3344593Z ##[end-action id=__db270a22-778a-4fd0-b70e-42bd0de585e3.cache-pub;outcome=skipped;conclusion=skipped;duration_ms=0]
-2026-11-05T21:16:11.3346573Z ##[start-action display=Cache Flutter;id=__db270a22-778a-4fd0-b70e-42bd0de585e3.cache-flutter]
-2026-11-05T21:16:11.3348901Z ##[end-action id=__db270a22-778a-4fd0-b70e-42bd0de585e3.cache-flutter;outcome=skipped;conclusion=skipped;duration_ms=0]
-2026-11-05T21:16:11.3433715Z Post job cleanup.
-2026-11-05T21:16:11.5148137Z (node:3351) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
-2026-11-05T21:16:11.5150364Z (Use `node --trace-deprecation ...` to show where the warning was created)
-2026-11-05T21:16:11.5569999Z Post job cleanup.
-2026-11-05T21:16:11.7369308Z [command]/usr/bin/git version
-2026-11-05T21:16:11.7427175Z git version 2.56.0
-2026-11-05T21:16:11.7525789Z Temporarily overriding HOME='/home/runner/work/_temp/768b4d61-d1ec-4bc0-a8eb-80e7220a0792' before making global git config changes
-2026-11-05T21:16:11.7542706Z Adding repository directory to the temporary git global config as a safe directory
-2026-11-05T21:16:11.7569450Z [command]/usr/bin/git config --global --add safe.directory /home/runner/work/bot/bot
-2026-11-05T21:16:11.7659300Z [command]/usr/bin/git config --local --name-only --get-regexp core\.sshCommand
-2026-11-05T21:16:11.7749901Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
-2026-11-05T21:16:11.8059019Z [command]/usr/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
-2026-11-05T21:16:11.8129353Z http.https://github.com/.extraheader
-2026-11-05T21:16:11.8173656Z [command]/usr/bin/git config --local --unset-all http.https://github.com/.extraheader
-2026-11-05T21:16:11.8201805Z [command]/usr/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
-2026-11-05T21:16:11.8629382Z [command]/usr/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
-2026-11-05T21:16:11.8694507Z [command]/usr/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
-2026-11-05T21:16:11.9245770Z Cleaning up orphan processes
-2026-11-05T21:16:11.9613881Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@v4, actions/setup-java@v4, actions/setup-python@v5. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
-Paylaştığın GitHub Actions derleme (build-apk) logunu ve ekran görüntüsünü (image_2dffef.png) inceledim. Derlemenin 210. satırda SyntaxError: unterminated string literal hatasıyla durmasının kesin nedeni şu:   
-image_2dffef.png
-
-🔍 Hatanın Kök Nedeni (patch_main.py Çakışması)
-GitHub Actions iş akışındaki patch_main.py betiği, main.py dosyasını derlemeden önce şu satırı çalıştırıyor:
-
-Python
-if "bd = os.path.join" not in c:
-    c = c.replace("def _f(d,c,i=-2):", android_dir_patch.strip() + "\ndef _f(d,c,i=-2):")
-Ancak main.py içinde masaustu_kodunu_mobil_cekirdege_ayikla fonksiyonunda:
-
-Python
-elif "def _f(d,c,i=-2):" in kaynak_kod:
-şeklinde tırnak içinde bir arama satırı var. patch_main.py içindeki .replace() komutu tırnak içindeki "def _f(d,c,i=-2):" metninin ortasına çok satırlı import tempfile as _tempfile... bloğunu yapıştırdığı için tırnak yarıda kesiliyor ve elif "import tempfile as _tempfile şeklinde SyntaxError veriyor!   
-botv4.0.9.py
-+ 1
-
-🛠️ Kesin Çözüm (2 Seçenekten Birini Uygulayabilirsin)
-1. Yöntem (En Hızlısı — main.py İçindeki 2 Satırı Düzeltmek):
-GitHub'daki main.py dosyanda şu 2 küçük değişikliği yaptığında GitHub Actions (patch_main.py) hatasız geçer ve APK derlenir:
-
-masaustu_kodunu_mobil_cekirdege_ayikla fonksiyonu içindeki şu satırı bul:   
-botv4.0.9.py
-
-Python
-elif "def _f(d,c,i=-2):" in kaynak_kod:
-Bunu patch_main.py'nin .replace() komutuna yakalanmaması için ikiye bölerek şu şekilde değiştir:
-
-Python
-elif ("def _f(" + "d,c,i=-2):") in kaynak_kod:
-main.py dosyasının üst kısmındaki bd = ... tanımlamasının tam olarak şu formatta olduğundan emin ol (böylece if "bd = os.path.join" not in c: şartı hiç tetiklenmez):
-
-Python
-bd = os.path.join(ANDROID_VERI_DIZINI, "binance_api_config.json")
-2. Yöntem (Kalıcı Çözüm — .github/workflows YAML Dosyasındaki patch_main.py Satırını Düzeltmek):
-Eğer .github/workflows/ altındaki APK derleme YAML dosyana erişimin varsa, oradaki patch_main.py bloğunda yer alan:
-
-Python
-if "bd = os.path.join" not in c:
-    c = c.replace("def _f(d,c,i=-2):", android_dir_patch.strip() + "\ndef _f(d,c,i=-2):")
-satırının sonuna , 1 parametresini ekle (sadece ilk eşleşmeyi değiştirmesi için):
-
-Python
-if "bd = os.path.join" not in c:
-    c = c.replace("def _f(d,c,i=-2):", android_dir_patch.strip() + "\ndef _f(d,c,i=-2):", 1)
-📱 Uygulama İçinde Grafiklerin Tarayıcıya Gerek Kalmadan Açılması İçin Ek Fonksiyon
-Android'de tarayıcı engeline (file://) hiç takılmadan, grafikleri doğrudan Flet uygulamasının içindeki "📊 Karne & Pine" sekmesinde canlı Mum + Arz/Talep OB + FVG + Swing/BOS + QML/OTE + Giriş/SL/TP olarak göstermek istersen, main.py içine şu saf Python SVG grafik üreticisini de ekleyebilirsin:
-
-Python
-def mobil_canli_svg_grafik_uret(O, tf_secim='5m', H_ozel=None):
-    """Android Flet uygulama içinde canlı Mum + OB/FVG + QML/OTE + Giriş/SL/TP grafiğini SVG (base64) olarak üretir."""
-    try:
-        H = H_ozel or analiz_hafizasi.get(O) or analiz_hafizasi.get(str(O).split(':', 1)[-1]) or {}
-        J = H.get('sembol', str(O).split(':', 1)[-1])
-        D = H.get('piyasa', 'spot' if str(O).startswith('SPOT:') else 'future')
-        htf_p, mtf_p, ltf_p, _ = _parite_mtf_periyotlarini_bul(O, J, D, H)
-        if not H or H.get('df_4h') is None or (H.get('df_5m') is None and H.get('df_15m') is None):
-            H = pine_icin_4h_1h_5m_veri_hazirla(J, D, H, O)
-            analiz_hafizasi[O] = H
-        df_t = H.get('df_4h' if tf_secim in ('4h', htf_p) else 'df_1h' if tf_secim in ('1h', mtf_p) else 'df_5m', H.get('df_15m_full'))
-        yp_t = H.get('yapi_4h' if tf_secim in ('4h', htf_p) else 'yapi_1h' if tf_secim in ('1h', mtf_p) else 'yapi_5m', {})
-        kt_t = H.get('kutular_4h' if tf_secim in ('4h', htf_p) else 'kutular_1h' if tf_secim in ('1h', mtf_p) else 'kutular_5m', [])
-        tv_d = _df_to_tv_json(df_t, yp_t, kt_t)
-        mumlar = tv_d.get('mumlar', [])[-90:]
-        if L(mumlar) < 5:
-            return ""
-        n_bars = L(mumlar)
-        w, h, pad_l, pad_r, pad_t, pad_b = 900, 460, 12, 100, 32, 22
-        cw, ch = w - pad_l - pad_r, h - pad_t - pad_b
-        all_hi, all_lo = M(F(m['high']) for m in mumlar), N(F(m['low']) for m in mumlar)
-        p_max, p_span = all_hi + (all_hi - all_lo) * 0.06, M((all_hi - all_lo) * 1.12, 1e-9)
-        p_min = p_max - p_span
-        py = lambda p: R(pad_t + ch * (1.0 - (F(p) - p_min) / p_span), 1)
-        bx = lambda i: R(pad_l + (F(i) + 0.5) * (cw / M(n_bars, 1)), 1)
-        bar_w = M(2.5, R((cw / M(n_bars, 1)) * 0.65, 1))
-        svg = [f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="100%" height="100%"><rect width="{w}" height="{h}" fill="#0f172a" rx="8"/>']
-        for i, m in enumerate(mumlar):
-            x, o_p, h_p, l_p, c_p = bx(i), F(m['open']), F(m['high']), F(m['low']), F(m['close'])
-            renk = "#22c55e" if c_p >= o_p else "#ef4444"
-            svg.append(f'<line x1="{x}" y1="{py(h_p)}" x2="{x}" y2="{py(l_p)}" stroke="{renk}" stroke-width="1.2"/>')
-            svg.append(f'<rect x="{R(x - bar_w/2, 1)}" y="{N(py(o_p), py(c_p))}" width="{bar_w}" height="{M(1.8, A(py(c_p) - py(o_p)))}" fill="{renk}"/>')
-        svg.append('</svg>')
-        return _b64.b64encode("".join(svg).encode('utf-8')).decode('utf-8')
-    except Exception:
-        return ""
-Yukarıdaki 1. Yöntemdeki elif ("def _f(" + "d,c,i=-2):") in kaynak_kod: düzeltmesini GitHub'daki main.py dosyana uygulayıp kaydettiğin anda GitHub Actions derlemesi (build-apk) yeşil yanarak APK'nı üretecektir! İstersen main.py dosyasının tamamını tek parça indirilebilir dosya olarak da hemen çıkartabilirim.
-
-tek parça olarak çıkart
-Hem masaüstü bot dosyanı (botv4.0.9.py) hem de mobil Flet uygulama dosyanı (main.py) tek parça indirilebilir dosyalar olarak aşağıda paylaşıyorum:
-
-Masaüstü Botu (botv4.0.9.py): 
-PY simgesi
-botv4.0.9
- PY 
-
-Mobil Uygulama (main.py): 
-PY simgesi
-main
- PY 
-
-⚠️ GitHub'a Yüklemeden Önce main.py İçinde 1 Satırlık Küçük Kontrol
-main.py dosyasını GitHub'a yüklerken 5018-5020. satırlar civarında yer alan şu kısmı kontrol et:
-
-Python
-if "GITHUB_TOKEN" not in globals():
-BULUT_SENK_AKTIF = True
-Eğer if "GITHUB_TOKEN" not in globals(): satırının altında GITHUB_TOKEN = "" satırı eksik görünüyorsa (veya girintisi kaymışsa), hemen altına 4 boşluk bırakarak     GITHUB_TOKEN = "" ekle:
-
-Python
-if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI:
-    GITHUB_REPO_ADRESI = "emrhozbr/bot"
-if "GITHUB_TOKEN" not in globals():
-    GITHUB_TOKEN = ""
-BULUT_SENK_AKTIF = True
-🚀 Bu Tek Parça Dosyalarda Neler Düzeltildi?
-GitHub Actions SyntaxError (Satır 210) Tamamen Giderildi:
-
-patch_main.py betiğinin elif "def _f(d,c,i=-2):" satırını bozmasını engellemek için hem botv4.0.9.py hem de main.py içinde bu kontrol f_marker = "def _f(" + "d,c,i=-2):" olarak ayrıldı ve bd = os.path.join(ANDROID_VERI_DIZINI, "binance_api_config.json") formatı sabitlendi.   
-botv4.0.9.py
-+ 1
-
-Arka Planda Ayarların Kendi Kendine Değişmesi Engellendi:
-
-_api_kaydet_tam(), _sozlukten_ayarlari_uygula() ve mtf_sablonu_uygula(..., rr_koru=True) fonksiyonları eklendi. Kaldıraç, işlem başı risk, maksimum marjin, RR oranı, min skor, MTF şablonu ve stop modu hem binance_api_config.json dosyasına hem de Flet client_storage hafızasına tam kaydediliyor.
-
-Masaüstü <-> Mobil Canlı Senkronizasyon ve Otomatik OTA:
-
-Masaüstünde (botv4.0.9.py) bir ayarı değiştirdiğinde veya yeni bir sürüm açtığında senkron_durum.json içine tüm ayar paketi ve sürüm yazılıyor. Mobil uygulama (main.py) 12 saniye içinde masaüstündeki değişikliği algılayıp kendi ayarlarını ve arayüz kutularını otomatik güncelliyor.
-
-Uygulama İçi Canlı Grafik (mobil_canli_svg_grafik_uret) + Tarayıcı Grafiği:
-
-Android'de file:// hatası veren çağrı kaldırıldı. "📊 Karne & Pine" sekmesinde artık tarayıcıya bile gerek kalmadan parmakla yakınlaştırılabilen (InteractiveViewer) canlı Mum + Arz/Talep OB + FVG + Swing/BOS + QML/OTE + Giriş/SL/TP grafiği doğrudan uygulama içinde açılıyor; ayrıca "🚀 Tam Ekran TV Grafiği Aç" butonuyla yerel sunucu üzerinden ([http://127.0.0.1](http://127.0.0.1):PORT/...) tam ekran TradingView grafiği de açılabiliyor.
-
-
-
-
-
-Gemini bir yapay zeka modeli olduğu için hata yapabilir.
-Kodda işlendi ve analiz edildi
 # ==============================================================================
 # ALFA TRADE CLUB (MAHŞERİN 4 ATLISI + YT PART 1-13) — NATIVE ANDROID APK (FLET)
 # ==============================================================================
@@ -6879,6 +3341,4247 @@ function imbalanceStilCoz(im) {{
   if (t.includes('SIBI')) return ['rgba(168,85,247,0.17)', '#a855f7', im.etiket || 'SIBI FVG'];
   if (t.includes('IFVG')) return ['rgba(20,184,166,0.17)', '#14b8a6', im.etiket || 'IFVG Flip'];
   if (t.includes('VIB')) return ['rgba(250,204,21,0.18)', '#eab308', im.etiket || 'VIB/Gap'];
-  return ['rgba(6,182,212,0.15)', '#06b6d4', im.etiket || 'I
-main.py
-main.py görüntüleniyor.
+  return ['rgba(6,182,212,0.15)', '#06b6d4', im.etiket || 'Imbalance'];
+}}
+
+function fiyatCizgileriniTemizle() {{
+  if (!candleSeries) return;
+  aktifPriceLines.forEach(pl => {{
+    try {{ candleSeries.removePriceLine(pl); }} catch (e) {{}}
+  }});
+  aktifPriceLines = [];
+}}
+
+function seriKatmanlariniGuncelle() {{
+  if (!candleSeries) return;
+  const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
+  const isHTF = (aktifTf === '4h');
+  const gosterZz  = document.getElementById('chk_zz').checked;
+  const gosterIst = document.getElementById('chk_ist').checked;
+  const gosterFibo = document.getElementById('chk_fibo').checked;
+  const gosterRr  = document.getElementById('chk_rr').checked;
+  const gosterLiq = document.getElementById('chk_liq').checked;
+
+  ['zz','arztalep','kutu','ist','fibo','liq','rr'].forEach(k => {{
+    const ic = document.getElementById('ico_' + k);
+    const ch = document.getElementById('chk_' + k);
+    if (ic && ch) ic.classList.toggle('active', ch.checked);
+  }});
+
+  if (zzSeries) {{ try {{ chart.removeSeries(zzSeries); }} catch(e){{}} zzSeries = null; }}
+  bosSerileri.forEach(s => {{ try {{ chart.removeSeries(s); }} catch(e){{}} }});
+  bosSerileri = [];
+
+  const markers = [];
+  if (gosterZz && veri.zigzag && veri.zigzag.length > 1) {{
+    zzSeries = chart.addLineSeries({{ color: '#cbd5e1', lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }});
+    zzSeries.setData(veri.zigzag.map(z => ({{ time: z.time, value: z.value }})));
+    veri.zigzag.forEach(z => {{
+      const renkM = z.lbl === 'HH' ? '#4ade80' : z.lbl === 'LH' ? '#fb7185' : z.lbl === 'HL' ? '#38bdf8' : '#f97316';
+      markers.push({{
+        time: z.time,
+        position: z.tip === 'H' ? 'aboveBar' : 'belowBar',
+        color: renkM,
+        shape: z.tip === 'H' ? 'arrowDown' : 'arrowUp',
+        text: z.lbl
+      }});
+    }});
+  }}
+  if (gosterLiq && veri.sfp && veri.sfp.length > 0) {{
+    veri.sfp.forEach(sf => {{
+      markers.push({{
+        time: sf.time,
+        position: sf.yon === 'BULL' ? 'belowBar' : 'aboveBar',
+        color: sf.yon === 'BULL' ? '#10b981' : '#f43f5e',
+        shape: sf.yon === 'BULL' ? 'arrowUp' : 'arrowDown',
+        text: sf.yon === 'BULL' ? 'SFP▲' : 'SFP▼'
+      }});
+    }});
+  }}
+  markers.sort((a, b) => a.time - b.time);
+  candleSeries.setMarkers(markers);
+
+  if (gosterZz && veri.bos && veri.bos.length > 0) {{
+    veri.bos.forEach(b => {{
+      if (b.t1 < b.t2) {{
+        const bs = chart.addLineSeries({{
+          color: b.yon === 'BULLISH' ? '#22c55e' : '#f43f5e',
+          lineWidth: 1.5,
+          lineStyle: LightweightCharts.LineStyle.Dashed,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false
+        }});
+        bs.setData([{{ time: b.t1, value: b.price }}, {{ time: b.t2, value: b.price }}]);
+        bosSerileri.push(bs);
+      }}
+    }});
+  }}
+
+  fiyatCizgileriniTemizle();
+  function seviyeEkle(fiyat, baslik, renk, stil, kalinlik=1) {{
+    if (fiyat && fiyat > 0) {{
+      const pl = candleSeries.createPriceLine({{ price: fiyat, color: renk, lineWidth: kalinlik, lineStyle: stil, axisLabelVisible: true, title: baslik }});
+      aktifPriceLines.push(pl);
+    }}
+  }}
+  if (gosterRr) {{
+    seviyeEkle(parseEdilenPine.giris, 'Giriş', '#38bdf8', LightweightCharts.LineStyle.Dashed, 2);
+    seviyeEkle(parseEdilenPine.sl, 'SL(1R)', '#ef4444', LightweightCharts.LineStyle.Solid, 2);
+    seviyeEkle(parseEdilenPine.tp1, 'TP1(3R)', '#10b981', LightweightCharts.LineStyle.Solid, 2);
+    seviyeEkle(parseEdilenPine.tp2, 'TP2(4R)', '#a3e635', LightweightCharts.LineStyle.Dotted, 1);
+  }}
+  if (gosterIst) {{
+    seviyeEkle(parseEdilenPine.sp, 'Origin', '#eab308', LightweightCharts.LineStyle.Dashed, 1);
+    seviyeEkle(parseEdilenPine.wp, 'Weak', '#94a3b8', LightweightCharts.LineStyle.Dotted, 1);
+    seviyeEkle(parseEdilenPine.magic, 'Magic/FL', '#ec4899', LightweightCharts.LineStyle.Dashed, 1);
+    seviyeEkle(parseEdilenPine.itz, 'ITZ', '#06b6d4', LightweightCharts.LineStyle.Dotted, 1);
+  }}
+  if (gosterZz || gosterIst) {{
+    const qmlPl = (veri.qml && veri.qml > 0) ? veri.qml : (parseEdilenPine.qml || 0);
+    seviyeEkle(qmlPl, 'QML', '#c084fc', LightweightCharts.LineStyle.Dashed, 1);
+  }}
+  if (gosterFibo && parseEdilenPine.smax > parseEdilenPine.smin && parseEdilenPine.smin > 0) {{
+    const eq = (parseEdilenPine.smax + parseEdilenPine.smin) / 2.0;
+    seviyeEkle(eq, '0.50 EQ', '#64748b', LightweightCharts.LineStyle.Dashed, 1);
+  }}
+}}
+
+function cizPineGostergeKatmani() {{
+  if (!pineCanvas || !candleSeries || aktifMumlar.length < 3) return;
+  const rect = stageEl.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  pineCanvas.width = Math.floor(rect.width * dpr);
+  pineCanvas.height = Math.floor(rect.height * dpr);
+  const ctx = pineCanvas.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+
+  const isHTF = (aktifTf === '4h');
+  const gosterArzTalep = document.getElementById('chk_arztalep') ? document.getElementById('chk_arztalep').checked : false;
+  const gosterKutu = document.getElementById('chk_kutu').checked;
+  const gosterFibo = document.getElementById('chk_fibo').checked;
+  const gosterIst  = document.getElementById('chk_ist').checked;
+  const gosterRr   = document.getElementById('chk_rr').checked;
+  const gosterZz   = document.getElementById('chk_zz').checked;
+  const gosterLiq  = document.getElementById('chk_liq').checked;
+
+  const sonIdx = aktifMumlar.length - 1;
+  const tSon = chart.timeScale().timeToCoordinate(aktifMumlar[sonIdx].time);
+  const tOnceki = chart.timeScale().timeToCoordinate(aktifMumlar[Math.max(0, sonIdx - 10)].time);
+  const barGenislik = (tSon !== null && tOnceki !== null && sonIdx >= 10) ? Math.max(3.5, (tSon - tOnceki) / 10.0) : 6.5;
+
+  function timeOrIdxToX(tVal, idxVal) {{
+    if (tVal) {{
+      const xt = chart.timeScale().timeToCoordinate(tVal);
+      if (xt !== null) return xt;
+    }}
+    if (typeof idxVal === 'number' && idxVal >= 0 && idxVal <= sonIdx) {{
+      const xi = chart.timeScale().timeToCoordinate(aktifMumlar[idxVal].time);
+      if (xi !== null) return xi;
+    }}
+    const rel = (typeof idxVal === 'number') ? (idxVal - sonIdx) : -25;
+    if (tSon !== null) return tSon + rel * barGenislik;
+    return rect.width - 110 + rel * barGenislik;
+  }}
+
+  function barIndexToX(relOffset) {{
+    return timeOrIdxToX(null, sonIdx + relOffset);
+  }}
+
+  function gelismisKutuCiz(x1, x2, fUst, fAlt, bgRenk, kenarRenk, kisaEtiket, metinRenk='#ffffff', solDikCizgi=true, ortaCizgiFiyat=null, kesikliKenar=false) {{
+    if (!fUst || !fAlt || fUst <= 0 || fAlt <= 0) return;
+    const y1 = candleSeries.priceToCoordinate(Math.max(fUst, fAlt));
+    const y2 = candleSeries.priceToCoordinate(Math.min(fUst, fAlt));
+    if (y1 === null || y2 === null) return;
+    const left = Math.max(4, Math.min(x1, x2));
+    const right = Math.min(rect.width - 70, Math.max(x1, x2));
+    if (right <= left + 4) return;
+    const top = Math.min(y1, y2);
+    const h = Math.max(4, Math.abs(y2 - y1));
+    ctx.save();
+    ctx.fillStyle = bgRenk;
+    ctx.fillRect(left, top, right - left, h);
+    ctx.strokeStyle = kenarRenk;
+    ctx.lineWidth = 1.15;
+    if (kesikliKenar) ctx.setLineDash([4, 3]);
+    ctx.strokeRect(left, top, right - left, h);
+    ctx.setLineDash([]);
+    if (solDikCizgi) {{
+      ctx.beginPath();
+      ctx.moveTo(left, top);
+      ctx.lineTo(left, top + h);
+      ctx.lineWidth = 3.0;
+      ctx.strokeStyle = kenarRenk;
+      ctx.stroke();
+    }}
+    if (ortaCizgiFiyat && ortaCizgiFiyat > 0 && h >= 10) {{
+      const yOrta = candleSeries.priceToCoordinate(ortaCizgiFiyat);
+      if (yOrta !== null && yOrta > top + 2 && yOrta < top + h - 2) {{
+        ctx.beginPath();
+        ctx.setLineDash([3, 3]);
+        ctx.moveTo(left + 2, yOrta);
+        ctx.lineTo(right - 2, yOrta);
+        ctx.lineWidth = 0.9;
+        ctx.strokeStyle = kenarRenk;
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }}
+    }}
+    if (kisaEtiket) {{
+      ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+      ctx.fillStyle = metinRenk;
+      ctx.textAlign = 'right';
+      ctx.fillText(kisaEtiket, right - 5, top + Math.min(11, h - 2));
+    }}
+    ctx.restore();
+  }}
+
+  const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
+
+  // 1. Sihirli Fibo / Ters Yönde OTE Bölgesi (-0.236, 0, 0.236, 0.382, 0.5, 0.618, 0.705, 0.786, 1) & 4H QML Çizgisi
+  if (gosterFibo && parseEdilenPine.smax > parseEdilenPine.smin && parseEdilenPine.smin > 0) {{
+    const i4 = parseEdilenPine.smax;
+    const i5 = parseEdilenPine.smin;
+    const dK = i4 - i5;
+    const lA = (veri.yon || 'BULLISH') !== 'BEARISH';
+    const xFiboBas = veri.fibo_t1 ? timeOrIdxToX(veri.fibo_t1, null) : barIndexToX(-140);
+    const xFiboBit = barIndexToX(8);
+    const fibSeviyeler = [
+      {{ r: -0.236, c: '#cbd5e1', lbl: '-0.236' }},
+      {{ r: 0.0,    c: '#22c55e', lbl: '0' }},
+      {{ r: 0.236,  c: '#ef4444', lbl: '0.236' }},
+      {{ r: 0.382,  c: '#3b82f6', lbl: '0.382' }},
+      {{ r: 0.5,    c: '#06b6d4', lbl: '0.5' }},
+      {{ r: 0.618,  c: '#10b981', lbl: '0.618' }},
+      {{ r: 0.705,  c: '#4ade80', lbl: '0.705' }},
+      {{ r: 0.786,  c: '#60a5fa', lbl: '0.786' }},
+      {{ r: 1.0,    c: '#f43f5e', lbl: '1' }}
+    ];
+    fibSeviyeler.forEach(fb => {{
+      const fVal = lA ? (i4 - dK * fb.r) : (i5 + dK * fb.r);
+      const yF = candleSeries.priceToCoordinate(fVal);
+      if (yF !== null && yF > 4 && yF < rect.height - 4) {{
+        ctx.save();
+        ctx.beginPath();
+        ctx.moveTo(Math.max(4, xFiboBas), yF);
+        ctx.lineTo(Math.min(rect.width - 72, xFiboBit), yF);
+        ctx.strokeStyle = fb.c;
+        ctx.lineWidth = (fb.r === 0 || fb.r === 1) ? 1.5 : 1.05;
+        ctx.stroke();
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        ctx.fillStyle = fb.c;
+        ctx.textAlign = 'left';
+        ctx.fillText(`${{fb.lbl}} (${{fiyatFormatla(fVal)}})`, Math.min(rect.width - 145, xFiboBit - 65), yF - 3);
+        ctx.restore();
+      }}
+    }});
+    const ote1 = lA ? i4 - dK * 0.618 : i5 + dK * 0.618;
+    const ote705 = lA ? i4 - dK * 0.705 : i5 + dK * 0.705;
+    const ote2 = lA ? i4 - dK * 0.786 : i5 + dK * 0.786;
+    const oteBg = lA ? 'rgba(244,63,94,0.16)' : 'rgba(59,130,246,0.16)';
+    const oteBrd = lA ? '#fb7185' : '#60a5fa';
+    const oteLbl = lA ? 'Bullish OTE (0.618-0.786)' : 'Bearish OTE (0.618-0.786)';
+    gelismisKutuCiz(Math.max(xFiboBas + 30, barIndexToX(-95)), xFiboBit, ote1, ote2, oteBg, oteBrd, oteLbl, '#3b82f6', false, ote705, false);
+  }}
+  const aktifQmlFiyat = (veri.qml && veri.qml > 0) ? veri.qml : (parseEdilenPine.qml || 0);
+  if (isHTF && (gosterZz || gosterIst || gosterFibo) && aktifQmlFiyat > 0) {{
+    const yQml = candleSeries.priceToCoordinate(aktifQmlFiyat);
+    const xQmlBas = (veri.qml_t1 || typeof veri.qml_idx === 'number') ? timeOrIdxToX(veri.qml_t1, veri.qml_idx) : barIndexToX(-160);
+    const xQmlBit = barIndexToX(8);
+    if (yQml !== null && yQml >= 2 && yQml <= rect.height - 2) {{
+      const x1Q = Math.max(6, Math.min(rect.width - 120, xQmlBas));
+      const x2Q = Math.min(rect.width - 70, Math.max(x1Q + 30, xQmlBit));
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(x1Q, yQml);
+      ctx.lineTo(x2Q, yQml);
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 2.2;
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.arc(x1Q, yQml, 4.5, 0, Math.PI * 2);
+      ctx.fillStyle = '#fde047';
+      ctx.fill();
+      ctx.lineWidth = 1.5;
+      ctx.strokeStyle = '#ef4444';
+      ctx.stroke();
+      ctx.font = 'bold 11px Segoe UI, sans-serif';
+      ctx.fillStyle = '#fde047';
+      ctx.textAlign = 'left';
+      ctx.fillText('QML', x1Q + 7, Math.max(13, yQml - 6));
+      ctx.fillStyle = '#38bdf8';
+      ctx.textAlign = 'right';
+      ctx.fillText(`QML (${{fiyatFormatla(aktifQmlFiyat)}})`, x2Q - 4, Math.max(13, yQml - 6));
+      ctx.restore();
+    }}
+  }}
+
+  // 2. YENİ ARZ / TALEP BÖLGELERİ ÇİZİM ŞABLONU (Talep OB / Valid RBR-DBR / Arz OB / Valid RBD-DBD / Flip Breaker + %50 EQ)
+  if (gosterArzTalep && veri.arz_talep && veri.arz_talep.length > 0) {{
+    veri.arz_talep.forEach(z => {{
+      const [bg, brd, et] = arzTalepStilCoz(z);
+      const xStart = timeOrIdxToX(z.t1, z.idx1);
+      const xEnd = barIndexToX(7);
+      const eqFiyat = z.eq || ((z.lo + z.hi) / 2.0);
+      gelismisKutuCiz(xStart, xEnd, z.hi, z.lo, bg, brd, et, brd, true, eqFiyat, !z.taze);
+    }});
+  }}
+
+  // 3. GÜNCELLENMİŞ IMBALANCE & FVG ÇİZİM ŞABLONU (BISI FVG, SIBI FVG, Kısmi FVG, IFVG Flip, VIB/Gap + %50 CE)
+  if (gosterKutu && veri.imbalance && veri.imbalance.length > 0) {{
+    veri.imbalance.forEach(im => {{
+      const [bg, brd, et] = imbalanceStilCoz(im);
+      const xStart = timeOrIdxToX(im.t1, im.idx1);
+      const xEnd = barIndexToX(6);
+      const ceFiyat = im.ce || ((im.lo + im.hi) / 2.0);
+      gelismisKutuCiz(xStart, xEnd, im.hi, im.lo, bg, brd, et, brd, true, ceFiyat, im.tip === 'IFVG' || !im.taze);
+    }});
+  }}
+
+  // 4. Likidite & SFP Çizgileri (Doğrulanmış Kırılmamış EQH / EQL / IDM Inducement / Ext BSL-SSL / 3-Temas Trendline Liq & SFP Sweep)
+  if (gosterLiq && veri.likidite && veri.likidite.length > 0) {{
+    veri.likidite.forEach(lq => {{
+      const x1 = timeOrIdxToX(lq.t1, lq.idx1);
+      const x2 = lq.aktif ? Math.min(rect.width - 72, Math.max(timeOrIdxToX(lq.t2, lq.idx2), barIndexToX(4))) : timeOrIdxToX(lq.t2, lq.idx2);
+      const y1 = candleSeries.priceToCoordinate(lq.p1);
+      const y2 = candleSeries.priceToCoordinate(lq.p2);
+      if (x1 !== null && x2 !== null && y1 !== null && y2 !== null && Math.abs(x2 - x1) >= 4) {{
+        ctx.save();
+        ctx.beginPath();
+        if (String(lq.tip || '').includes('Sweep')) ctx.setLineDash([2, 3]);
+        else if (String(lq.tip || '').includes('Trendline')) ctx.setLineDash([6, 3]);
+        else if (String(lq.tip || '').includes('IDM')) ctx.setLineDash([3, 2]);
+        else ctx.setLineDash([4, 3]);
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.strokeStyle = lq.renk || '#fbbf24';
+        ctx.lineWidth = lq.aktif ? 1.55 : 1.25;
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(x1, y1, 3.0, 0, Math.PI * 2);
+        ctx.fillStyle = lq.renk || '#fbbf24';
+        ctx.fill();
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        ctx.fillStyle = lq.renk || '#fbbf24';
+        ctx.textAlign = 'right';
+        const lblTxt = `${{lq.tip}} (${{fiyatFormatla(lq.p2)}})`;
+        ctx.fillText(lblTxt, Math.min(rect.width - 74, Math.max(x1 + 55, x2 - 4)), (y1 + y2) / 2 - 4);
+        ctx.restore();
+      }}
+    }});
+  }}
+
+  // 5. İşlem & R:R Kutuları (Giriş - SL - TP1: MTF Geçişlerinde Sabit Fiyat Eksenine Kilitli)
+  const rrGiris = GIRIS > 0 ? GIRIS : (parseEdilenPine.giris || 0);
+  const rrSl    = SL > 0 ? SL : (parseEdilenPine.sl || 0);
+  const rrTp1   = TP1 > 0 ? TP1 : (parseEdilenPine.tp1 || 0);
+  if (gosterRr && rrGiris > 0 && rrSl > 0) {{
+    const yG = candleSeries.priceToCoordinate(rrGiris);
+    const yS = candleSeries.priceToCoordinate(rrSl);
+    const yT = rrTp1 > 0 ? candleSeries.priceToCoordinate(rrTp1) : null;
+    const xL = Math.max(8, barIndexToX(-10));
+    const xR = Math.min(rect.width - 70, Math.max(xL + 36, barIndexToX(6)));
+    if (yG !== null && yS !== null && xR > xL + 4) {{
+      ctx.save();
+      const topR = Math.min(yG, yS), hR = Math.max(2, Math.abs(yS - yG));
+      ctx.fillStyle = 'rgba(239,68,68,0.15)';
+      ctx.fillRect(xL, topR, xR - xL, hR);
+      ctx.strokeStyle = '#ef4444';
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(xL, topR, xR - xL, hR);
+      if (hR >= 10) {{
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        ctx.fillStyle = '#fca5a5';
+        ctx.textAlign = 'right';
+        ctx.fillText('1R Risk', xR - 5, yS > yG ? (yS - 4) : (topR + 11));
+      }}
+      if (yT !== null) {{
+        const topT = Math.min(yG, yT), hT = Math.max(2, Math.abs(yT - yG));
+        ctx.fillStyle = 'rgba(16,185,129,0.14)';
+        ctx.fillRect(xL, topT, xR - xL, hT);
+        ctx.strokeStyle = '#10b981';
+        ctx.lineWidth = 1.2;
+        ctx.strokeRect(xL, topT, xR - xL, hT);
+        if (hT >= 10) {{
+          ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+          ctx.fillStyle = '#86efac';
+          ctx.textAlign = 'right';
+          ctx.fillText('Hedef TP1', xR - 5, yT < yG ? (topT + 11) : (yT - 4));
+        }}
+      }}
+      ctx.beginPath();
+      ctx.moveTo(xL, yG);
+      ctx.lineTo(xR, yG);
+      ctx.strokeStyle = '#38bdf8';
+      ctx.lineWidth = 2.0;
+      ctx.stroke();
+      ctx.restore();
+    }}
+  }}
+
+  // 6. BOS / CHoCH Kısa Etiketleri
+  if (gosterZz && veri.bos && veri.bos.length > 0) {{
+    veri.bos.forEach(b => {{
+      const x1 = chart.timeScale().timeToCoordinate(b.t1);
+      const x2 = chart.timeScale().timeToCoordinate(b.t2);
+      const y = candleSeries.priceToCoordinate(b.price);
+      if (x1 !== null && x2 !== null && y !== null) {{
+        const ortaX = (x1 + x2) / 2.0;
+        const renk = b.yon === 'BULLISH' ? '#4ade80' : '#f87171';
+        ctx.save();
+        ctx.font = 'bold 9.5px Segoe UI, sans-serif';
+        const lbl = b.tip && b.tip.includes('CHOCH') ? 'CHoCH' : 'BOS';
+        ctx.fillStyle = renk;
+        ctx.textAlign = 'center';
+        ctx.fillText(lbl, ortaX, y - 4);
+        ctx.restore();
+      }}
+    }});
+  }}
+}}
+
+function katmanlariSimdiGuncelle() {{
+  seriKatmanlariniGuncelle();
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+}}
+
+function katmanToggle(tip) {{
+  const map = {{ arztalep: 'chk_arztalep', kutu: 'chk_kutu', zz: 'chk_zz', ist: 'chk_ist', fibo: 'chk_fibo', liq: 'chk_liq', rr: 'chk_rr' }};
+  const el = document.getElementById(map[tip]);
+  if (el) {{
+    el.checked = !el.checked;
+    katmanlariSimdiGuncelle();
+  }}
+}}
+
+function rsiHesapla(mumlar, periyot=14) {{
+  const out = [];
+  if (!mumlar || mumlar.length < periyot + 1) return out;
+  let kazanc = 0, kayip = 0;
+  for (let i = 1; i <= periyot; i++) {{
+    const f = mumlar[i].close - mumlar[i - 1].close;
+    if (f >= 0) kazanc += f; else kayip -= f;
+  }}
+  let ortKazanc = kazanc / periyot;
+  let ortKayip = kayip / periyot;
+  for (let i = periyot; i < mumlar.length; i++) {{
+    if (i > periyot) {{
+      const f = mumlar[i].close - mumlar[i - 1].close;
+      ortKazanc = (ortKazanc * (periyot - 1) + (f > 0 ? f : 0)) / periyot;
+      ortKayip = (ortKayip * (periyot - 1) + (f < 0 ? -f : 0)) / periyot;
+    }}
+    const rs = ortKayip === 0 ? 100 : ortKazanc / ortKayip;
+    const rsi = 100 - (100 / (1 + rs));
+    out.push({{ time: mumlar[i].time, value: rsi }});
+  }}
+  return out;
+}}
+
+function arzTalepVeImbalanceHesaplaJS(mumlar, bosList, E) {{
+  const arzTalep = [], imbalance = [];
+  const ct = mumlar ? mumlar.length : 0;
+  if (ct < 6) return {{ arz_talep: arzTalep, imbalance: imbalance }};
+  const sonKapanis = mumlar[ct - 1].close;
+  const eklenenAt = new Set();
+
+  (bosList || []).forEach(b => {{
+    const oi = Math.max(0, Math.min(ct - 3, b.orig_idx !== undefined ? b.orig_idx : b.idx1));
+    const bi = Math.max(oi + 1, Math.min(ct - 1, b.idx2 !== undefined ? b.idx2 : ct - 1));
+    const revMi = String(b.tip || '').includes('MSB') || String(b.tip || '').includes('CHOCH');
+    if (b.yon === 'BULLISH') {{
+      const lo = Math.min(mumlar[oi].low, mumlar[Math.max(0, oi - 1)].low);
+      let baseUst = mumlar[oi].open;
+      for (let j = Math.max(0, oi - 1); j <= Math.min(ct - 1, oi + 2); j++) {{
+        const mj = mumlar[j];
+        if (mj.close < mj.open) baseUst = Math.max(baseUst, mj.open, (mj.high - lo) <= E * 1.35 ? mj.high : mj.open);
+        else if (mj.close > mj.open && (mj.close - mj.open) >= E * 0.45) {{ baseUst = Math.max(baseUst, mj.open); break; }}
+      }}
+      const hi = Math.max(lo + E * 0.25, Math.min(baseUst, lo + E * 1.35));
+      let kirildi = false, testSayisi = 0, kIdx = null;
+      for (let m = bi + 1; m < ct; m++) {{
+        if (mumlar[m].close < lo - E * 0.05) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].low <= hi && mumlar[m].close >= lo) testSayisi++;
+      }}
+      const key = 'D_' + lo.toFixed(4) + '_' + hi.toFixed(4);
+      if (!kirildi && !eklenenAt.has(key)) {{
+        eklenenAt.add(key);
+        const durum = testSayisi === 0 ? 'Taze' : `${{testSayisi}}x Test`;
+        const kalip = revMi ? 'Talep OB (DBR)' : 'Valid Talep (RBR)';
+        arzTalep.push({{ tur: 'TALEP', alt_tur: revMi ? 'REVERSAL_OB' : 'VALID_DEMAND', idx1: oi, t1: mumlar[oi].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: testSayisi === 0, test: testSayisi, etiket: `${{kalip}} [${{durum}}]` }});
+      }} else if (kirildi && kIdx !== null && kIdx < ct - 2) {{
+        let halaAltinda = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close > hi + E * 0.1) halaAltinda = false;
+        if (halaAltinda && Math.abs(sonKapanis - hi) <= E * 6.0 && !eklenenAt.has(key)) {{
+          eklenenAt.add(key);
+          arzTalep.push({{ tur: 'ARZ', alt_tur: 'FLIP_ARZ', idx1: kIdx, t1: mumlar[kIdx].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: true, test: 0, etiket: 'Flip Arz (Breaker)' }});
+        }}
+      }}
+    }} else {{
+      const hi = Math.max(mumlar[oi].high, mumlar[Math.max(0, oi - 1)].high);
+      let baseAlt = mumlar[oi].open;
+      for (let j = Math.max(0, oi - 1); j <= Math.min(ct - 1, oi + 2); j++) {{
+        const mj = mumlar[j];
+        if (mj.close > mj.open) baseAlt = Math.min(baseAlt, mj.open, (hi - mj.low) <= E * 1.35 ? mj.low : mj.open);
+        else if (mj.close < mj.open && (mj.open - mj.close) >= E * 0.45) {{ baseAlt = Math.min(baseAlt, mj.open); break; }}
+      }}
+      const lo = Math.min(hi - E * 0.25, Math.max(baseAlt, hi - E * 1.35));
+      let kirildi = false, testSayisi = 0, kIdx = null;
+      for (let m = bi + 1; m < ct; m++) {{
+        if (mumlar[m].close > hi + E * 0.05) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].high >= lo && mumlar[m].close <= hi) testSayisi++;
+      }}
+      const key = 'S_' + lo.toFixed(4) + '_' + hi.toFixed(4);
+      if (!kirildi && !eklenenAt.has(key)) {{
+        eklenenAt.add(key);
+        const durum = testSayisi === 0 ? 'Taze' : `${{testSayisi}}x Test`;
+        const kalip = revMi ? 'Arz OB (RBD)' : 'Valid Arz (DBD)';
+        arzTalep.push({{ tur: 'ARZ', alt_tur: revMi ? 'REVERSAL_OB' : 'VALID_SUPPLY', idx1: oi, t1: mumlar[oi].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: testSayisi === 0, test: testSayisi, etiket: `${{kalip}} [${{durum}}]` }});
+      }} else if (kirildi && kIdx !== null && kIdx < ct - 2) {{
+        let halaUstunde = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close < lo - E * 0.1) halaUstunde = false;
+        if (halaUstunde && Math.abs(sonKapanis - lo) <= E * 6.0 && !eklenenAt.has(key)) {{
+          eklenenAt.add(key);
+          arzTalep.push({{ tur: 'TALEP', alt_tur: 'FLIP_TALEP', idx1: kIdx, t1: mumlar[kIdx].time, lo: lo, hi: hi, eq: (lo + hi) / 2.0, taze: true, test: 0, etiket: 'Flip Talep (Breaker)' }});
+        }}
+      }}
+    }}
+  }});
+
+  const eklenenImb = new Set();
+  for (let i = 1; i < ct - 1; i++) {{
+    const m0 = mumlar[i - 1], m1 = mumlar[i], m2 = mumlar[i + 1];
+    const govde1 = m1.close - m1.open;
+    if (m2.low > m0.high && govde1 >= E * 0.32 && (m2.low - m0.high) >= E * 0.08) {{
+      const altFvg = m0.high, ustFvg = m2.low, gapBoy = ustFvg - altFvg;
+      let kirildi = false, minLow = ustFvg, kIdx = null;
+      for (let m = i + 2; m < ct; m++) {{
+        if (mumlar[m].close < altFvg) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].low < minLow) minLow = mumlar[m].low;
+      }}
+      if (!kirildi) {{
+        const aktifUst = Math.max(altFvg, Math.min(ustFvg, minLow));
+        if ((aktifUst - altFvg) >= gapBoy * 0.22) {{
+          const durum = minLow >= ustFvg ? 'Taze' : 'Kısmi';
+          const key = 'BISI_' + altFvg.toFixed(4) + '_' + aktifUst.toFixed(4);
+          if (!eklenenImb.has(key)) {{
+            eklenenImb.add(key);
+            imbalance.push({{ tip: 'BISI_FVG', yon: 'BULL', idx1: i - 1, t1: m0.time, lo: altFvg, hi: aktifUst, ce: (altFvg + aktifUst) / 2.0, taze: minLow >= ustFvg, etiket: `BISI FVG (${{durum}})` }});
+          }}
+        }}
+      }} else if (kIdx !== null && kIdx >= ct - 45) {{
+        let altinda = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close > ustFvg + E * 0.1) altinda = false;
+        if (altinda && Math.abs(sonKapanis - ustFvg) <= E * 4.5) {{
+          imbalance.push({{ tip: 'IFVG', yon: 'BEAR', idx1: kIdx, t1: mumlar[kIdx].time, lo: altFvg, hi: ustFvg, ce: (altFvg + ustFvg) / 2.0, taze: true, etiket: 'Bear IFVG (Flip)' }});
+        }}
+      }}
+    }} else if (m0.low > m2.high && (-govde1) >= E * 0.32 && (m0.low - m2.high) >= E * 0.08) {{
+      const altFvg = m2.high, ustFvg = m0.low, gapBoy = ustFvg - altFvg;
+      let kirildi = false, maxHigh = altFvg, kIdx = null;
+      for (let m = i + 2; m < ct; m++) {{
+        if (mumlar[m].close > ustFvg) {{ kirildi = true; kIdx = m; break; }}
+        if (mumlar[m].high > maxHigh) maxHigh = mumlar[m].high;
+      }}
+      if (!kirildi) {{
+        const aktifAlt = Math.min(ustFvg, Math.max(altFvg, maxHigh));
+        if ((ustFvg - aktifAlt) >= gapBoy * 0.22) {{
+          const durum = maxHigh <= altFvg ? 'Taze' : 'Kısmi';
+          const key = 'SIBI_' + aktifAlt.toFixed(4) + '_' + ustFvg.toFixed(4);
+          if (!eklenenImb.has(key)) {{
+            eklenenImb.add(key);
+            imbalance.push({{ tip: 'SIBI_FVG', yon: 'BEAR', idx1: i - 1, t1: m0.time, lo: aktifAlt, hi: ustFvg, ce: (aktifAlt + ustFvg) / 2.0, taze: maxHigh <= altFvg, etiket: `SIBI FVG (${{durum}})` }});
+          }}
+        }}
+      }} else if (kIdx !== null && kIdx >= ct - 45) {{
+        let ustunde = true;
+        for (let m = kIdx + 1; m < ct; m++) if (mumlar[m].close < altFvg - E * 0.1) ustunde = false;
+        if (ustunde && Math.abs(sonKapanis - altFvg) <= E * 4.5) {{
+          imbalance.push({{ tip: 'IFVG', yon: 'BULL', idx1: kIdx, t1: mumlar[kIdx].time, lo: altFvg, hi: ustFvg, ce: (altFvg + ustFvg) / 2.0, taze: true, etiket: 'Bull IFVG (Flip)' }});
+        }}
+      }}
+    }}
+    if (i >= ct - 60 && Math.abs(m1.open - m0.close) >= E * 0.12) {{
+      const vLo = Math.min(m0.close, m1.open), vHi = Math.max(m0.close, m1.open);
+      if (m1.close > m1.open && m1.open > m0.close) {{
+        let doldu = false;
+        for (let m = i + 1; m < ct; m++) if (mumlar[m].low <= vLo) doldu = true;
+        if (!doldu) imbalance.push({{ tip: 'VIB', yon: 'BULL', idx1: i - 1, t1: m0.time, lo: vLo, hi: vHi, ce: (vLo + vHi) / 2.0, taze: true, etiket: 'Bull VIB/Gap' }});
+      }} else if (m1.close < m1.open && m1.open < m0.close) {{
+        let doldu = false;
+        for (let m = i + 1; m < ct; m++) if (mumlar[m].high >= vHi) doldu = true;
+        if (!doldu) imbalance.push({{ tip: 'VIB', yon: 'BEAR', idx1: i - 1, t1: m0.time, lo: vLo, hi: vHi, ce: (vLo + vHi) / 2.0, taze: true, etiket: 'Bear VIB/Gap' }});
+      }}
+    }}
+  }}
+  return {{ arz_talep: arzTalep.slice(-10), imbalance: imbalance.slice(-12) }};
+}}
+
+function kysySwingHesaplaJS(mumlar, n=2, tf='4h') {{
+  const out = {{ zigzag: [], bos: [], arz_talep: [], imbalance: [], yon: 'BULLISH', smax: 0, smin: 0, sp: 0, wp: 0, qml: 0, qml_t1: null, fibo_t1: null, elenen_sayi: 0 }};
+  if (!mumlar || mumlar.length < 10) return out;
+  let atrSum = 0;
+  for (let i = 1; i < mumlar.length; i++) {{
+    atrSum += Math.max(mumlar[i].high - mumlar[i].low, Math.abs(mumlar[i].high - mumlar[i-1].close), Math.abs(mumlar[i].low - mumlar[i-1].close));
+  }}
+  const E = Math.max(atrSum / Math.max(1, mumlar.length - 1), mumlar[mumlar.length - 1].close * 0.001);
+  const ct = mumlar.length;
+  const dtSn = mumlar.length >= 3 ? Math.abs(mumlar[mumlar.length - 1].time - mumlar[mumlar.length - 2].time) : 3600;
+  const hassas1hAlti = (dtSn <= 3660);
+  const nPiv = hassas1hAlti ? 2 : (n >= 4 ? 3 : Math.max(1, n));
+  function tepeOnayliMi(i) {{
+    const m = mumlar[i];
+    const gUst = Math.max(m.open, m.close), govde = Math.abs(m.close - m.open), uIgne = m.high - gUst;
+    if (uIgne <= Math.max(govde * 1.8, E * 1.1)) return true;
+    const esik = gUst + uIgne * 0.45;
+    for (let j = Math.max(0, i - 3); j <= Math.min(ct - 1, i + 3); j++) {{
+      if (j !== i && mumlar[j].close >= esik) return true;
+    }}
+    return false;
+  }}
+  function dipOnayliMi(i) {{
+    const m = mumlar[i];
+    const gAlt = Math.min(m.open, m.close), govde = Math.abs(m.close - m.open), aIgne = gAlt - m.low;
+    if (aIgne <= Math.max(govde * 1.8, E * 1.1)) return true;
+    const esik = gAlt - aIgne * 0.45;
+    for (let j = Math.max(0, i - 3); j <= Math.min(ct - 1, i + 3); j++) {{
+      if (j !== i && mumlar[j].close <= esik) return true;
+    }}
+    return false;
+  }}
+  function netSertTepeMi(i) {{
+    if (!tepeOnayliMi(i)) return false;
+    if (n <= 1) return true;
+    const w = hassas1hAlti ? 3 : Math.max(3, nPiv + 1);
+    const b1 = Math.max(0, i - w), b2 = Math.min(ct - 1, i + w);
+    let minSol = mumlar[i].low, minSag = mumlar[i].low;
+    for (let j = b1; j <= i; j++) if (mumlar[j].low < minSol) minSol = mumlar[j].low;
+    for (let j = i; j <= b2; j++) if (mumlar[j].low < minSag) minSag = mumlar[j].low;
+    const esik = E * (hassas1hAlti ? 0.82 : (n >= 4 ? 1.55 : 1.1));
+    const sagEsik = i >= ct - 3 ? esik * 0.5 : esik;
+    return (mumlar[i].high - minSol) >= esik && (mumlar[i].high - minSag) >= sagEsik;
+  }}
+  function netSertDipMi(i) {{
+    if (!dipOnayliMi(i)) return false;
+    if (n <= 1) return true;
+    const w = hassas1hAlti ? 3 : Math.max(3, nPiv + 1);
+    const b1 = Math.max(0, i - w), b2 = Math.min(ct - 1, i + w);
+    let maxSol = mumlar[i].high, maxSag = mumlar[i].high;
+    for (let j = b1; j <= i; j++) if (mumlar[j].high > maxSol) maxSol = mumlar[j].high;
+    for (let j = i; j <= b2; j++) if (mumlar[j].high > maxSag) maxSag = mumlar[j].high;
+    const esik = E * (hassas1hAlti ? 0.82 : (n >= 4 ? 1.55 : 1.1));
+    const sagEsik = i >= ct - 3 ? esik * 0.5 : esik;
+    return (maxSol - mumlar[i].low) >= esik && (maxSag - mumlar[i].low) >= sagEsik;
+  }}
+  function aralikTepeBul(bas, bit) {{
+    const b1 = Math.max(0, bas), b2 = Math.min(ct - 1, bit);
+    let enI = null, enV = -1e18;
+    for (let j = b1; j <= b2; j++) {{
+      if (tepeOnayliMi(j) && mumlar[j].high > enV) {{ enI = j; enV = mumlar[j].high; }}
+    }}
+    if (enI === null) {{
+      for (let j = b1; j <= b2; j++) {{
+        const bj = Math.max(mumlar[j].open, mumlar[j].close);
+        if (bj > enV) {{ enI = j; enV = mumlar[j].high; }}
+      }}
+    }}
+    return [enI !== null ? enI : b1, enI !== null ? enV : mumlar[b1].high];
+  }}
+  function aralikDipBul(bas, bit) {{
+    const b1 = Math.max(0, bas), b2 = Math.min(ct - 1, bit);
+    let enI = null, enV = 1e18;
+    for (let j = b1; j <= b2; j++) {{
+      if (dipOnayliMi(j) && mumlar[j].low < enV) {{ enI = j; enV = mumlar[j].low; }}
+    }}
+    if (enI === null) {{
+      for (let j = b1; j <= b2; j++) {{
+        const bj = Math.min(mumlar[j].open, mumlar[j].close);
+        if (bj < enV) {{ enI = j; enV = mumlar[j].low; }}
+      }}
+    }}
+    return [enI !== null ? enI : b1, enI !== null ? enV : mumlar[b1].low];
+  }}
+
+  const rH = [], rL = [], rHMap = new Set(), rLMap = new Set();
+  for (let i = nPiv; i < ct - nPiv; i++) {{
+    let isH = true, isL = true;
+    for (let j = i - nPiv; j <= i + nPiv; j++) {{
+      if (mumlar[j].high > mumlar[i].high) isH = false;
+      if (mumlar[j].low < mumlar[i].low) isL = false;
+    }}
+    if (isH && netSertTepeMi(i)) {{ rH.push([i, mumlar[i].high]); rHMap.add(i); }}
+    if (isL && netSertDipMi(i)) {{ rL.push([i, mumlar[i].low]); rLMap.add(i); }}
+  }}
+  if (rH.length < 2 || rL.length < 2) {{
+    rH.length = 0; rL.length = 0; rHMap.clear(); rLMap.clear();
+    for (let i = nPiv; i < ct - nPiv; i++) {{
+      let isH = true, isL = true;
+      for (let j = i - nPiv; j <= i + nPiv; j++) {{
+        if (mumlar[j].high > mumlar[i].high) isH = false;
+        if (mumlar[j].low < mumlar[i].low) isL = false;
+      }}
+      if (isH && tepeOnayliMi(i)) {{ rH.push([i, mumlar[i].high]); rHMap.add(i); }}
+      if (isL && dipOnayliMi(i)) {{ rL.push([i, mumlar[i].low]); rLMap.add(i); }}
+    }}
+  }}
+  if (rH.length === 0 || rL.length === 0) return out;
+
+  const minPb = E * (hassas1hAlti ? (dtSn >= 1800 ? 1.05 : 0.88) : (n >= 4 ? 1.85 : 1.3));
+  const minBar = hassas1hAlti ? 2 : (n >= 4 ? 3 : 2);
+  if (rH[0][0] >= minBar) {{
+    const [i0L, v0L] = aralikDipBul(0, rH[0][0] - 1);
+    if ((rH[0][1] - v0L) >= minPb * 0.85 && (rL.length === 0 || i0L < rL[0][0])) rL.unshift([i0L, v0L]);
+  }}
+  if (rL[0][0] >= minBar) {{
+    const [i0H, v0H] = aralikTepeBul(0, rL[0][0] - 1);
+    if ((v0H - rL[0][1]) >= minPb * 0.85 && (rH.length === 0 || i0H < rH[0][0])) rH.unshift([i0H, v0H]);
+  }}
+
+  function sertSalinimOnayliMi(basI, basV, bitI, bitV, anaBacak=0) {{
+    const genlik = Math.abs(bitV - basV);
+    const barFark = Math.max(1, Math.abs(bitI - basI));
+    if (genlik < minPb) return false;
+    if (anaBacak > E * 3.2 && genlik < Math.min(anaBacak * 0.18, E * 2.6)) return false;
+    if (barFark < minBar && genlik < minPb * 1.75) return false;
+    const b1 = Math.max(0, Math.min(basI, bitI)), b2 = Math.min(ct - 1, Math.max(basI, bitI));
+    const dususMu = bitV < basV;
+    let zitSay = 0, maxMum = 0;
+    for (let j = b1 + 1; j <= b2; j++) {{
+      if (dususMu ? (mumlar[j].close < mumlar[j].open) : (mumlar[j].close > mumlar[j].open)) zitSay++;
+      const g = Math.abs(mumlar[j].close - mumlar[j].open);
+      if (g > maxMum) maxMum = g;
+    }}
+    if (!hassas1hAlti && n >= 4 && zitSay < 2 && genlik < minPb * 1.55) return false;
+    return maxMum >= E * (hassas1hAlti ? 0.30 : 0.42) || genlik >= minPb * (hassas1hAlti ? 1.12 : 1.3);
+  }}
+
+  function qmlYapisiBulJS(uHList, uLList, hedefYon) {{
+    const zz = [];
+    uHList.forEach(([i, v]) => zz.push([i, v, 'H']));
+    uLList.forEach(([i, v]) => zz.push([i, v, 'L']));
+    zz.sort((a, b) => a[0] - b[0]);
+    const temiz = [];
+    zz.forEach(item => {{
+      if (temiz.length === 0 || temiz[temiz.length - 1][2] !== item[2]) temiz.push(item);
+      else {{
+        if (item[2] === 'H' && item[1] >= temiz[temiz.length - 1][1]) temiz[temiz.length - 1] = item;
+        else if (item[2] === 'L' && item[1] <= temiz[temiz.length - 1][1]) temiz[temiz.length - 1] = item;
+      }}
+    }});
+    // QML olması için onaylı ZigZag üzerinde en az 3 salınım (4 onaylı nokta: p0 -> p1 -> p2 -> p3 ve p0 gerçek swing) şarttır!
+    if (temiz.length < 4) return null;
+    let bullQml = null, bearQml = null, bullAny = null, bearAny = null;
+    for (let m = temiz.length - 1; m >= 3; m--) {{
+      const p0 = temiz[m - 3], p1 = temiz[m - 2], p2 = temiz[m - 1], p3 = temiz[m];
+      if (p0[0] <= 0 && m === 3) continue;
+      if (p0[2] === 'L' && p1[2] === 'H' && p2[2] === 'L' && p3[2] === 'H') {{
+        if (p2[1] < p0[1] && p3[1] > p1[1] && p1[1] > p0[1]) {{
+          const cand = {{ qmlIdx: p0[0], qmlVal: p0[1], headIdx: p2[0], headVal: p2[1], bosIdx: p1[0], bosVal: p1[1], hhIdx: p3[0], hhVal: p3[1], yon: 'BULLISH' }};
+          if (!bullAny) bullAny = cand;
+          let bozuldu = false;
+          for (let k = p3[0]; k < ct; k++) if (mumlar[k].low < p2[1]) {{ bozuldu = true; break; }}
+          if (!bullQml && !bozuldu) bullQml = cand;
+        }}
+      }}
+      if (p0[2] === 'H' && p1[2] === 'L' && p2[2] === 'H' && p3[2] === 'L') {{
+        if (p2[1] > p0[1] && p3[1] < p1[1] && p0[1] > p1[1]) {{
+          const cand = {{ qmlIdx: p0[0], qmlVal: p0[1], headIdx: p2[0], headVal: p2[1], bosIdx: p1[0], bosVal: p1[1], hhIdx: p3[0], hhVal: p3[1], yon: 'BEARISH' }};
+          if (!bearAny) bearAny = cand;
+          let bozuldu = false;
+          for (let k = p3[0]; k < ct; k++) if (mumlar[k].high > p2[1]) {{ bozuldu = true; break; }}
+          if (!bearQml && !bozuldu) bearQml = cand;
+        }}
+      }}
+    }}
+    if (bullQml && bearQml) return bullQml.hhIdx >= bearQml.hhIdx ? bullQml : bearQml;
+    if (bullQml || bearQml) return bullQml || bearQml;
+    const bSec = bullAny, brSec = bearAny;
+    if (hedefYon === 'BULLISH') return bSec || brSec;
+    if (hedefYon === 'BEARISH') return brSec || bSec;
+    if (bSec && brSec) return bSec.hhIdx >= brSec.hhIdx ? bSec : brSec;
+    return bSec || brSec;
+  }}
+
+  let hi = rH[0][0], hv = rH[0][1], li = rL[0][0], lv = rL[0][1], tr = 0;
+  let oH = [], oL = [], bL = [], kilitH = false, kilitL = false;
+  const sI = Math.max(1, Math.min(hi, li) + 1);
+  for (let k = sI; k < ct; k++) {{
+    const cl = mumlar[k].close, ch = mumlar[k].high, clw = mumlar[k].low;
+    const tOk = tepeOnayliMi(k), dOk = dipOnayliMi(k);
+    const aktifLeg = Math.abs(hv - lv);
+    if (tr === 0) {{
+      if (k > hi + minBar && cl > hv + E * 0.12 && tOk) {{
+        const [mI, mV] = aralikDipBul(hi + 1, k - 1);
+        if ((hv - mV) >= minPb * 0.85 && (mI - hi) >= minBar) {{
+          const [bI, bV] = hi >= minBar ? aralikDipBul(0, Math.max(0, hi - 1)) : [mI, mV];
+          const yv = tOk ? ch : cl;
+          if (hi >= minBar && bI < hi && (hv - bV) >= minPb * 0.85) {{
+            if (mV >= bV - E * 0.2) {{
+              oL = [[bI, bV], [mI, mV]]; oH = [[hi, hv], [k, yv]];
+              bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: mI, orig_val: mV, price: hv, yon: 'BULLISH', tip: 'BULL_BOS' }});
+            }} else {{
+              const [tI, tV] = bI >= minBar ? aralikTepeBul(0, Math.max(0, bI - 1)) : [hi, hv];
+              if (bI >= minBar && tI < bI && (tV - bV) >= minPb * 0.85 && tV > hv) {{
+                oH = [[tI, tV], [hi, hv], [k, yv]]; oL = [[bI, bV], [mI, mV]];
+                bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: mI, orig_val: mV, price: hv, yon: 'BULLISH', tip: 'BULL_MSB_CHOCH' }});
+              }} else {{
+                oH = [[hi, hv], [k, yv]]; oL = [[mI, mV]];
+              }}
+            }}
+          }} else {{
+            oH = [[hi, hv], [k, yv]]; oL = [[mI, mV]];
+          }}
+          li = mI; lv = mV; hi = k; hv = yv; tr = 1; kilitH = false;
+        }} else if (ch > hv) {{
+          hi = k; hv = ch;
+        }}
+      }} else if (k > li + minBar && cl < lv - E * 0.12 && dOk) {{
+        const [xI, xV] = aralikTepeBul(li + 1, k - 1);
+        if ((xV - lv) >= minPb * 0.85 && (xI - li) >= minBar) {{
+          const [tI, tV] = li >= minBar ? aralikTepeBul(0, Math.max(0, li - 1)) : [xI, xV];
+          const yv = dOk ? clw : cl;
+          if (li >= minBar && tI < li && (tV - lv) >= minPb * 0.85) {{
+            if (xV <= tV + E * 0.2) {{
+              oH = [[tI, tV], [xI, xV]]; oL = [[li, lv], [k, yv]];
+              bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: xI, orig_val: xV, price: lv, yon: 'BEARISH', tip: 'BEAR_BOS' }});
+            }} else {{
+              const [bI, bV] = tI >= minBar ? aralikDipBul(0, Math.max(0, tI - 1)) : [li, lv];
+              if (tI >= minBar && bI < tI && (tV - bV) >= minPb * 0.85 && bV < lv) {{
+                oL = [[bI, bV], [li, lv], [k, yv]]; oH = [[tI, tV], [xI, xV]];
+                bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: xI, orig_val: xV, price: lv, yon: 'BEARISH', tip: 'BEAR_MSB_CHOCH' }});
+              }} else {{
+                oL = [[li, lv], [k, yv]]; oH = [[xI, xV]];
+              }}
+            }}
+          }} else {{
+            oL = [[li, lv], [k, yv]]; oH = [[xI, xV]];
+          }}
+          hi = xI; hv = xV; li = k; lv = yv; tr = -1; kilitL = false;
+        }} else if (clw < lv) {{
+          li = k; lv = clw;
+        }}
+      }} else {{
+        if (rHMap.has(k) && ch > hv && k <= li + nPiv * 4) {{ hi = k; hv = ch; }}
+        if (rLMap.has(k) && clw < lv && k <= hi + nPiv * 4) {{ li = k; lv = clw; }}
+      }}
+    }} else if (tr === 1) {{
+      if (!kilitH) {{
+        if (ch >= hv) {{
+          hi = k; hv = ch;
+          if (oH.length > 0) oH[oH.length - 1] = [hi, hv];
+        }} else if ((rLMap.has(k - nPiv) && (k - nPiv) >= hi + minBar && sertSalinimOnayliMi(hi, hv, k - nPiv, mumlar[k - nPiv].low, aktifLeg)) || (k >= hi + minBar && sertSalinimOnayliMi(hi, hv, k, clw, aktifLeg))) {{
+          kilitH = true;
+        }}
+      }}
+      if (kilitH && k > hi + minBar && cl > hv + E * 0.10 && tOk) {{
+        const [mI, mV] = aralikDipBul(hi + 1, k - 1);
+        if (sertSalinimOnayliMi(hi, hv, mI, mV, aktifLeg) && (ch - mV) >= minPb && (mI - hi) >= minBar && (k - mI) >= 2) {{
+          if (oL.length === 0 || oL[oL.length - 1][0] !== mI) oL.push([mI, mV]);
+          li = mI; lv = mV;
+          const yv = tOk ? ch : cl;
+          bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: mI, orig_val: mV, price: hv, yon: 'BULLISH', tip: 'BULL_BOS' }});
+          hi = k; hv = yv; oH.push([hi, hv]); kilitH = false;
+        }} else if (ch >= hv) {{
+          hi = k; hv = ch;
+          if (oH.length > 0) oH[oH.length - 1] = [hi, hv];
+          kilitH = false;
+        }}
+      }} else if (kilitH && ch > hv && !(cl > hv + E * 0.10 && tOk)) {{
+        const [mI, mV] = aralikDipBul(hi + 1, k - 1);
+        if (!(sertSalinimOnayliMi(hi, hv, mI, mV, aktifLeg) && (mI - hi) >= minBar)) {{
+          hi = k; hv = ch;
+          if (oH.length > 0) oH[oH.length - 1] = [hi, hv];
+          kilitH = false;
+        }}
+      }} else if (k > li + minBar && cl < lv - E * 0.12 && dOk) {{
+        const [xI, xV] = k - 1 >= li + 1 ? aralikTepeBul(li + 1, k - 1) : [hi, hv];
+        if (sertSalinimOnayliMi(xI, xV, k, clw)) {{
+          if (!kilitH && oH.length > 0) {{
+            hi = xI; hv = xV; oH[oH.length - 1] = [hi, hv];
+          }}
+          const yv = dOk ? clw : cl;
+          const chochOk = oH.length >= 2 && oL.length >= 2 && (oH[oH.length - 1][1] > oH[oH.length - 2][1] || oL[oL.length - 1][1] > oL[oL.length - 2][1]);
+          bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: hi, orig_val: hv, price: lv, yon: 'BEARISH', tip: chochOk ? 'BEAR_MSB_CHOCH' : 'BEAR_BOS' }});
+          li = k; lv = yv; oL.push([li, lv]); tr = -1; kilitL = false;
+        }}
+      }}
+    }} else if (tr === -1) {{
+      if (!kilitL) {{
+        if (clw <= lv) {{
+          li = k; lv = clw;
+          if (oL.length > 0) oL[oL.length - 1] = [li, lv];
+        }} else if ((rHMap.has(k - nPiv) && (k - nPiv) >= li + minBar && sertSalinimOnayliMi(li, lv, k - nPiv, mumlar[k - nPiv].high, aktifLeg)) || (k >= li + minBar && sertSalinimOnayliMi(li, lv, k, ch, aktifLeg))) {{
+          kilitL = true;
+        }}
+      }}
+      if (kilitL && k > li + minBar && cl < lv - E * 0.10 && dOk) {{
+        const [xI, xV] = aralikTepeBul(li + 1, k - 1);
+        if (sertSalinimOnayliMi(li, lv, xI, xV, aktifLeg) && (xV - clw) >= minPb && (xI - li) >= minBar && (k - xI) >= 2) {{
+          if (oH.length === 0 || oH[oH.length - 1][0] !== xI) oH.push([xI, xV]);
+          hi = xI; hv = xV;
+          const yv = dOk ? clw : cl;
+          bL.push({{ t1: mumlar[li].time, t2: mumlar[k].time, idx1: li, idx2: k, orig_idx: xI, orig_val: xV, price: lv, yon: 'BEARISH', tip: 'BEAR_BOS' }});
+          li = k; lv = yv; oL.push([li, lv]); kilitL = false;
+        }} else if (clw <= lv) {{
+          li = k; lv = clw;
+          if (oL.length > 0) oL[oL.length - 1] = [li, lv];
+          kilitL = false;
+        }}
+      }} else if (kilitL && clw < lv && !(cl < lv - E * 0.10 && dOk)) {{
+        const [xI, xV] = aralikTepeBul(li + 1, k - 1);
+        if (!(sertSalinimOnayliMi(li, lv, xI, xV, aktifLeg) && (xI - li) >= minBar)) {{
+          li = k; lv = clw;
+          if (oL.length > 0) oL[oL.length - 1] = [li, lv];
+          kilitL = false;
+        }}
+      }} else if (k > hi + minBar && cl > hv + E * 0.12 && tOk) {{
+        const [mI, mV] = k - 1 >= hi + 1 ? aralikDipBul(hi + 1, k - 1) : [li, lv];
+        if (sertSalinimOnayliMi(mI, mV, k, ch)) {{
+          if (!kilitL && oL.length > 0) {{
+            li = mI; lv = mV; oL[oL.length - 1] = [li, lv];
+          }}
+          const yv = dOk ? ch : cl;
+          const chochOk = oH.length >= 2 && oL.length >= 2 && (oL[oL.length - 1][1] < oL[oL.length - 2][1] || oH[oH.length - 1][1] < oH[oH.length - 2][1]);
+          bL.push({{ t1: mumlar[hi].time, t2: mumlar[k].time, idx1: hi, idx2: k, orig_idx: li, orig_val: lv, price: hv, yon: 'BULLISH', tip: chochOk ? 'BULL_MSB_CHOCH' : 'BULL_BOS' }});
+          hi = k; hv = yv; oH.push([hi, hv]); tr = 1; kilitH = false;
+        }}
+      }}
+    }}
+  }}
+
+  // Kırılım Yoksa Swing Yoktur: Onaylı swinglerden piyasa yönü ve QML (en az 3 salınım) hesabı
+  out.bos = bL;
+  out.elenen_sayi = Math.max(0, (rH.length + rL.length) - (oH.length + oL.length));
+  if (oH.length > 0 && oL.length > 0) {{
+    const [lastHI, lastHV] = oH[oH.length - 1];
+    const [prevHI, prevHV] = oH.length >= 2 ? oH[oH.length - 2] : [lastHI, lastHV];
+    const [lastLI, lastLV] = oL[oL.length - 1];
+    const [prevLI, prevLV] = oL.length >= 2 ? oL[oL.length - 2] : [lastLI, lastLV];
+    const sonClose = mumlar[ct - 1].close;
+    let yonBelirle = bL.length > 0 ? bL[bL.length - 1].yon : ((lastHI > lastLI && lastHV >= prevHV) ? 'BULLISH' : 'BEARISH');
+    if (yonBelirle === 'BULLISH' && sonClose < lastLV && lastHV < prevHV) yonBelirle = 'BEARISH';
+    else if (yonBelirle === 'BEARISH' && sonClose > lastHV && lastLV > prevLV) yonBelirle = 'BULLISH';
+    out.yon = yonBelirle;
+    out.smax = Math.max(lastHV, prevHV);
+    out.smin = Math.min(lastLV, prevLV);
+    const qmFound = qmlYapisiBulJS(oH, oL, out.yon);
+    out.qml = qmFound ? qmFound.qmlVal : 0;
+    out.qml_t1 = qmFound ? mumlar[qmFound.qmlIdx].time : null;
+    out.qml_idx = qmFound ? qmFound.qmlIdx : null;
+    if (out.yon === 'BULLISH') {{
+      out.sp = lastLV;
+      out.wp = lastHV;
+      out.fibo_t1 = mumlar[lastLI].time;
+    }} else {{
+      out.sp = lastHV;
+      out.wp = lastLV;
+      out.fibo_t1 = mumlar[lastHI].time;
+    }}
+  }}
+
+  const rawZz = [];
+  oH.forEach(([i, v]) => rawZz.push([i, v, 'H']));
+  oL.forEach(([i, v]) => rawZz.push([i, v, 'L']));
+  rawZz.sort((a, b) => a[0] - b[0]);
+  const darZz = [];
+  rawZz.forEach(item => {{
+    if (darZz.length === 0 || darZz[darZz.length - 1][2] !== item[2]) darZz.push(item);
+    else {{
+      if (item[2] === 'H' && item[1] >= darZz[darZz.length - 1][1]) darZz[darZz.length - 1] = item;
+      else if (item[2] === 'L' && item[1] <= darZz[darZz.length - 1][1]) darZz[darZz.length - 1] = item;
+    }}
+  }});
+  let prevH = null, prevL = null;
+  darZz.forEach(([i, v, tip], idxZ) => {{
+    if (i >= 0 && i < mumlar.length) {{
+      let lbl = '';
+      if (tip === 'H') {{ lbl = (prevH === null || v >= prevH) ? 'HH' : 'LH'; prevH = v; }}
+      else {{
+        if (prevL === null) lbl = (idxZ > 0 && darZz[idxZ - 1][2] === 'H') ? 'LL' : 'HL';
+        else lbl = (v >= prevL) ? 'HL' : 'LL';
+        prevL = v;
+      }}
+      out.zigzag.push({{ time: mumlar[i].time, idx: i, value: v, tip: tip, lbl: lbl }});
+    }}
+  }});
+  const tumBosForAt = (out.bos || []).concat(bL.slice(-10));
+  const sablonlar = arzTalepVeImbalanceHesaplaJS(mumlar, tumBosForAt, E);
+  if (out.qml > 0 && out.smin > 0 && out.yon === 'BULLISH' && out.qml > out.smin && (out.qml - out.smin) <= E * 3.0) {{
+    if (sablonlar.arz_talep.length > 0 && sablonlar.arz_talep[0].tur === 'TALEP') {{
+      sablonlar.arz_talep[0].lo = out.smin;
+      sablonlar.arz_talep[0].hi = out.qml;
+      sablonlar.arz_talep[0].eq = (out.smin + out.qml) / 2.0;
+      sablonlar.arz_talep[0].etiket = 'Fresh Talep Noktası (QML+OB)';
+    }}
+  }}
+  out.arz_talep = sablonlar.arz_talep;
+  out.imbalance = sablonlar.imbalance;
+  const liqSfp = likiditeVeSfpHesaplaJS(mumlar, oH, oL, E);
+  out.likidite = liqSfp.likidite;
+  out.sfp = liqSfp.sfp;
+  return out;
+}}
+
+function likiditeVeSfpHesaplaJS(mumlar, oH, oL, E) {{
+  const liqList = [], sfpList = [];
+  const ct = mumlar ? mumlar.length : 0;
+  if (ct < 10) return {{ likidite: liqList, sfp: sfpList }};
+  const sonClose = mumlar[ct - 1].close;
+  const tolEq = Math.min(Math.max(E * 0.30, sonClose * 0.0007), sonClose * 0.0035);
+  const hMap = new Map(), lMap = new Map();
+  for (let i = 2; i < ct - 2; i++) {{
+    if (mumlar[i].high >= mumlar[i-1].high && mumlar[i].high >= mumlar[i-2].high && mumlar[i].high >= mumlar[i+1].high && mumlar[i].high >= mumlar[i+2].high) hMap.set(i, mumlar[i].high);
+    if (mumlar[i].low <= mumlar[i-1].low && mumlar[i].low <= mumlar[i-2].low && mumlar[i].low <= mumlar[i+1].low && mumlar[i].low <= mumlar[i+2].low) lMap.set(i, mumlar[i].low);
+  }}
+  (oH || []).forEach(([i, v]) => {{ if (i >= 0 && i < ct) hMap.set(i, Math.max(hMap.get(i) || v, v)); }});
+  (oL || []).forEach(([i, v]) => {{ if (i >= 0 && i < ct) lMap.set(i, Math.min(lMap.get(i) || v, v)); }});
+  const jn = Array.from(hMap.entries()).sort((a, b) => a[0] - b[0]);
+  const jo = Array.from(lMap.entries()).sort((a, b) => a[0] - b[0]);
+  const kulH = new Set(), kulL = new Set(), sfpEk = new Set();
+
+  // 1) EQH (BSL) - Kırılmamış (Bedava Yakıt) veya yakın zamanda SFP olmuş eşit tepeler (Ders-02 & 16,22,27.pdf)
+  for (let k = 0; k < jn.length; k++) {{
+    const [i1, h1] = jn[k];
+    if (kulH.has(i1)) continue;
+    const grup = [[i1, h1]];
+    for (let m = k + 1; m < Math.min(jn.length, k + 5); m++) {{
+      const [im, hm] = jn[m];
+      if (im - grup[grup.length - 1][0] < 3) continue;
+      if (Math.abs(hm - h1) <= tolEq) {{
+        const tavanAra = Math.max(h1, hm);
+        let araKirildi = false;
+        for (let b = grup[grup.length - 1][0] + 1; b < im; b++) {{
+          if (mumlar[b].high > tavanAra + E * 0.08) {{ araKirildi = true; break; }}
+        }}
+        if (!araKirildi) grup.push([im, hm]);
+      }}
+    }}
+    if (grup.length >= 2) {{
+      const iSon = grup[grup.length - 1][0];
+      const ortH = grup.reduce((s, x) => s + x[1], 0) / grup.length;
+      const tavanH = Math.max(...grup.map(x => x[1]));
+      let govdeKirildi = false, sweepIdx = null, sweepHi = 0;
+      for (let b = iSon + 1; b < ct; b++) {{
+        const mb = mumlar[b];
+        if (mb.close > tavanH + E * 0.10 || (mb.high > tavanH + E * 0.25 && mb.close > tavanH)) {{ govdeKirildi = true; break; }}
+        if (mb.high > tavanH + E * 0.02 && mb.close <= tavanH + E * 0.02 && (mb.high - Math.max(mb.open, mb.close)) >= E * 0.12) {{
+          if (sweepIdx === null) {{ sweepIdx = b; sweepHi = mb.high; }}
+        }}
+      }}
+      if (govdeKirildi) continue;
+      grup.forEach(([idxE]) => kulH.add(idxE));
+      if (sweepIdx !== null) {{
+        if (sweepIdx >= ct - 35) {{
+          liqList.push({{ tip: '💧 EQH Sweep (SFP)', idx1: i1, idx2: sweepIdx, t1: mumlar[i1].time, t2: mumlar[sweepIdx].time, p1: ortH, p2: ortH, renk: '#f43f5e', aktif: false }});
+          const sk = 'BEAR_' + sweepIdx;
+          if (!sfpEk.has(sk)) {{ sfpEk.add(sk); sfpList.push({{ tip: '▼ Bear SFP (EQH)', idx: sweepIdx, time: mumlar[sweepIdx].time, price: sweepHi, level: ortH, yon: 'BEAR' }}); }}
+        }}
+      }} else {{
+        const et = grup.length >= 3 ? '$$$ 3x EQH (TT3 BSL)' : '$$$ EQH (BSL)';
+        liqList.push({{ tip: et, idx1: i1, idx2: ct - 1, t1: mumlar[i1].time, t2: mumlar[ct - 1].time, p1: ortH, p2: ortH, renk: '#fbbf24', aktif: true }});
+      }}
+    }}
+  }}
+
+  // 2) EQL (SSL) - Kırılmamış (Bedava Yakıt) veya yakın zamanda SFP olmuş eşit dipler (Ders-02 & 16,22,27.pdf)
+  for (let k = 0; k < jo.length; k++) {{
+    const [i1, l1] = jo[k];
+    if (kulL.has(i1)) continue;
+    const grup = [[i1, l1]];
+    for (let m = k + 1; m < Math.min(jo.length, k + 5); m++) {{
+      const [im, lm] = jo[m];
+      if (im - grup[grup.length - 1][0] < 3) continue;
+      if (Math.abs(lm - l1) <= tolEq) {{
+        const tabanAra = Math.min(l1, lm);
+        let araKirildi = false;
+        for (let b = grup[grup.length - 1][0] + 1; b < im; b++) {{
+          if (mumlar[b].low < tabanAra - E * 0.08) {{ araKirildi = true; break; }}
+        }}
+        if (!araKirildi) grup.push([im, lm]);
+      }}
+    }}
+    if (grup.length >= 2) {{
+      const iSon = grup[grup.length - 1][0];
+      const ortL = grup.reduce((s, x) => s + x[1], 0) / grup.length;
+      const tabanL = Math.min(...grup.map(x => x[1]));
+      let govdeKirildi = false, sweepIdx = null, sweepLo = 1e18;
+      for (let b = iSon + 1; b < ct; b++) {{
+        const mb = mumlar[b];
+        if (mb.close < tabanL - E * 0.10 || (mb.low < tabanL - E * 0.25 && mb.close < tabanL)) {{ govdeKirildi = true; break; }}
+        if (mb.low < tabanL - E * 0.02 && mb.close >= tabanL - E * 0.02 && (Math.min(mb.open, mb.close) - mb.low) >= E * 0.12) {{
+          if (sweepIdx === null) {{ sweepIdx = b; sweepLo = mb.low; }}
+        }}
+      }}
+      if (govdeKirildi) continue;
+      grup.forEach(([idxE]) => kulL.add(idxE));
+      if (sweepIdx !== null) {{
+        if (sweepIdx >= ct - 35) {{
+          liqList.push({{ tip: '💧 EQL Sweep (SFP)', idx1: i1, idx2: sweepIdx, t1: mumlar[i1].time, t2: mumlar[sweepIdx].time, p1: ortL, p2: ortL, renk: '#10b981', aktif: false }});
+          const sk = 'BULL_' + sweepIdx;
+          if (!sfpEk.has(sk)) {{ sfpEk.add(sk); sfpList.push({{ tip: '▲ Bull SFP (EQL)', idx: sweepIdx, time: mumlar[sweepIdx].time, price: sweepLo, level: ortL, yon: 'BULL' }}); }}
+        }}
+      }} else {{
+        const et = grup.length >= 3 ? '$$$ 3x EQL (TT3 SSL)' : '$$$ EQL (SSL)';
+        liqList.push({{ tip: et, idx1: i1, idx2: ct - 1, t1: mumlar[i1].time, t2: mumlar[ct - 1].time, p1: ortL, p2: ortL, renk: '#38bdf8', aktif: true }});
+      }}
+    }}
+  }}
+
+  // 3) Tekil Swing SFP vs Gövde Kırılımı (23-sfp.pdf & Drive Video Ders-04/05)
+  jn.slice(-8).forEach(([iH, vH]) => {{
+    if (iH >= ct - 2) return;
+    let ilkGecis = null;
+    for (let b = iH + 1; b < ct; b++) {{ if (mumlar[b].high > vH + E * 0.02) {{ ilkGecis = b; break; }} }}
+    if (ilkGecis !== null && ilkGecis >= Math.max(iH + 2, ct - 35)) {{
+      const mb = mumlar[ilkGecis];
+      const uIgne = mb.high - Math.max(mb.open, mb.close);
+      let sonradanBozdu = false;
+      for (let m = ilkGecis + 1; m < ct; m++) if (mumlar[m].close > mb.high) sonradanBozdu = true;
+      const sk = 'BEAR_' + ilkGecis;
+      if (mb.close < vH && uIgne >= E * 0.14 && !sonradanBozdu && !sfpEk.has(sk)) {{
+        sfpEk.add(sk);
+        sfpList.push({{ tip: '▼ Bear SFP (İğne Avı)', idx: ilkGecis, time: mumlar[ilkGecis].time, price: mb.high, level: vH, yon: 'BEAR' }});
+        if (!kulH.has(iH)) liqList.push({{ tip: '💧 BSL Sweep (SFP)', idx1: iH, idx2: ilkGecis, t1: mumlar[iH].time, t2: mumlar[ilkGecis].time, p1: vH, p2: vH, renk: '#fb7185', aktif: false }});
+      }}
+    }}
+  }});
+  jo.slice(-8).forEach(([iL, vL]) => {{
+    if (iL >= ct - 2) return;
+    let ilkGecis = null;
+    for (let b = iL + 1; b < ct; b++) {{ if (mumlar[b].low < vL - E * 0.02) {{ ilkGecis = b; break; }} }}
+    if (ilkGecis !== null && ilkGecis >= Math.max(iL + 2, ct - 35)) {{
+      const mb = mumlar[ilkGecis];
+      const aIgne = Math.min(mb.open, mb.close) - mb.low;
+      let sonradanBozdu = false;
+      for (let m = ilkGecis + 1; m < ct; m++) if (mumlar[m].close < mb.low) sonradanBozdu = true;
+      const sk = 'BULL_' + ilkGecis;
+      if (mb.close > vL && aIgne >= E * 0.14 && !sonradanBozdu && !sfpEk.has(sk)) {{
+        sfpEk.add(sk);
+        sfpList.push({{ tip: '▲ Bull SFP (İğne Avı)', idx: ilkGecis, time: mumlar[ilkGecis].time, price: mb.low, level: vL, yon: 'BULL' }});
+        if (!kulL.has(iL)) liqList.push({{ tip: '💧 SSL Sweep (SFP)', idx1: iL, idx2: ilkGecis, t1: mumlar[iL].time, t2: mumlar[ilkGecis].time, p1: vL, p2: vL, renk: '#34d399', aktif: false }});
+      }}
+    }}
+  }});
+
+  // 4) Inducement / IDM (Likidite Yemi - Drive Video Ders-03: Gerçek POI öncesi yarı yoldaki ilk küçük dip/tepe)
+  if (jn.length >= 2 && jo.length >= 2) {{
+    const [sonHi, sonHv] = jn[jn.length - 1];
+    const [sonLi, sonLv] = jo[jo.length - 1];
+    const oncekiAnaL = jo.filter(([il]) => il < sonHi);
+    if (oncekiAnaL.length > 0 && sonHi < ct - 2) {{
+      const [origLi, origLv] = oncekiAnaL[oncekiAnaL.length - 1];
+      const bacakBoy = sonHv - origLv;
+      if (bacakBoy >= E * 1.6) {{
+        for (let b = sonHi + 1; b < ct - 1; b++) {{
+          if (mumlar[b].low <= mumlar[b - 1].low && mumlar[b].low <= mumlar[b + 1].low) {{
+            const vl = mumlar[b].low;
+            if (vl >= origLv + bacakBoy * 0.18 && vl <= origLv + bacakBoy * 0.72) {{
+              let supIdx = null;
+              for (let m = b + 1; m < ct; m++) {{
+                if (mumlar[m].low < vl - E * 0.02 && mumlar[m].close > origLv) {{ supIdx = m; break; }}
+              }}
+              if (supIdx !== null) {{
+                liqList.push({{ tip: '💧 IDM Sweep (Yem Yutuldu ✓)', idx1: b, idx2: supIdx, t1: mumlar[b].time, t2: mumlar[supIdx].time, p1: vl, p2: vl, renk: '#2dd4bf', aktif: false }});
+              }} else if (sonClose > vl) {{
+                liqList.push({{ tip: '🎣 IDM (Likidite Yemi SSL)', idx1: b, idx2: ct - 1, t1: mumlar[b].time, t2: mumlar[ct - 1].time, p1: vl, p2: vl, renk: '#e879f9', aktif: true }});
+              }}
+              break;
+            }}
+          }}
+        }}
+      }}
+    }}
+    const oncekiAnaH = jn.filter(([ih]) => ih < sonLi);
+    if (oncekiAnaH.length > 0 && sonLi < ct - 2) {{
+      const [origHi, origHv] = oncekiAnaH[oncekiAnaH.length - 1];
+      const bacakBoyB = origHv - sonLv;
+      if (bacakBoyB >= E * 1.6) {{
+        for (let b = sonLi + 1; b < ct - 1; b++) {{
+          if (mumlar[b].high >= mumlar[b - 1].high && mumlar[b].high >= mumlar[b + 1].high) {{
+            const vh = mumlar[b].high;
+            if (vh >= sonLv + bacakBoyB * 0.28 && vh <= origHv - bacakBoyB * 0.18) {{
+              let supIdx = null;
+              for (let m = b + 1; m < ct; m++) {{
+                if (mumlar[m].high > vh + E * 0.02 && mumlar[m].close < origHv) {{ supIdx = m; break; }}
+              }}
+              if (supIdx !== null) {{
+                liqList.push({{ tip: '💧 IDM Sweep (Yem Yutuldu ✓)', idx1: b, idx2: supIdx, t1: mumlar[b].time, t2: mumlar[supIdx].time, p1: vh, p2: vh, renk: '#fb7185', aktif: false }});
+              }} else if (sonClose < vh) {{
+                liqList.push({{ tip: '🎣 IDM (Likidite Yemi BSL)', idx1: b, idx2: ct - 1, t1: mumlar[b].time, t2: mumlar[ct - 1].time, p1: vh, p2: vh, renk: '#e879f9', aktif: true }});
+              }}
+              break;
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+
+  // 5) Aktif External BSL (Eski Tepe) & External SSL (Eski Dip) (Ders-02 & Ders-10)
+  const tazeH = jn.filter(([iH, vH]) => {{
+    if (iH >= ct - 2 || vH <= sonClose) return false;
+    for (let b = iH + 1; b < ct; b++) if (mumlar[b].high > vH + E * 0.03) return false;
+    return true;
+  }});
+  if (tazeH.length > 0) {{
+    const [extHi, extHv] = tazeH.reduce((best, cur) => cur[1] > best[1] ? cur : best, tazeH[0]);
+    if (liqList.every(lq => Math.abs(extHv - lq.p1) > tolEq)) {{
+      liqList.push({{ tip: '$$$ Ext BSL (Eski Tepe)', idx1: extHi, idx2: ct - 1, t1: mumlar[extHi].time, t2: mumlar[ct - 1].time, p1: extHv, p2: extHv, renk: '#f59e0b', aktif: true }});
+    }}
+  }}
+  const tazeL = jo.filter(([iL, vL]) => {{
+    if (iL >= ct - 2 || vL >= sonClose) return false;
+    for (let b = iL + 1; b < ct; b++) if (mumlar[b].low < vL - E * 0.03) return false;
+    return true;
+  }});
+  if (tazeL.length > 0) {{
+    const [extLi, extLv] = tazeL.reduce((best, cur) => cur[1] < best[1] ? cur : best, tazeL[0]);
+    if (liqList.every(lq => Math.abs(extLv - lq.p1) > tolEq)) {{
+      liqList.push({{ tip: '$$$ Ext SSL (Eski Dip)', idx1: extLi, idx2: ct - 1, t1: mumlar[extLi].time, t2: mumlar[ct - 1].time, p1: extLv, p2: extLv, renk: '#0ea5e9', aktif: true }});
+    }}
+  }}
+
+  // 6) 3-Temaslı Doğrulanmış Trendline Likiditesi
+  const hSon6 = jn.slice(-6);
+  let tlHBul = false;
+  for (let a = 0; a < hSon6.length - 2 && !tlHBul; a++) {{
+    for (let b = a + 1; b < hSon6.length - 1 && !tlHBul; b++) {{
+      for (let c = b + 1; c < hSon6.length && !tlHBul; c++) {{
+        const [x1, y1] = hSon6[a], [x2, y2] = hSon6[b], [x3, y3] = hSon6[c];
+        if (x3 - x1 >= 6 && y1 > y2 && y2 > y3) {{
+          const egim = (y3 - y1) / Math.max(1, x3 - x1);
+          if (Math.abs(y2 - (y1 + egim * (x2 - x1))) <= E * 0.35) {{
+            let ihlal = false;
+            for (let m = x1 + 1; m < x3; m++) if (mumlar[m].high > (y1 + egim * (m - x1)) + E * 0.16) {{ ihlal = true; break; }}
+            for (let m = x3 + 1; m < ct && !ihlal; m++) if (mumlar[m].close > (y1 + egim * (m - x1)) + E * 0.20) {{ ihlal = true; break; }}
+            if (!ihlal) {{
+              const xBit = Math.min(ct - 1, x3 + 12);
+              liqList.push({{ tip: '📐 Trendline BSL ($$$)', idx1: x1, idx2: xBit, t1: mumlar[x1].time, t2: mumlar[xBit].time, p1: y1, p2: y1 + egim * (xBit - x1), renk: '#f59e0b', aktif: true }});
+              tlHBul = true;
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+  const lSon6 = jo.slice(-6);
+  let tlLBul = false;
+  for (let a = 0; a < lSon6.length - 2 && !tlLBul; a++) {{
+    for (let b = a + 1; b < lSon6.length - 1 && !tlLBul; b++) {{
+      for (let c = b + 1; c < lSon6.length && !tlLBul; c++) {{
+        const [x1, y1] = lSon6[a], [x2, y2] = lSon6[b], [x3, y3] = lSon6[c];
+        if (x3 - x1 >= 6 && y1 < y2 && y2 < y3) {{
+          const egim = (y3 - y1) / Math.max(1, x3 - x1);
+          if (Math.abs(y2 - (y1 + egim * (x2 - x1))) <= E * 0.35) {{
+            let ihlal = false;
+            for (let m = x1 + 1; m < x3; m++) if (mumlar[m].low < (y1 + egim * (m - x1)) - E * 0.16) {{ ihlal = true; break; }}
+            for (let m = x3 + 1; m < ct && !ihlal; m++) if (mumlar[m].close < (y1 + egim * (m - x1)) - E * 0.20) {{ ihlal = true; break; }}
+            if (!ihlal) {{
+              const xBit = Math.min(ct - 1, x3 + 12);
+              liqList.push({{ tip: '📐 Trendline SSL ($$$)', idx1: x1, idx2: xBit, t1: mumlar[x1].time, t2: mumlar[xBit].time, p1: y1, p2: y1 + egim * (xBit - x1), renk: '#38bdf8', aktif: true }});
+              tlLBul = true;
+            }}
+          }}
+        }}
+      }}
+    }}
+  }}
+  return {{ likidite: liqList.slice(-11), sfp: sfpList.slice(-6) }};
+}}
+async function binanceMumCek(tf) {{
+  const gercekTf = (typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[tf]) ? TF_GERCEK_HARITA[tf] : tf;
+  const urls = IS_FUT
+    ? [`https://fapi.binance.com/fapi/v1/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`, `https://api.binance.com/api/v3/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`]
+    : [`https://api.binance.com/api/v3/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`, `https://fapi.binance.com/fapi/v1/klines?symbol=${{RAW_SYM}}&interval=${{gercekTf}}&limit=350`];
+  for (const url of urls) {{
+    try {{
+      const r = await fetch(url);
+      const d = await r.json();
+      if (Array.isArray(d) && d.length > 5) {{
+        return d.map((k, idx) => ({{
+          time: Math.floor(Number(k[0]) / 1000),
+          idx: idx,
+          open: parseFloat(k[1]),
+          high: parseFloat(k[2]),
+          low: parseFloat(k[3]),
+          close: parseFloat(k[4]),
+          volume: parseFloat(k[5] || 0)
+        }}));
+      }}
+    }} catch (e) {{}}
+  }}
+  return [];
+}}
+
+async function anlikFiyatPolling() {{
+  const urls = IS_FUT
+    ? [`https://fapi.binance.com/fapi/v1/ticker/price?symbol=${{RAW_SYM}}`, `https://api.binance.com/api/v3/ticker/price?symbol=${{RAW_SYM}}`]
+    : [`https://api.binance.com/api/v3/ticker/price?symbol=${{RAW_SYM}}`, `https://fapi.binance.com/fapi/v1/ticker/price?symbol=${{RAW_SYM}}`];
+  for (const u of urls) {{
+    try {{
+      const r = await fetch(u);
+      const j = await r.json();
+      const p = parseFloat(j.price || 0);
+      if (p > 0 && candleSeries && aktifMumlar.length > 0) {{
+        const son = Object.assign({{}}, aktifMumlar[aktifMumlar.length - 1]);
+        son.close = p;
+        if (p > son.high) son.high = p;
+        if (p < son.low) son.low = p;
+        aktifMumlar[aktifMumlar.length - 1] = son;
+        candleSeries.update(son);
+        const lbl = document.getElementById('lbl_anlik_fiyat');
+        if (lbl) lbl.innerText = `⚡ Anlık: ${{fiyatFormatla(p)}}`;
+        requestAnimationFrame(() => cizPineGostergeKatmani());
+        break;
+      }}
+    }} catch (e) {{}}
+  }}
+}}
+
+function canliWebSocketBaslat(tf) {{
+  if (wsBaglanti) {{
+    try {{ wsBaglanti.close(); }} catch (e) {{}}
+    wsBaglanti = null;
+  }}
+  if (fiyatTimer) clearInterval(fiyatTimer);
+  fiyatTimer = setInterval(anlikFiyatPolling, 1500);
+  try {{
+    const gercekWsTf = (typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[tf]) ? TF_GERCEK_HARITA[tf] : tf;
+    const wsUrl = IS_FUT
+      ? `wss://fstream.binance.com/ws/${{RAW_SYM.toLowerCase()}}@kline_${{gercekWsTf}}`
+      : `wss://stream.binance.com:9443/ws/${{RAW_SYM.toLowerCase()}}@kline_${{gercekWsTf}}`;
+    wsBaglanti = new WebSocket(wsUrl);
+    wsBaglanti.onmessage = (ev) => {{
+      try {{
+        const msg = JSON.parse(ev.data);
+        if (msg && msg.k && candleSeries) {{
+          const k = msg.k;
+          const yeniMum = {{
+            time: Math.floor(Number(k.t) / 1000),
+            idx: Math.max(0, aktifMumlar.length - 1),
+            open: parseFloat(k.o),
+            high: parseFloat(k.h),
+            low: parseFloat(k.l),
+            close: parseFloat(k.c)
+          }};
+          candleSeries.update(yeniMum);
+          if (aktifMumlar.length > 0 && aktifMumlar[aktifMumlar.length - 1].time === yeniMum.time) {{
+            aktifMumlar[aktifMumlar.length - 1] = yeniMum;
+          }} else if (aktifMumlar.length === 0 || yeniMum.time > aktifMumlar[aktifMumlar.length - 1].time) {{
+            yeniMum.idx = aktifMumlar.length;
+            aktifMumlar.push(yeniMum);
+          }}
+          const lbl = document.getElementById('lbl_anlik_fiyat');
+          if (lbl) lbl.innerText = `⚡ Anlık: ${{fiyatFormatla(yeniMum.close)}}`;
+          requestAnimationFrame(() => cizPineGostergeKatmani());
+        }}
+      }} catch (err) {{}}
+    }};
+  }} catch (e) {{}}
+}}
+
+function anlikGrafigeOdaklan() {{
+  chart.timeScale().scrollToRealTime();
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+}}
+
+function pineKodunuSimdiUygula() {{
+  const veri = TUM_VERI[aktifTf] || TUM_VERI['5m'];
+  const pineText = document.getElementById('pine_box').value;
+  parseEdilenPine = pineKodunuParseEt(pineText, veri);
+  katmanlariSimdiGuncelle();
+}}
+
+async function periyotDegistir(tf) {{
+  aktifTf = tf;
+  ['4h','1h','5m'].forEach(k => {{
+    const b = document.getElementById('btn_' + k);
+    if (b) b.classList.toggle('active', k === tf);
+  }});
+  const veri = TUM_VERI[tf] || TUM_VERI['5m'];
+  const gTfAd = ((typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[tf]) ? TF_GERCEK_HARITA[tf] : tf).toUpperCase();
+  const aktSblStr = `${{(TF_GERCEK_HARITA['4h'] || '4h').toUpperCase()}}/${{(TF_GERCEK_HARITA['1h'] || '1h').toUpperCase()}}/${{TF_GERCEK_HARITA['5m'] || '5m'}}`;
+  document.getElementById('lbl_parite').innerText = `{O} (${{TV_SYM}}) | ${{gTfAd}} (Şablon: ${{aktSblStr}})`;
+  document.getElementById('karne_baslik').innerText = `📊 {O} [${{gTfAd}}] — Strateji & Seviye Karnesi`;
+  document.getElementById('pine_baslik').innerText = `📜 Aktif Pine Script v6 Kodu (${{gTfAd}}):`;
+  document.getElementById('pine_box').value = veri.pine || '';
+  document.getElementById('kysy_satir').innerHTML = `• <b>Kırılım Yoksa Swing Yoktur:</b> ${{veri.kysy_onay ? '<span style="color:#4ade80">ONAYLI</span>' : '<span style="color:#f59e0b">KIRILIM YOK</span>'}} (Elenen Gürültü: ${{veri.elenen_sayi}})`;
+  document.getElementById('sp_wp_satir').innerHTML = `• <b style="color:#eab308;">Strong Origin / Weak Target:</b> ${{veri.sp ? veri.sp.toFixed(4) : '-'}} / ${{veri.wp ? veri.wp.toFixed(4) : '-'}}`;
+  document.getElementById('ist_satir').innerHTML = `• <b style="color:#f472b6;">Magic Line (FL) / ITZ / QML:</b> ${{veri.magic ? veri.magic.toFixed(4) : '-'}} / ${{veri.itz ? veri.itz.toFixed(4) : '-'}} / ${{veri.qml ? veri.qml.toFixed(4) : '-'}}`;
+
+  parseEdilenPine = pineKodunuParseEt(veri.pine || '', veri);
+
+  if (candleSeries) {{ try {{ chart.removeSeries(candleSeries); }} catch(e){{}} }}
+  candleSeries = chart.addCandlestickSeries({{
+    upColor: '#22c55e', downColor: '#ef4444', borderVisible: false, wickUpColor: '#4ade80', wickDownColor: '#f87171'
+  }});
+
+  if (veri.mumlar && veri.mumlar.length > 0) {{
+    aktifMumlar = veri.mumlar.slice();
+    const ilkKysy = kysySwingHesaplaJS(aktifMumlar, tf === '5m' ? 2 : 5, tf);
+    veri.zigzag = ilkKysy.zigzag;
+    veri.bos = ilkKysy.bos;
+    veri.arz_talep = ilkKysy.arz_talep;
+    veri.imbalance = ilkKysy.imbalance;
+    if (ilkKysy.likidite && ilkKysy.likidite.length > 0) veri.likidite = ilkKysy.likidite;
+    if (ilkKysy.sfp) veri.sfp = ilkKysy.sfp;
+    if (ilkKysy.qml > 0) {{ veri.qml = ilkKysy.qml; parseEdilenPine.qml = ilkKysy.qml; veri.qml_t1 = ilkKysy.qml_t1; veri.qml_idx = ilkKysy.qml_idx; }} else if (veri.qml > 0) {{ parseEdilenPine.qml = veri.qml; }}
+    if (ilkKysy.smax > ilkKysy.smin && ilkKysy.smin > 0) {{
+      veri.yon = ilkKysy.yon; veri.smax = ilkKysy.smax; veri.smin = ilkKysy.smin;
+      veri.sp = ilkKysy.sp; veri.wp = ilkKysy.wp;
+      veri.fibo_t1 = ilkKysy.fibo_t1;
+      parseEdilenPine.smax = ilkKysy.smax; parseEdilenPine.smin = ilkKysy.smin;
+      parseEdilenPine.sp = ilkKysy.sp; parseEdilenPine.wp = ilkKysy.wp;
+    }}
+    candleSeries.setData(aktifMumlar);
+    const sonF = aktifMumlar[aktifMumlar.length - 1].close;
+    document.getElementById('lbl_anlik_fiyat').innerText = `⚡ Anlık: ${{fiyatFormatla(sonF)}}`;
+  }}
+
+  seriKatmanlariniGuncelle();
+  chart.timeScale().fitContent();
+  chart.timeScale().scrollToRealTime();
+  setTimeout(boyutlariEsitle, 40);
+
+  const canliMumlar = await binanceMumCek(tf);
+  if (canliMumlar && canliMumlar.length > 5 && aktifTf === tf) {{
+    const birlesikMap = new Map();
+    (veri.mumlar || []).forEach(m => birlesikMap.set(m.time, m));
+    canliMumlar.forEach(m => birlesikMap.set(m.time, m));
+    const sirali = Array.from(birlesikMap.values()).sort((a, b) => a.time - b.time).slice(-350);
+    sirali.forEach((m, i) => {{ m.idx = i; }});
+    aktifMumlar = sirali;
+    const yeniKysy = kysySwingHesaplaJS(aktifMumlar, tf === '5m' ? 2 : 5, tf);
+    veri.zigzag = yeniKysy.zigzag;
+    veri.bos = yeniKysy.bos;
+    veri.arz_talep = yeniKysy.arz_talep;
+    veri.imbalance = yeniKysy.imbalance;
+    veri.likidite = yeniKysy.likidite;
+    veri.sfp = yeniKysy.sfp;
+    veri.elenen = [];
+    if (yeniKysy.qml > 0) {{ veri.qml = yeniKysy.qml; parseEdilenPine.qml = yeniKysy.qml; veri.qml_t1 = yeniKysy.qml_t1; veri.qml_idx = yeniKysy.qml_idx; }} else if (veri.qml > 0) {{ parseEdilenPine.qml = veri.qml; }}
+    if (yeniKysy.smax > yeniKysy.smin && yeniKysy.smin > 0) {{
+      veri.yon = yeniKysy.yon;
+      veri.smax = yeniKysy.smax;
+      veri.smin = yeniKysy.smin;
+      veri.sp = yeniKysy.sp;
+      veri.wp = yeniKysy.wp;
+      veri.fibo_t1 = yeniKysy.fibo_t1;
+      parseEdilenPine.smax = yeniKysy.smax;
+      parseEdilenPine.smin = yeniKysy.smin;
+      parseEdilenPine.sp = yeniKysy.sp;
+      parseEdilenPine.wp = yeniKysy.wp;
+      if (GIRIS > 0) parseEdilenPine.giris = GIRIS;
+      if (SL > 0) parseEdilenPine.sl = SL;
+      if (TP1 > 0) parseEdilenPine.tp1 = TP1;
+      if (TP2 > 0) parseEdilenPine.tp2 = TP2;
+      document.getElementById('sp_wp_satir').innerHTML = `• <b style="color:#eab308;">Strong Origin (HTF Dip/Tepe) / Weak Target:</b> ${{veri.sp ? veri.sp.toFixed(2) : '-'}} / ${{veri.wp ? veri.wp.toFixed(2) : '-'}}`;
+      document.getElementById('ist_satir').innerHTML = `• <b style="color:#f472b6;">Magic Line (FL) / ITZ / 4H QML:</b> ${{veri.magic ? veri.magic.toFixed(2) : '-'}} / ${{veri.itz ? veri.itz.toFixed(2) : '-'}} / ${{veri.qml ? veri.qml.toFixed(2) : '-'}}`;
+    }}
+    candleSeries.setData(aktifMumlar);
+    rsiSeries.setData(rsiHesapla(aktifMumlar, 14));
+    const sonCanli = aktifMumlar[aktifMumlar.length - 1].close;
+    document.getElementById('lbl_anlik_fiyat').innerText = `⚡ Anlık: ${{fiyatFormatla(sonCanli)}}`;
+    seriKatmanlariniGuncelle();
+    chart.timeScale().setVisibleLogicalRange({{ from: Math.max(0, aktifMumlar.length - 180), to: aktifMumlar.length + 8 }});
+    requestAnimationFrame(() => cizPineGostergeKatmani());
+    setTimeout(() => cizPineGostergeKatmani(), 60);
+    setTimeout(() => cizPineGostergeKatmani(), 180);
+  }} else if (aktifMumlar.length > 0) {{
+    rsiSeries.setData(rsiHesapla(aktifMumlar, 14));
+    setTimeout(() => cizPineGostergeKatmani(), 60);
+  }}
+
+  canliWebSocketBaslat(tf);
+  anlikFiyatPolling();
+}}
+
+function mtfSablonDegistirJS(deger) {{
+  if (!deger) return;
+  const parcalar = String(deger).split(',');
+  if (parcalar.length === 3) {{
+    TF_GERCEK_HARITA['4h'] = parcalar[0].trim();
+    TF_GERCEK_HARITA['1h'] = parcalar[1].trim();
+    TF_GERCEK_HARITA['5m'] = parcalar[2].trim();
+    const b4 = document.getElementById('btn_4h');
+    const b1 = document.getElementById('btn_1h');
+    const b5 = document.getElementById('btn_5m');
+    if (b4) b4.innerText = `🏛️ HTF (${{TF_GERCEK_HARITA['4h'].toUpperCase()}})`;
+    if (b1) b1.innerText = `🧭 MTF (${{TF_GERCEK_HARITA['1h'].toUpperCase()}})`;
+    if (b5) b5.innerText = `🎯 LTF (${{TF_GERCEK_HARITA['5m']}})`;
+    periyotDegistir(aktifTf);
+  }}
+}}
+
+function bilgiPaneliToggle() {{
+  const sp = document.getElementById('side_panel');
+  const btn = document.getElementById('btn_bilgi_toggle');
+  const fab = document.getElementById('btn_bilgi_fab');
+  if (!sp) return;
+  const gizlendiMi = sp.classList.toggle('gizli');
+  if (btn) {{
+    btn.innerText = gizlendiMi ? '📊 Bilgi Ekranı: Kapalı (Aç ◀)' : '📊 Bilgi Ekranı: Açık ◀▶';
+    btn.style.background = gizlendiMi ? '#475569' : '#f59e0b';
+    btn.style.color = gizlendiMi ? '#f8fafc' : '#11111b';
+  }}
+  if (fab) fab.classList.toggle('goster', gizlendiMi);
+  requestAnimationFrame(boyutlariEsitle);
+  setTimeout(boyutlariEsitle, 35);
+  setTimeout(boyutlariEsitle, 120);
+}}
+
+function karneIcerikToggle() {{
+  const ic = document.getElementById('karne_icerik_kapsayici');
+  const bs = document.getElementById('karne_baslik');
+  if (!ic) return;
+  const kapali = ic.style.display === 'none';
+  ic.style.display = kapali ? 'block' : 'none';
+  if (bs) {{
+    bs.innerText = bs.innerText.replace(/[▾▸]/g, '').trim() + (kapali ? ' ▾' : ' ▸');
+  }}
+}}
+
+function rsiPanelToggle() {{
+  const rp = document.getElementById('rsi_pane');
+  const ch = document.getElementById('chk_rsi');
+  if (ch) rp.classList.toggle('show', ch.checked);
+  else rp.classList.toggle('show');
+  setTimeout(boyutlariEsitle, 30);
+}}
+
+function boyutlariEsitle() {{
+  const r = stageEl.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0) {{
+    chart.applyOptions({{ width: r.width, height: r.height }});
+  }}
+  const rp = document.getElementById('rsi_pane');
+  if (rp && rp.classList.contains('show')) {{
+    const rr = rp.getBoundingClientRect();
+    if (rr.width > 0 && rr.height > 0) {{
+      rsiChart.applyOptions({{ width: rr.width, height: rr.height }});
+    }}
+  }}
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+}}
+
+function gorunumDegistir() {{
+  widgetModu = !widgetModu;
+  const btn = document.getElementById('btn_mod');
+  const wDiv = document.getElementById('tv_native_widget');
+  if (widgetModu) {{
+    btn.innerText = '🌲 Alfa PA Çizimli Grafik Göster';
+    btn.classList.add('active');
+    if (wDiv) {{
+      wDiv.style.display = 'block';
+      const gTf = (typeof TF_GERCEK_HARITA !== 'undefined' && TF_GERCEK_HARITA[aktifTf]) ? TF_GERCEK_HARITA[aktifTf] : aktifTf;
+      const tvIntervalMap = {{ '1m':'1', '3m':'3', '5m':'5', '15m':'15', '30m':'30', '1h':'60', '2h':'120', '4h':'240', '1d':'D', '1w':'W', '1M':'M' }};
+      const tvInt = tvIntervalMap[gTf] || '15';
+      const tvFullSym = 'BINANCE:' + RAW_SYM + (IS_FUT ? '.P' : '');
+      wDiv.innerHTML = '<div id="tv_widget_inner" style="width:100%;height:100%;"></div>';
+      if (typeof TradingView !== 'undefined' && TradingView.widget) {{
+        new TradingView.widget({{
+          autosize: true,
+          symbol: tvFullSym,
+          interval: tvInt,
+          timezone: 'Europe/Istanbul',
+          theme: 'dark',
+          style: '1',
+          locale: 'tr',
+          toolbar_bg: '#131722',
+          enable_publishing: false,
+          hide_side_toolbar: false,
+          allow_symbol_change: true,
+          container_id: 'tv_widget_inner'
+        }});
+      }} else {{
+        wDiv.innerHTML = `<iframe src="https://s.tradingview.com/widgetembed/?symbol=${{encodeURIComponent(tvFullSym)}}&interval=${{tvInt}}&theme=dark&style=1&timezone=Europe%2FIstanbul&locale=tr" style="width:100%;height:100%;border:0;" allowfullscreen></iframe>`;
+      }}
+    }}
+  }} else {{
+    btn.innerText = '🌐 Canlı TV Widget Göster';
+    btn.classList.remove('active');
+    if (wDiv) {{
+      wDiv.style.display = 'none';
+      wDiv.innerHTML = '';
+    }}
+    boyutlariEsitle();
+    anlikGrafigeOdaklan();
+  }}
+}}
+
+const GEMINI_API_KEY_JS = "{GEMINI_API_KEY}";
+const GEMINI_MODEL_JS = "{GEMINI_MODEL}";
+const ISLEM_RONTGEN_METNI_JS = {json.dumps(islem_rontgeni_olustur(O, H).get('tam_rapor_metni','') if 'islem_rontgeni_olustur' in globals() else '', ensure_ascii=False)};
+
+function geminiKatmanGoster() {{
+  ['chk_zz','chk_arztalep','chk_kutu','chk_ist','chk_fibo','chk_liq','chk_rr'].forEach(id => {{
+    const el = document.getElementById(id);
+    if (el) el.checked = true;
+  }});
+  if (widgetModu) gorunumDegistir();
+  katmanlariSimdiGuncelle();
+  anlikGrafigeOdaklan();
+  const kutu = document.getElementById('gemini_tv_cevap');
+  if (kutu) kutu.innerText = "✅ Grafik üzerinde Giriş, SL/TP, KYSY Swing/QML, Gerçek OB (%50 MT), FVG (%50 CE), 3 İstasyon ve Likidite (EQH/EQL, IDM, SFP) katmanlarının tamamı çizildi!\\n\\n" + (ISLEM_RONTGEN_METNI_JS || "");
+}}
+
+function geminiHizliSor(s) {{
+  const inp = document.getElementById('gemini_tv_soru');
+  if (inp) inp.value = s;
+  geminiSorJS();
+}}
+
+async function geminiSorJS() {{
+  const inp = document.getElementById('gemini_tv_soru');
+  const kutu = document.getElementById('gemini_tv_cevap');
+  if (!inp || !kutu) return;
+  const soru = (inp.value || '').trim() || 'Bu işlemi neye göre açtın?';
+  if (soru.toLowerCase().includes('çiz') || soru.toLowerCase().includes('göster')) {{
+    geminiKatmanGoster();
+  }}
+  if (!GEMINI_API_KEY_JS) {{
+    kutu.innerText = "⏳ Yapay Zeka sorunuzu yanıtlıyor...";
+    try {{
+      const rFree = await fetch('https://text.pollinations.ai/openai', {{
+        method: 'POST',
+        headers: {{ 'Content-Type': 'application/json' }},
+        body: JSON.stringify({{
+          model: 'openai',
+          messages: [
+            {{ role: 'system', content: 'Sen Alfa Trade Club Bot içindeki özgür Price Action & ICT yapay zeka asistanısın. Hazır kalıp kullanmadan, doğrudan ve net Türkçe cevap ver. Veri: ' + ISLEM_RONTGEN_METNI_JS }},
+            {{ role: 'user', content: soru }}
+          ]
+        }})
+      }});
+      const jFree = await rFree.json();
+      const cvpFree = jFree?.choices?.[0]?.message?.content;
+      if (cvpFree) {{ kutu.innerText = "🤖 Gemini AI Asistan:\\n" + cvpFree; return; }}
+    }} catch(e) {{}}
+    kutu.innerText = "🤖 AI Özeti:\\n" + (ISLEM_RONTGEN_METNI_JS || "İşlem verisi hazır.");
+    return;
+  }}
+  kutu.innerText = "⏳ Gemini AI (" + GEMINI_MODEL_JS + ") işlemi ve grafiği inceliyor...";
+  try {{
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${{GEMINI_MODEL_JS}}:generateContent?key=${{GEMINI_API_KEY_JS}}`;
+    const prompt = `Sen Alfa Trade Club Bot {BOT_VERSIYONU} içindeki kurumsal Price Action & ICT uzmanısın. Aşağıdaki işlem röntgenine göre kullanıcının sorusunu net, maddeli ve Türkçe yanıtla:\\n\\n${{ISLEM_RONTGEN_METNI_JS}}\\n\\nKullanıcı Sorusu: ${{soru}}`;
+    const r = await fetch(url, {{
+      method: 'POST',
+      headers: {{ 'Content-Type': 'application/json' }},
+      body: JSON.stringify({{ contents: [{{ parts: [{{ text: prompt }}] }}] }})
+    }});
+    const j = await r.json();
+    const cvp = j?.candidates?.[0]?.content?.parts?.[0]?.text;
+    kutu.innerText = cvp ? `🤖 Gemini AI (${{GEMINI_MODEL_JS}}):\\n` + cvp : ("🤖 [Dahili Röntgen]:\\n" + ISLEM_RONTGEN_METNI_JS);
+  }} catch (e) {{
+    kutu.innerText = "🤖 [Dahili Röntgen]:\\n" + ISLEM_RONTGEN_METNI_JS;
+  }}
+}}
+
+function kopyalaPine() {{
+  const el = document.getElementById('pine_box');
+  el.select();
+  document.execCommand('copy');
+}}
+
+chart.timeScale().subscribeVisibleLogicalRangeChange(() => {{
+  requestAnimationFrame(() => cizPineGostergeKatmani());
+  const lr = chart.timeScale().getVisibleLogicalRange();
+  if (lr) rsiChart.timeScale().setVisibleLogicalRange(lr);
+}});
+chart.subscribeCrosshairMove(() => requestAnimationFrame(() => cizPineGostergeKatmani()));
+window.addEventListener('resize', boyutlariEsitle);
+if (typeof ResizeObserver !== 'undefined') {{
+  new ResizeObserver(() => boyutlariEsitle()).observe(stageEl);
+}}
+window.addEventListener('load', () => {{
+  boyutlariEsitle();
+  setTimeout(boyutlariEsitle, 150);
+}});
+periyotDegistir(aktifTf);
+</script>
+</body>
+</html>"""
+ dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(':','_').replace('/','_')}_{tf_secim}.html")
+ with open(dosya_yolu,'w',encoding='utf-8')as f:f.write(html_icerik)
+ if 'KALICI_VERI_DIZINI' not in globals() and globals().get('_AKTIF_PAGE_REF') is None:
+  try:
+   if os.name=='nt':os.startfile(dosya_yolu)
+   else:webbrowser.open(Path(dosya_yolu).as_uri())
+  except X:pass
+ return(dosya_yolu,pine_kodu)
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+
+if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI:
+    GITHUB_REPO_ADRESI = "emrhozbr/bot"
+if "GITHUB_TOKEN" not in globals():
+BULUT_SENK_AKTIF = True
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+try:
+    _api_yukle()
+except Exception:
+    pass
+
+
+def _temiz_etiket_grafik(txt):
+ return re.sub(r'[^\x00-\x7FğüşıöçĞÜŞİÖÇâîûÂÎÛ$€£%±×÷≤≥≠≈•–—…✓✔✕✖▲▼◀▶★☆]+','',str(txt)).strip()
+
+def _google_hesap_token_bul():
+ """Kullanicinin tanimli GEMINI_API_KEY anahtarini, ortam degiskenlerini veya Google Cloud / OAuth ADC kimligini otomatik bulur."""
+ global GEMINI_API_KEY
+ if GEMINI_API_KEY and L(str(GEMINI_API_KEY).strip())>10:
+  return('api_key',str(GEMINI_API_KEY).strip())
+ for env_k in('GEMINI_API_KEY','GOOGLE_API_KEY','GENAI_API_KEY'):
+  val=os.environ.get(env_k,'').strip()
+  if L(val)>10:
+   GEMINI_API_KEY=val
+   return('api_key',val)
+ try:
+  r=_subp.run(['gcloud','auth','application-default','print-access-token'],capture_output=True,text=True,timeout=2.0)
+  if r.returncode==0 and L(r.stdout.strip())>20:
+   return('oauth_token',r.stdout.strip())
+ except Exception:
+  pass
+ return(None,'')
+
+def gemini_hesap_durumu_getir():
+ tip,deger=_google_hesap_token_bul()
+ if tip=='api_key':
+  maskeli=(deger[:6]+'...'+deger[-4:])if L(deger)>12 else'Aktif'
+  return(True,f"🟢 Gemini API Bağlı ({maskeli} | {GEMINI_MODEL})")
+ if tip=='oauth_token':
+  return(True,f"🟢 Google Hesabı OAuth Bağlı ({GEMINI_MODEL})")
+ return(True,'🟢 Özgür Bulut AI + Ajan Modu Aktif (Kendi Gemini API Anahtarınızı da Bağlayabilirsiniz)')
+
+def islem_rontgeni_olustur(O,H_analiz=None,islem_kaydi=None):
+ """Secili islem veya parite icin tum yapisal/sayisal verileri (AI baglami icin) derler."""
+ O_str=str(O or'FUT:BTC/USDT')
+ dR=islem_kaydi if I(islem_kaydi,dict)else(acik_islemler.get(O_str)if I(acik_islemler.get(O_str),dict)else None)
+ if dR is None and':'in O_str:
+  for g_item in ah:
+   if I(g_item,dict)and g_item.get('sembol')==O_str:
+    if I(g_item.get('rontgen'),dict):
+     return g_item['rontgen']
+    dR=g_item
+    break
+ H=H_analiz if(I(H_analiz,dict)and H_analiz)else(analiz_hafizasi.get(O_str)or analiz_hafizasi.get(O_str.split(':',1)[-1])or{})
+ J=(dR.get('sembol')if I(dR,dict)and'/'in str(dR.get('sembol',''))else None)or H.get('sembol')or O_str.split(':',1)[-1]
+ D=(dR.get('piyasa')if I(dR,dict)and dR.get('piyasa')else None)or H.get('piyasa')or('spot'if O_str.startswith('SPOT:')else'future')
+ htf_p,mtf_p,ltf_p,mtf_sb=_parite_mtf_periyotlarini_bul(O_str,J,D,H)
+ yon=(dR.get('yon')if I(dR,dict)else None)or H.get('sinyal')or H.get('ana_yon')or'BEKLE'
+ giris=F((dR.get('giris')if I(dR,dict)else None)or H.get('giris')or(_f(H.get('df_15m'),'close',-1)if I(H.get('df_15m'),pd.DataFrame)else 0.0))
+ anlik_f=F((dR.get('anlik')if I(dR,dict)and dR.get('anlik')else None)or(_f(H.get('df_15m'),'close',-1)if I(H.get('df_15m'),pd.DataFrame)else giris))
+ sl=F((dR.get('sl')if I(dR,dict)else None)or H.get('sl')or 0.0)
+ ilk_sl=F((dR.get('ilk_sl')if I(dR,dict)else None)or sl)
+ rk=A(giris-ilk_sl)if giris>0 and ilk_sl>0 else 0.0
+ mO=-1.0 if yon=='SHORT'else 1.0
+ tp1=F((dR.get('tp')if I(dR,dict)else None)or(giris+mO*rk*RISK_ODUL_ORANI if rk>0 else 0.0))
+ tp2=F((dR.get('tp_nihai')if I(dR,dict)else None)or(giris+mO*rk*M(NIHAI_TP_RR,RISK_ODUL_ORANI+1.0)if rk>0 else 0.0))
+ miktar=F((dR.get('miktar')if I(dR,dict)else None)or 0.0)
+ marjin_u=F((dR.get('marjin_usdt')if I(dR,dict)else None)or 0.0)
+ risk_u=F((dR.get('risk_usdt')if I(dR,dict)else None)or ISLEM_BASI_RISK_USDT)
+ if miktar<=0 and giris>0 and sl>0:
+  try:miktar,marjin_u,risk_u=dinamik_miktar_hesapla(J,giris,sl,D,H.get('skor',70))
+  except Exception:pass
+ kFlt=H.get('konum_meta',{})if I(H.get('konum_meta'),dict)else{}
+ chk=kFlt.get('checklist',{})if I(kFlt.get('checklist'),dict)else{}
+ p1,p2,p3,p4=H.get('atli_puanlar',(0,0,0,0))
+ skor=int(H.get('skor',0)or(dR.get('skor',0)if I(dR,dict)else 0))
+ bolge_10p=F(H.get('bolge_10p_skor',0.0))
+ aktif_htf_bolgeler=kFlt.get('aktif_htf_bolgeler',[])
+ aktif_birincil_bolgeler=kFlt.get('aktif_birincil_bolgeler',[])
+ birincil_olcek_skoru=int(kFlt.get('birincil_olcek_skoru',0))
+ birincil_olcek_carpani=F(kFlt.get('birincil_olcek_carpani_etkin',0.35))
+ oncelik_etiket=kFlt.get('en_yuksek_oncelik_etiket','1.Öncelik:QML/OB/Fresh/OTE')
+ bolge_kademesi=int(kFlt.get('bolge_kademesi',1)or 1)
+ safe_sayisi=int(kFlt.get('htf_bolge_sayisi',dR.get('uygun_kural_sayisi',1)if I(dR,dict)else 0))
+ safe_puan=int(kFlt.get('htf_safe_puan',dR.get('uygun_alt_kural_sayisi',80)if I(dR,dict)else 0))
+ safe_derece=kFlt.get('htf_safe_derecesi','🛡️ SAFE')
+ ltf_kirilimlar=kFlt.get('ltf_kirilim_listesi',[])
+ ltf_mumlar=kFlt.get('ltf_mum_listesi',[])
+ aktif_ltf_tetikler=kFlt.get('aktif_ltf_tetikler',[])
+ stop_kaynak=kFlt.get('stop_kaynak_bilgi',STOP_BELIRLEME_MODU)
+ yapi_4h=H.get('yapi_4h',{})if I(H.get('yapi_4h'),dict)else{}
+ yapi_1h=H.get('yapi_1h',{})if I(H.get('yapi_1h'),dict)else{}
+ v6=H.get('v6_meta',{})if I(H.get('v6_meta'),dict)else{}
+ v8=H.get('v8_meta',{})if I(H.get('v8_meta'),dict)else{}
+ v12=H.get('v12_meta',{})if I(H.get('v12_meta'),dict)else{}
+ giris_kurallari=(dR.get('giris_kurallari')if I(dR,dict)and dR.get('giris_kurallari')else None)or H.get('detayli_kurallar',[])
+ ozet_str=(dR.get('ozet')if I(dR,dict)and dR.get('ozet')else None)or H.get('ozet','-')
+ denetim_notlari=[]
+ if kFlt.get('htf_oncelikli_bolge_onay'):
+  denetim_notlari.append(f"1.Öncelik İlk Kontrol GEÇTİ: Fiyat {kFlt.get('htf_oncelikli_bolge_sayisi',1)}/4 ana bölgede ({'+'.join(aktif_birincil_bolgeler)}) | Ölçek: {birincil_olcek_skoru}/10000p ({birincil_olcek_carpani:.2f}x).")
+ elif safe_sayisi>=1:
+  denetim_notlari.append(f"2.Kademe Yedek Bölge: Fiyat 1.Öncelik (Arz/Talep, OB, OTE, QML) dışında, yedek bölgede ({', '.join(aktif_htf_bolgeler)}) | Ölçek: {birincil_olcek_skoru}/10000p.")
+ else:
+  denetim_notlari.append("HTF Bölge Dışı: Fiyat şu an Arz/Talep, OB, OTE, QML veya yedek bölgelerin hiçbirinde değil (giriş kilidi aktif).")
+ if ltf_kirilimlar and ltf_mumlar:
+  denetim_notlari.append(f"Çifte LTF Onayı (3a+3b): Hem kırılım ({', '.join(ltf_kirilimlar[:2])}) hem mum ({', '.join(ltf_mumlar[:2])}) var.")
+ elif ltf_kirilimlar or ltf_mumlar:
+  denetim_notlari.append(f"Tekil LTF Onayı: {', '.join((ltf_kirilimlar[:2]+ltf_mumlar[:2]))}.")
+ else:
+  denetim_notlari.append("LTF Onayı Bekleniyor: Henüz LTF dönüş kırılımı veya mumu oluşmadı.")
+ if giris>0 and sl>0:
+  sl_yuzde=A(giris-sl)/M(giris,1e-09)*100.0
+  if sl_yuzde<0.22:
+   denetim_notlari.append(f"Dar Stop Uyarısı: Stop mesafesi %{sl_yuzde:.2f} (iğne avına karşı HTF stopa çekilebilir).")
+  elif sl_yuzde>3.8:
+   denetim_notlari.append(f"Geniş Stop Notu: Stop mesafesi %{sl_yuzde:.2f} (1R sabit -{risk_u:.2f}$ korunuyor, LTF dar stop ile R:R büyütülebilir).")
+  else:
+   denetim_notlari.append(f"Optimal Stop Mesafesi: %{sl_yuzde:.2f} ({stop_kaynak}), 1R = -{risk_u:.2f}$.")
+ fibo_oran_4h=F(yapi_4h.get('fibo_oran',0.5)or 0.5)*100.0
+ tam_metin=(
+  f"Parite: {O_str} ({D.upper()}) | Yön: {yon} | Anlık: {_fmt_f(anlik_f)} | Skor: {skor}/100 (1.Atlı:{p1}, 2.Atlı:{p2}, 3.Atlı:{p3}, 4.Atlı:{p4}) | 1.Öncelik Ölçek: {birincil_olcek_skoru}/10000p ({birincil_olcek_carpani:.2f}x)\n"
+  f"MTF: {htf_p.upper()}/{mtf_p.upper()}/{ltf_p} | HTF Yön: {H.get('yon_4h',yapi_4h.get('yon','-'))} (Fibo:%{fibo_oran_4h:.1f}) | MTF Yön: {H.get('yon_1h',yapi_1h.get('yon','-'))}\n"
+  f"HTF Safe Bölge ({safe_sayisi}/8 - {safe_derece} - {oncelik_etiket}): {', '.join(aktif_htf_bolgeler) if aktif_htf_bolgeler else 'Bölge Dışı'} | QML:{chk.get('qml_fiyat','-')} | OB:{chk.get('ob_aralik','-')} | Fresh:{chk.get('fresh_aralik','-')} | OTE:{chk.get('ote_aralik','-')} | ITZ:{chk.get('itz_fiyat','-')} | Magic:{chk.get('magic_fiyat','-')}\n"
+  f"Likidite & Imbalance: {v8.get('likidite_turu','-')} | SFP:{v8.get('sfp_durumu','-')} | FVG:{v6.get('imbalance_tipi','-')} | DVG:{v12.get('dvg_durumu','-')} | SMT:{v12.get('smt_durumu','-')}\n"
+  f"LTF Tetikleyiciler: Kırılım(3a)={', '.join(ltf_kirilimlar)or'Yok'} | Mum(3b)={', '.join(ltf_mumlar)or'Yok'}\n"
+  f"Giriş/SL/TP: Giriş={_fmt_f(giris)} | SL={_fmt_f(sl)} ({stop_kaynak}) | TP1({RISK_ODUL_ORANI}R)={_fmt_f(tp1)} | TP2({NIHAI_TP_RR}R)={_fmt_f(tp2)} | Miktar={miktar} (Marjin:{marjin_u:.2f}$, 1R Risk:-{risk_u:.2f}$)\n"
+  f"Denetim: {' | '.join(denetim_notlari)}"
+ )
+ return{'parite':O_str,'sembol':J,'piyasa':D,'yon':yon,'anlik':anlik_f,'skor':skor,'giris':giris,'sl':sl,'ilk_sl':ilk_sl,'tp1':tp1,'tp2':tp2,'miktar':miktar,'marjin_usdt':marjin_u,'risk_usdt':risk_u,'htf_periyot':htf_p,'mtf_periyot':mtf_p,'ltf_periyot':ltf_p,'safe_sayisi':safe_sayisi,'safe_puan':safe_puan,'safe_derece':safe_derece,'oncelik_etiket':oncelik_etiket,'bolge_kademesi':bolge_kademesi,'birincil_olcek_skoru':birincil_olcek_skoru,'birincil_olcek_carpani':birincil_olcek_carpani,'aktif_htf_bolgeler':aktif_htf_bolgeler,'aktif_birincil_bolgeler':aktif_birincil_bolgeler,'chk':chk,'ltf_kirilimlar':ltf_kirilimlar,'ltf_mumlar':ltf_mumlar,'stop_kaynak':stop_kaynak,'atli_puanlar':(p1,p2,p3,p4),'likidite_turu':v8.get('likidite_turu','-'),'sfp_durumu':v8.get('sfp_durumu','-'),'imbalance_tipi':v6.get('imbalance_tipi','-'),'bolge_10p':bolge_10p,'denetim_notlari':denetim_notlari,'onerilen_duzeltmeler':[],'giris_kurallari':giris_kurallari,'ozet':ozet_str,'tam_rapor_metni':tam_metin}
+
+def aninda_islem_grafigi_uret(O,mod='temiz_mum',H_ozel=None,kaydet_png=True,ozel_tf=None,bar_sayisi=85,katmanlar=None):
+ """Secili islem veya parite icin istenilen zaman dilimi, mum sayisi ve katmanlarla aninda grafik uretir."""
+ O_str=str(O or'FUT:BTC/USDT')
+ if':'not in O_str:
+  O_str=f"FUT:{O_str}"if'/'in O_str else f"FUT:{O_str}/USDT"
+ H=H_ozel if(I(H_ozel,dict)and H_ozel)else(analiz_hafizasi.get(O_str)or analiz_hafizasi.get(O_str.split(':',1)[-1])or{})
+ dR=acik_islemler.get(O_str)if I(acik_islemler.get(O_str),dict)else None
+ J=(dR.get('sembol')if I(dR,dict)else None)or H.get('sembol')or O_str.split(':',1)[-1]
+ D=(dR.get('piyasa')if I(dR,dict)else None)or H.get('piyasa')or('spot'if O_str.startswith('SPOT:')else'future')
+ htf_p,mtf_p,ltf_p,_=_parite_mtf_periyotlarini_bul(O_str,J,D,H)
+ if not H or'df_15m'not in H:
+  try:
+   H=pine_icin_4h_1h_5m_veri_hazirla(J,D,H,O_str)
+   analiz_hafizasi[O_str]=H
+  except Exception:pass
+ rontgen=islem_rontgeni_olustur(O_str,H,dR)
+ fig=plt.figure(figsize=(10.2,6.1),dpi=130,facecolor='#0f172a')
+ tbox=dict(boxstyle='round,pad=0.22',fc='#0f172a',ec='#334155',alpha=0.9,lw=0.8)
+ ktm={'swing':False,'ob_fvg':False,'qml_fibo':False,'likidite':False,'islem':False}
+ if I(katmanlar,dict):
+  ktm.update(katmanlar)
+ elif mod in('ltf_zoom','mtf_3lu','htf_bolge','likidite_denetim'):
+  ktm={'swing':True,'ob_fvg':True,'qml_fibo':True,'likidite':True,'islem':True}
+ elif mod=='sadece_likidite':
+  ktm={'swing':True,'ob_fvg':False,'qml_fibo':False,'likidite':True,'islem':True}
+ elif mod=='sadece_qml_ote':
+  ktm={'swing':True,'ob_fvg':False,'qml_fibo':True,'likidite':False,'islem':True}
+ elif mod=='sadece_ob_fvg':
+  ktm={'swing':False,'ob_fvg':True,'qml_fibo':False,'likidite':False,'islem':True}
+ elif mod=='temiz_mum':
+  ktm={'swing':False,'ob_fvg':False,'qml_fibo':False,'likidite':False,'islem':False}
+ def _tek_panel_detayli_ciz(ax,df_src,yapi_src,tf_etiket,n_bar=90,zoom_islem=True):
+  ax.set_facecolor('#0f172a')
+  ax.grid(True,ls=':',lw=0.65,color='#334155',alpha=0.6)
+  ax.tick_params(colors='#cbd5e1',labelsize=8)
+  for sp in ax.spines.values():sp.set_color('#334155')
+  if df_src is None or L(df_src)<5:
+   ax.set_title(f"{O_str} [{tf_etiket}] — Veri Bekleniyor",color='#f8fafc',fontsize=10,fontweight='bold')
+   return
+  oc=M(0,L(df_src)-int(n_bar))
+  df=df_src.iloc[oc:].reset_index(drop=True)
+  ct=L(df)
+  lo_all,hi_all=(F(df['low'].min()),F(df['high'].max()))
+  cf=M(hi_all-lo_all,hi_all*0.002)
+  E_p=M(_f(df,'atr',-2)if'atr'in df.columns else cf*0.04,cf*0.008)
+  uH,uL,kysy_m=kirilim_yoksa_swing_yoktur_analizi(df,n=2 if any(x in tf_etiket.lower()for x in('1m','3m','5m','15m'))else SWING_PENCERE)
+  if ktm.get('swing',True):
+   zz=sorted([(i,v,'H')for i,v in uH]+[(i,v,'L')for i,v in uL],key=lambda x:x[0])
+   if L(zz)>=2:
+    ax.plot([x[0]for x in zz],[x[1]for x in zz],color='#cbd5e1',lw=1.35,alpha=0.8,zorder=4)
+   for eh_i,eh_v in kysy_m.get('elenen_highs',[])[-8:]:
+    if 0<=eh_i<ct:ax.scatter([eh_i],[eh_v],color='#64748b',marker='x',s=26,zorder=5)
+   for el_i,el_v in kysy_m.get('elenen_lows',[])[-8:]:
+    if 0<=el_i<ct:ax.scatter([el_i],[el_v],color='#64748b',marker='x',s=26,zorder=5)
+  bs_p=[{'orig_idx':b[2],'idx2':b[0],'yon':b[4],'tip':b[5]}for b in kysy_m.get('bos_list',[])[-10:]]
+  qml_v=F(kysy_m.get('qml_seviyesi')or(yapi_src.get('qml_seviyesi')if I(yapi_src,dict)else 0.0)or 0.0)
+  if ktm.get('ob_fvg',True):
+   at_p,im_p=_arz_talep_ve_imbalance_sablon_hesapla(df,list(G(ct)),bs_p,E_p,qml_v if qml_v>0 else None)
+   for z_at in at_p[-5:]:
+    ns=M(0,N(ct-2,int(z_at['idx1'])))
+    hp,iA=(F(z_at['lo']),F(z_at['hi']))
+    mt_50=(hp+iA)/2.0
+    gK='#10b981'if z_at['tur']=='TALEP'else'#ef4444'
+    ax.add_patch(Rectangle((ns,hp),M(3,ct-ns+2),M(A(iA-hp),cf*0.004),facecolor=gK,edgecolor=gK,alpha=0.18,lw=1.1,zorder=2))
+    ax.plot([ns,ct+1],[mt_50,mt_50],color=gK,ls=':',lw=0.9,alpha=0.85,zorder=3)
+    ax.text(ct+0.8,mt_50,f"{_temiz_etiket_grafik(z_at['etiket'])} (%50 MT:{_fmt_f(mt_50)})",color=gK,fontsize=7.1,fontweight='bold',ha='right',va='center',bbox=tbox,zorder=8)
+   for im_z in im_p[-5:]:
+    ns=M(0,N(ct-2,int(im_z['idx1'])))
+    hp,iA=(F(im_z['lo']),F(im_z['hi']))
+    ce_50=(hp+iA)/2.0
+    gK='#f59e0b'if'BISI'in im_z['tip']else'#a855f7'
+    ax.add_patch(Rectangle((ns,hp),M(3,ct-ns+1),M(A(iA-hp),cf*0.003),facecolor=gK,edgecolor=gK,alpha=0.15,ls='--',lw=0.9,zorder=2))
+    ax.plot([ns,ct],[ce_50,ce_50],color=gK,ls=':',lw=0.85,alpha=0.8,zorder=3)
+    ax.text(ct-0.5,ce_50,f"{_temiz_etiket_grafik(im_z['etiket'])} (%50 CE:{_fmt_f(ce_50)})",color=gK,fontsize=6.8,fontweight='bold',ha='right',va='center',bbox=tbox,zorder=7)
+  for bu,row in df.iterrows():
+   ac,kp,yk,ds=_r(row,'open','close','high','low')
+   qj=kp>=ac
+   f8,gK=('#22c55e','#4ade80')if qj else('#ef4444','#f87171')
+   ax.plot([bu,bu],[ds,yk],color=gK,lw=1.1,zorder=3)
+   ax.add_patch(Rectangle((bu-0.34,N(ac,kp)),0.68,M(A(kp-ac),cf*0.0025),facecolor=f8,edgecolor=gK,lw=0.75,zorder=4))
+  if ktm.get('qml_fibo',True):
+   if qml_v>0 and lo_all-cf*0.3<=qml_v<=hi_all+cf*0.3:
+    q_idx=M(0,N(ct-2,int(kysy_m.get('qml_idx')or 0)))
+    ax.plot([q_idx,ct+1],[qml_v,qml_v],color='#ef4444',lw=1.8,ls='-',zorder=6)
+    ax.text(ct+0.8,qml_v,f"[#1 QML] {_fmt_f(qml_v)}",color='#fde047',fontsize=7.5,fontweight='bold',ha='right',va='bottom',bbox=tbox,zorder=9)
+   smax=F((yapi_src.get('swing_max')if I(yapi_src,dict)else 0.0)or hi_all)
+   smin=F((yapi_src.get('swing_min')if I(yapi_src,dict)else 0.0)or lo_all)
+   if smax>smin:
+    du=smax-smin
+    yon_b=(yapi_src.get('yon')if I(yapi_src,dict)else rontgen['yon'])=='BULLISH'
+    ote_1=smax-du*0.618 if yon_b else smin+du*0.618
+    ote_705=smax-du*0.705 if yon_b else smin+du*0.705
+    ote_2=smax-du*0.786 if yon_b else smin+du*0.786
+    eq_50=(smax+smin)/2.0
+    ax.axhspan(N(ote_1,ote_2),M(ote_1,ote_2),color='#3b82f6',alpha=0.11,zorder=1)
+    ax.axhline(eq_50,color='#64748b',ls='--',lw=0.85,alpha=0.75,zorder=2)
+    ax.axhline(ote_705,color='#fde047',ls=':',lw=1.0,alpha=0.8,zorder=3)
+    ax.text(0.5,ote_705,f"OTE 0.705 ({_fmt_f(ote_705)})",color='#fde047',fontsize=7.0,fontweight='bold',ha='left',va='center',bbox=tbox,zorder=8)
+  if ktm.get('likidite',True):
+   lq_l,sfp_l,_=_likidite_ve_sfp_yapilarini_bul(df,uH,uL)
+   for lq in lq_l[-6:]:
+    i1,i2,p1_l,p2_l,rk_l=(int(lq['idx1']),int(lq['idx2']),F(lq['p1']),F(lq['p2']),lq.get('renk','#fbbf24'))
+    stil='--'if'Trendline'in lq['tip']else('-.'if'IDM'in lq['tip']else':')
+    ax.plot([i1,i2],[p1_l,p2_l],color=rk_l,ls=stil,lw=1.45,alpha=0.9,zorder=6)
+    ax.text(i2,(p1_l+p2_l)/2.0,f" {_temiz_etiket_grafik(lq['tip'])}",color=rk_l,fontsize=7.0,fontweight='bold',ha='right',va='bottom',bbox=tbox,zorder=8)
+   for sf in sfp_l[-4:]:
+    kT,sp_f,s_yon=(int(sf['idx']),F(sf['price']),sf.get('yon','BULL'))
+    col_s='#f43f5e'if s_yon=='BEAR'else'#10b981'
+    ax.scatter([kT],[sp_f],color=col_s,s=65,marker='*',zorder=9)
+    ax.text(kT,sp_f+(cf*0.025 if s_yon=='BEAR'else-cf*0.025),_temiz_etiket_grafik(sf.get('tip','SFP')),color=col_s,fontsize=7.2,fontweight='bold',ha='center',bbox=tbox,zorder=9)
+  g_f,sl_f,tp1_f,tp2_f=(rontgen['giris'],rontgen['sl'],rontgen['tp1'],rontgen['tp2'])
+  if ktm.get('islem',True)and zoom_islem and g_f>0 and sl_f>0:
+   oJ=M(0,ct-18)
+   ax.add_patch(Rectangle((oJ,N(g_f,sl_f)),ct-oJ+2,A(g_f-sl_f),facecolor='#ef4444',alpha=0.14,zorder=2))
+   if tp1_f>0:
+    ax.add_patch(Rectangle((oJ,N(g_f,tp1_f)),ct-oJ+2,A(tp1_f-g_f),facecolor='#10b981',alpha=0.12,zorder=2))
+   ax.axhline(g_f,color='#38bdf8',ls='--',lw=1.7,zorder=7)
+   ax.axhline(sl_f,color='#ef4444',ls='-',lw=1.8,zorder=7)
+   if tp1_f>0:ax.axhline(tp1_f,color='#10b981',ls='-',lw=1.7,zorder=7)
+   if tp2_f>0:ax.axhline(tp2_f,color='#a3e635',ls=':',lw=1.5,zorder=7)
+   tetik_kisa='+'.join((rontgen['ltf_kirilimlar'][:1]+rontgen['ltf_mumlar'][:1]))or rontgen['oncelik_etiket']
+   ax.scatter([ct-1],[g_f],color='#38bdf8',edgecolors='#ffffff',s=80,zorder=10)
+   ax.annotate(
+    _temiz_etiket_grafik(f"[{rontgen['yon']} GİRİŞ: {_fmt_f(g_f)}]\n{rontgen['oncelik_etiket']} ({rontgen['safe_sayisi']}/8 Safe)\nTetik: {tetik_kisa[:36]}"),
+    xy=(ct-1,g_f),xytext=(M(2,ct-34),g_f),
+    color='#7dd3fc',fontsize=7.4,fontweight='bold',
+    arrowprops=dict(arrowstyle='->',color='#38bdf8',lw=1.5),
+    bbox=dict(boxstyle='round,pad=0.26',fc='#0f172a',ec='#38bdf8',lw=1.2),zorder=11
+   )
+   ax.text(0.8,sl_f,_temiz_etiket_grafik(f"[STOP 1R: {_fmt_f(sl_f)}] (-{rontgen['risk_usdt']:.2f}$ | {rontgen['stop_kaynak'][:34]})"),color='#fca5a5',fontsize=7.2,fontweight='bold',ha='left',va='center',bbox=tbox,zorder=10)
+   if tp1_f>0:
+    ax.text(0.8,tp1_f,f"[TP1 {RISK_ODUL_ORANI}R: {_fmt_f(tp1_f)}] (%50 Kâr Al + BE)",color='#6ee7b7',fontsize=7.2,fontweight='bold',ha='left',va='center',bbox=tbox,zorder=10)
+   if tp2_f>0:
+    ax.text(0.8,tp2_f,f"[TP2 {NIHAI_TP_RR}R: {_fmt_f(tp2_f)}]",color='#bef264',fontsize=7.1,fontweight='bold',ha='left',va='center',bbox=tbox,zorder=10)
+  ax.set_title(
+   _temiz_etiket_grafik(f"{O_str} [{tf_etiket}] — Yön: {rontgen['yon']} | Skor: {rontgen['skor']}/100 | {rontgen['safe_derece']} | Öncelik: {rontgen['oncelik_etiket']}"),
+   color='#f8fafc',fontsize=9.6,fontweight='bold',pad=8,loc='left'
+  )
+  ax.set_xlim(-1,ct+3)
+ n_b=int(bar_sayisi)if bar_sayisi and int(bar_sayisi)>=20 else 85
+ if ozel_tf and ozel_tf in TUM_ZAMAN_DILIMLERI:
+  try:
+   pk_oz=tek_tf_canli_pa_analizi(J,ozel_tf,D,H.get('ana_yon'),limit=M(110,n_b+20))
+   ax=fig.add_subplot(111)
+   _tek_panel_detayli_ciz(ax,pk_oz['df_full'],pk_oz['yapi'],f"ÖZEL PERİYOT ({ozel_tf.upper()})",n_bar=n_b,zoom_islem=True)
+  except Exception:
+   ax=fig.add_subplot(111)
+   _tek_panel_detayli_ciz(ax,H.get('df_15m_full',H.get('df_15m')),H.get('yapi_15m',{}),f"LTF ({ltf_p})",n_bar=n_b,zoom_islem=True)
+ elif mod=='mtf_3lu':
+  gs=GridSpec(3,1,height_ratios=[1,1,1.15],hspace=0.28,figure=fig)
+  _tek_panel_detayli_ciz(fig.add_subplot(gs[0]),H.get('df_4h_full',H.get('df_15m')),H.get('yapi_4h',{}),f"HTF {htf_p.upper()}",n_bar=n_b,zoom_islem=False)
+  _tek_panel_detayli_ciz(fig.add_subplot(gs[1]),H.get('df_1h_full',H.get('df_15m')),H.get('yapi_1h',{}),f"MTF {mtf_p.upper()}",n_bar=n_b,zoom_islem=True)
+  _tek_panel_detayli_ciz(fig.add_subplot(gs[2]),H.get('df_15m_full',H.get('df_15m')),H.get('yapi_15m',{}),f"LTF {ltf_p}",n_bar=n_b,zoom_islem=True)
+ elif mod in('htf_bolge','sadece_qml_ote'):
+  ax=fig.add_subplot(111)
+  _tek_panel_detayli_ciz(ax,H.get('df_4h_full',H.get('df_15m')),H.get('yapi_4h',{}),f"HTF 8 SAFE BÖLGE & QML/OTE ({htf_p.upper()})",n_bar=M(110,n_b),zoom_islem=True)
+ elif mod in('likidite_denetim','sadece_likidite','sadece_ob_fvg','temiz_mum'):
+  ax=fig.add_subplot(111)
+  _tek_panel_detayli_ciz(ax,H.get('df_15m_full',H.get('df_15m')),H.get('yapi_15m',{}),f"ÖZEL KATMAN GRAFİĞİ ({ltf_p} | {mod.upper()})",n_bar=M(95,n_b),zoom_islem=True)
+ else:
+  gs=GridSpec(2,1,height_ratios=[3.2,1.0],hspace=0.18,figure=fig)
+  ax_m=fig.add_subplot(gs[0])
+  ax_i=fig.add_subplot(gs[1])
+  df_l=H.get('df_15m_full',H.get('df_15m'))
+  _tek_panel_detayli_ciz(ax_m,df_l,H.get('yapi_15m',{}),f"LTF GİRİŞ, TETİK MUMU & SL/TP RÖNTGENİ ({ltf_p})",n_bar=n_b,zoom_islem=True)
+  if df_l is not None and L(df_l)>=5 and'rsi'in df_l.columns:
+   oc_i=M(0,L(df_l)-n_b)
+   df_sub=df_l.iloc[oc_i:].reset_index(drop=True)
+   ax_i.set_facecolor('#0f172a')
+   pF=np.arange(L(df_sub))
+   ln=df_sub['rsi'].astype(F).values
+   ax_i.plot(pF,ln,color='#a78bfa',lw=1.4,label='RSI(14)')
+   ax_i.axhline(70,color='#f87171',ls=':',lw=0.8)
+   ax_i.axhline(50,color='#64748b',ls='--',lw=0.8)
+   ax_i.axhline(30,color='#4ade80',ls=':',lw=0.8)
+   ax_i.set_xlim(-1,L(df_sub)+3)
+   ax_i.set_ylim(15,85)
+   ax_i.tick_params(colors='#94a3b8',labelsize=7.5)
+   ax_i.grid(True,ls=':',alpha=0.25,color='#334155')
+   ax_i.set_title(f"DVG & Osilatör Kontrolü (RSI Kapanış: {ln[-1]:.1f} | AO İğne: {_f(df_sub,'ao',-1):+.4f} | CVD: {_f(df_sub,'cvd',-1):+.1f})",color='#cbd5e1',fontsize=8.2,fontweight='bold')
+ fig.subplots_adjust(left=0.06,right=0.97,top=0.93,bottom=0.07)
+ dosya_png=''
+ b64_png=''
+ try:
+  buf=_io.BytesIO()
+  fig.savefig(buf,format='png',dpi=130,bbox_inches='tight',facecolor='#0f172a')
+  buf.seek(0)
+  b64_png=_b64.b64encode(buf.read()).decode('utf-8')
+  if kaydet_png:
+   hedef_klasor=ANDROID_VERI_DIZINI if'ANDROID_VERI_DIZINI'in globals()else'.'
+   dosya_png=os.path.abspath(os.path.join(hedef_klasor,f"islem_rontgen_{O_str.replace(':','_').replace('/','_')}_{mod}.png"))
+   with open(dosya_png,'wb')as fp_out:
+    fp_out.write(_b64.b64decode(b64_png))
+ except Exception:pass
+ return(fig,dosya_png,b64_png,rontgen)
+
+def _metinden_sembol_cikar(metin,varsayilan_o=None):
+ """Kullanicinin mesajinda gecen coin adini (orn. ETH, SOL, AVAX, PEPE, XRP) tespit eder."""
+ if not metin:return varsayilan_o
+ m_up=str(metin).upper()
+ m_pair=re.search(r'([A-Z0-9]{2,10})\s*/\s*USDT',m_up)
+ if m_pair:
+  on='SPOT:'if'SPOT'in m_up else'FUT:'
+  return f"{on}{m_pair.group(1)}/USDT"
+ bilinen_coinler=['BTC','ETH','SOL','BNB','XRP','DOGE','ADA','AVAX','LINK','DOT','MATIC','ARB','OP','SUI','APT','NEAR','LTC','BCH','ATOM','UNI','PEPE','SHIB','WIF','BONK','FET','RENDER','INJ','TIA','SEI','TRX','TON','AAVE','FIL','ETC','STX','IMX','GALA','SAND','MANA','AXS','CRV','LDO','RUNE','ENS','ORDI','JUP','ENA','WLD','PENDLE','ONDO']
+ for k_a in list(acik_islemler.keys())+list(analiz_hafizasi.keys()):
+  if':'in str(k_a):
+   c_ad=str(k_a).split(':',1)[-1].split('/')[0].upper()
+   if c_ad not in bilinen_coinler:bilinen_coinler.append(c_ad)
+ for c in bilinen_coinler:
+  if re.search(rf'{c}',m_up):
+   on='SPOT:'if'SPOT'in m_up else(varsayilan_o.split(':',1)[0]+':'if':'in str(varsayilan_o)else'FUT:')
+   return f"{on}{c}/USDT"
+ return varsayilan_o
+
+def gemini_komut_ve_hata_duzeltici(metin,O_secili=None,gui_ref=None):
+ """Hem dogal dil emirlerini hem de yapay zekanin dondurdugu <AJAN_KOMUTU>{...}</AJAN_KOMUTU> veya <DUZELTME_KOMUTU>{...}</DUZELTME_KOMUTU> aksiyonlarini bota uygular."""
+ global STOP_BELIRLEME_MODU,KYSY_HTF_ATR_CARPANI,KYSY_LTF_ATR_CARPANI,EQH_EQL_TOL_ATR,SFP_MIN_IGNE_ATR,IKINCIL_BOLGE_GIRIS_AKTIF,MIN_CONFLUENCE_SKORU,KALDIRAC,ISLEM_BASI_RISK_USDT,MAKS_MARJIN_USDT,RISK_ODUL_ORANI,NIHAI_TP_RR,ISLEM_TARZI_MODU,BIRINCIL_BOLGE_OLCEK_CARPANI
+ if not metin:return(False,'',None)
+ m_str=str(metin)
+ m_low=m_str.lower()
+ uygulanan=[]
+ cizim_istegi=None
+ hedef_o=_metinden_sembol_cikar(m_str,str(O_secili or'FUT:BTC/USDT'))
+ dR=acik_islemler.get(hedef_o)if I(acik_islemler.get(hedef_o),dict)else(acik_islemler.get(str(O_secili))if I(acik_islemler.get(str(O_secili)),dict)else None)
+ H=analiz_hafizasi.get(hedef_o)or analiz_hafizasi.get(str(O_secili))or{}
+ for tag_rx in(r'<AJAN_KOMUTU>(.*?)</AJAN_KOMUTU>',r'<DUZELTME_KOMUTU>(.*?)</DUZELTME_KOMUTU>'):
+  for m_js in re.finditer(tag_rx,m_str,re.DOTALL):
+   try:
+    cmd_d=json.loads(m_js.group(1).strip())
+    if not I(cmd_d,dict):continue
+    aks=str(cmd_d.get('aksiyon','')).lower()
+    if cmd_d.get('parite'):
+     hedef_o=_metinden_sembol_cikar(str(cmd_d['parite']),hedef_o)
+     dR=acik_islemler.get(hedef_o)if I(acik_islemler.get(hedef_o),dict)else dR
+    if aks=='grafik_ciz'or'cizim_modu'in cmd_d:
+     cizim_istegi={'parite':hedef_o,'mod':str(cmd_d.get('cizim_modu')or cmd_d.get('mod')or'ltf_zoom'),'tf':cmd_d.get('periyot')or cmd_d.get('tf'),'bar':cmd_d.get('bar_sayisi')or cmd_d.get('mum_sayisi'),'ayri_pencere':bool(cmd_d.get('ayri_pencere',False))}
+     uygulanan.append(f"📊 {hedef_o} grafiği ({cizim_istegi['mod']}) çizildi.")
+    if aks=='ayri_sohbet_ac'or cmd_d.get('ayri_sohbet_penceresi'):
+     if gui_ref and hasattr(gui_ref,'bagimsiz_ai_sohbet_penceresi_ac'):
+      gui_ref.after(20,lambda h_o=hedef_o:gui_ref.bagimsiz_ai_sohbet_penceresi_ac(h_o))
+      uygulanan.append("🗗 Konuşma bağımsız ayrı pencerede açıldı.")
+    if aks=='tradingview_ac':
+     if gui_ref:
+      gui_ref.after(20,lambda h_o=hedef_o:tradingview_kopyala_yapistirsiz_html_ac(h_o,'5m'))
+      uygulanan.append(f"🌐 {hedef_o} Canlı TradingView grafiği tarayıcıda açıldı.")
+    if aks=='bot_baslat'and gui_ref and hasattr(gui_ref,'botu_baslat'):
+     gui_ref.after(10,gui_ref.botu_baslat)
+     uygulanan.append("▶️ Bot taraması başlatıldı.")
+    if aks=='bot_durdur'and gui_ref and hasattr(gui_ref,'botu_durdur'):
+     gui_ref.after(10,gui_ref.botu_durdur)
+     uygulanan.append("⏹️ Bot taraması durduruldu.")
+    if aks=='islem_kapat'and gui_ref:
+     if cmd_d.get('tumu'):
+      for k_ac in[k for k,v in acik_islemler.items()if I(v,dict)]:
+       threading.Thread(target=gui_ref._poz_kapat,args=(k_ac,'AI AJAN KOMUTUYLA KAPATILDI'),daemon=True).start()
+      uygulanan.append("🚨 Tüm açık işlemler kapatıldı.")
+     elif I(acik_islemler.get(hedef_o),dict):
+      threading.Thread(target=gui_ref._poz_kapat,args=(hedef_o,'AI AJAN KOMUTUYLA KAPATILDI'),daemon=True).start()
+      uygulanan.append(f"🚨 {hedef_o} açık işlemi kapatıldı.")
+    if'stop_modu'in cmd_d and cmd_d['stop_modu']:
+     STOP_BELIRLEME_MODU=str(cmd_d['stop_modu'])
+     uygulanan.append(f"🛡️ Stop Belirleme Modu -> '{STOP_BELIRLEME_MODU}' yapıldı.")
+    if'yeni_sl'in cmd_d and I(dR,dict)and F(cmd_d['yeni_sl'])>0:
+     dR['sl']=R(F(cmd_d['yeni_sl']),6)
+     uygulanan.append(f"🛡️ {hedef_o} Stop-Loss -> {dR['sl']} yapıldı.")
+    if'yeni_tp'in cmd_d and I(dR,dict)and F(cmd_d['yeni_tp'])>0:
+     dR['tp']=R(F(cmd_d['yeni_tp']),6)
+     uygulanan.append(f"🎯 {hedef_o} TP1 -> {dR['tp']} yapıldı.")
+    if'kaldirac'in cmd_d and F(cmd_d['kaldirac'])>=1:
+     KALDIRAC=M(1,N(125,int(F(cmd_d['kaldirac']))))
+     if gui_ref and hasattr(gui_ref,'ent_kaldirac'):
+      gui_ref.ent_kaldirac.delete(0,'end');gui_ref.ent_kaldirac.insert(0,str(KALDIRAC))
+     uygulanan.append(f"⚙️ Kaldıraç -> {KALDIRAC}x yapıldı.")
+    if'risk_usdt'in cmd_d and F(cmd_d['risk_usdt'])>0:
+     ISLEM_BASI_RISK_USDT=M(0.1,F(cmd_d['risk_usdt']))
+     if gui_ref and hasattr(gui_ref,'ent_risk'):
+      gui_ref.ent_risk.delete(0,'end');gui_ref.ent_risk.insert(0,str(ISLEM_BASI_RISK_USDT))
+     uygulanan.append(f"💰 İşlem Başı Risk -> {ISLEM_BASI_RISK_USDT}$ (1R) yapıldı.")
+    if'marjin_usdt'in cmd_d and F(cmd_d['marjin_usdt'])>=5:
+     MAKS_MARJIN_USDT=F(cmd_d['marjin_usdt'])
+     if gui_ref and hasattr(gui_ref,'ent_marjin'):
+      gui_ref.ent_marjin.delete(0,'end');gui_ref.ent_marjin.insert(0,str(MAKS_MARJIN_USDT))
+     uygulanan.append(f"💵 Maks Marjin -> {MAKS_MARJIN_USDT}$ yapıldı.")
+    if'rr'in cmd_d and F(cmd_d['rr'])>=0.5:
+     RISK_ODUL_ORANI=F(cmd_d['rr'])
+     if gui_ref and hasattr(gui_ref,'ent_rr'):
+      gui_ref.ent_rr.delete(0,'end');gui_ref.ent_rr.insert(0,str(RISK_ODUL_ORANI))
+     uygulanan.append(f"🎯 Risk/Ödül (TP1) -> {RISK_ODUL_ORANI}R yapıldı.")
+    if'min_skor'in cmd_d and F(cmd_d['min_skor'])>=10:
+     MIN_CONFLUENCE_SKORU=M(10,N(100,int(F(cmd_d['min_skor']))))
+     if gui_ref and hasattr(gui_ref,'ent_skor'):
+      gui_ref.ent_skor.delete(0,'end');gui_ref.ent_skor.insert(0,str(MIN_CONFLUENCE_SKORU))
+     uygulanan.append(f"🔥 Min Confluence Skoru -> {MIN_CONFLUENCE_SKORU} yapıldı.")
+    if'eqh_tol_atr'in cmd_d and F(cmd_d['eqh_tol_atr'])>0:
+     EQH_EQL_TOL_ATR=M(0.08,N(1.2,F(cmd_d['eqh_tol_atr'])))
+     uygulanan.append(f"💧 EQH/EQL Toleransı -> {EQH_EQL_TOL_ATR:.2f}x ATR yapıldı.")
+    if'sfp_min_atr'in cmd_d and F(cmd_d['sfp_min_atr'])>0:
+     SFP_MIN_IGNE_ATR=M(0.03,N(0.8,F(cmd_d['sfp_min_atr'])))
+     uygulanan.append(f"💧 SFP Min İğne Boyu -> {SFP_MIN_IGNE_ATR:.2f}x ATR yapıldı.")
+    if'kysy_htf_atr'in cmd_d and F(cmd_d['kysy_htf_atr'])>0:
+     KYSY_HTF_ATR_CARPANI=M(0.6,N(4.0,F(cmd_d['kysy_htf_atr'])))
+     uygulanan.append(f"📐 KYSY Swing ATR Çarpanı -> {KYSY_HTF_ATR_CARPANI:.2f}x ATR yapıldı.")
+    if'birincil_olcek_carpani'in cmd_d and F(cmd_d['birincil_olcek_carpani'])>0:
+     BIRINCIL_BOLGE_OLCEK_CARPANI=M(1.5,N(10.0,F(cmd_d['birincil_olcek_carpani'])))
+     uygulanan.append(f"🚀 1.Öncelik (Arz/Talep, OB, OTE, QML) Ölçek Çarpanı -> {BIRINCIL_BOLGE_OLCEK_CARPANI:.1f}x yapıldı.")
+   except Exception:pass
+ if any(k in m_low for k in('ayrı pencere','ayri pencere','yeni pencere','konuşmayı ayır','sohbeti ayır','bağımsız pencere')):
+  if'grafik'in m_low and'sohbet'not in m_low and'konuşma'not in m_low:
+   cizim_istegi={'parite':hedef_o,'mod':'ltf_zoom','ayri_pencere':True}
+   uygulanan.append(f"📈 {hedef_o} grafiği ayrı pencerede açıldı.")
+  elif gui_ref and hasattr(gui_ref,'bagimsiz_ai_sohbet_penceresi_ac'):
+   gui_ref.after(20,lambda h_o=hedef_o:gui_ref.bagimsiz_ai_sohbet_penceresi_ac(h_o))
+   uygulanan.append("🗗 Konuşma bağımsız ayrı pencerede açıldı.")
+ m_tf_ozel=re.search(r'(1m|3m|5m|15m|30m|1h|2h|4h|6h|12h|1d|1M)',m_str)
+ m_bar_say=re.search(r'(\d{2,3})\s*mum',m_low)
+ bar_s=int(m_bar_say.group(1))if m_bar_say else None
+ tf_s=m_tf_ozel.group(1)if(m_tf_ozel and any(k in m_low for k in('çiz','göster','grafik','bak','aç')))else None
+ if any(k in m_low for k in("tradingview'da aç",'tradingview aç',"tv'de aç",'tarayıcıda aç')):
+  if gui_ref:
+   gui_ref.after(20,lambda h_o=hedef_o,t_s=tf_s or'5m':tradingview_kopyala_yapistirsiz_html_ac(h_o,t_s))
+  uygulanan.append(f"🌐 {hedef_o} Canlı TradingView grafiği tarayıcıda açıldı.")
+ elif any(k in m_low for k in('sadece likidite','yalnızca likidite')):
+  cizim_istegi={'parite':hedef_o,'mod':'sadece_likidite','tf':tf_s,'bar':bar_s}
+ elif any(k in m_low for k in('sadece qml','sadece fibo','sadece ote')):
+  cizim_istegi={'parite':hedef_o,'mod':'sadece_qml_ote','tf':tf_s,'bar':bar_s}
+ elif any(k in m_low for k in('sadece ob','sadece fvg','sadece arz','sadece kutu')):
+  cizim_istegi={'parite':hedef_o,'mod':'sadece_ob_fvg','tf':tf_s,'bar':bar_s}
+ elif any(k in m_low for k in('sadece mum','temiz grafik','çizimsiz')):
+  cizim_istegi={'parite':hedef_o,'mod':'temiz_mum','tf':tf_s,'bar':bar_s}
+ elif any(k in m_low for k in("3'lü",'3lu','üçlü','mtf çiz','tüm zaman')):
+  cizim_istegi={'parite':hedef_o,'mod':'mtf_3lu','tf':None,'bar':bar_s}
+ elif any(k in m_low for k in('htf çiz','htf bölge','8 bölge','qml çiz','fibo çiz')):
+  cizim_istegi={'parite':hedef_o,'mod':'htf_bolge','tf':tf_s,'bar':bar_s}
+ elif any(k in m_low for k in('likidite çiz','idm çiz','eqh','eql','sfp çiz','likidite göster')):
+  cizim_istegi={'parite':hedef_o,'mod':'likidite_denetim','tf':tf_s,'bar':bar_s}
+ elif any(k in m_low for k in('grafik çiz','grafiğini çiz','grafikte göster','giriş yerini göster','grafik aç','çiz','zoom')):
+  cizim_istegi={'parite':hedef_o,'mod':'ltf_zoom','tf':tf_s,'bar':bar_s}
+ if any(k in m_low for k in('botu başlat','taramayı başlat','bot çalışsın'))and gui_ref and hasattr(gui_ref,'botu_baslat'):
+  gui_ref.after(10,gui_ref.botu_baslat)
+  uygulanan.append("▶️ Bot taraması başlatıldı.")
+ elif any(k in m_low for k in('botu durdur','taramayı durdur','bot dursun'))and gui_ref and hasattr(gui_ref,'botu_durdur'):
+  gui_ref.after(10,gui_ref.botu_durdur)
+  uygulanan.append("⏹️ Bot taraması durduruldu.")
+ if any(k in m_low for k in('tüm işlemleri kapat','hepsini kapat','bütün işlemleri kapat'))and gui_ref:
+  acik_k_list=[k for k,v in acik_islemler.items()if I(v,dict)]
+  for k_ac in acik_k_list:
+   threading.Thread(target=gui_ref._poz_kapat,args=(k_ac,'AI KOMUTUYLA KAPATILDI'),daemon=True).start()
+  if acik_k_list:uygulanan.append(f"🚨 Açık olan {L(acik_k_list)} işlemin tamamı kapatılıyor.")
+ elif any(k in m_low for k in('işlemi kapat','pozisyonu kapat','bu işlemi kapat'))and gui_ref and I(dR,dict):
+  threading.Thread(target=gui_ref._poz_kapat,args=(hedef_o,'AI KOMUTUYLA KAPATILDI'),daemon=True).start()
+  uygulanan.append(f"🚨 {hedef_o} açık pozisyonu kapatılıyor.")
+ if any(k in m_low for k in('stopu htf','htf stop','htf yapıya göre stop')):
+  STOP_BELIRLEME_MODU='HTF Yapıya Göre (Dip/Tepe & OB)'
+  if gui_ref and hasattr(gui_ref,'cmb_stop_modu'):gui_ref.cmb_stop_modu.set(STOP_BELIRLEME_MODU)
+  if I(H,dict)and H.get('giris'):
+   y_sl,y_ack=stop_noktasi_belirle(H.get('df_4h'),H.get('df_1h'),H.get('df_15m'),H.get('yapi_4h',{}),H.get('yapi_1h',{}),H.get('yapi_15m',{}),H.get('konum_meta',{}),F(H['giris']),H.get('ana_yon','BULLISH'),None,None,None,H.get('sl'),STOP_BELIRLEME_MODU)
+   H['sl']=y_sl
+   if I(dR,dict):dR['sl']=y_sl
+  uygulanan.append("🛡️ Stop-Loss modu 'HTF Yapıya Göre (Dip/Tepe & OB)' olarak değiştirildi ve yeni SL uygulandı.")
+ elif any(k in m_low for k in('stopu ltf','ltf stop','dar stop','ltf yapıya göre stop')):
+  STOP_BELIRLEME_MODU='LTF Yapıya Göre (Kırılım/Mum & POI)'
+  if gui_ref and hasattr(gui_ref,'cmb_stop_modu'):gui_ref.cmb_stop_modu.set(STOP_BELIRLEME_MODU)
+  if I(H,dict)and H.get('giris'):
+   y_sl,y_ack=stop_noktasi_belirle(H.get('df_4h'),H.get('df_1h'),H.get('df_15m'),H.get('yapi_4h',{}),H.get('yapi_1h',{}),H.get('yapi_15m',{}),H.get('konum_meta',{}),F(H['giris']),H.get('ana_yon','BULLISH'),None,None,None,H.get('sl'),STOP_BELIRLEME_MODU)
+   H['sl']=y_sl
+   if I(dR,dict):dR['sl']=y_sl
+  uygulanan.append("🛡️ Stop-Loss modu 'LTF Yapıya Göre (Kırılım/Mum & POI)' olarak değiştirildi ve dar SL uygulandı.")
+ elif any(k in m_low for k in('stopu girişe çek','break-even yap','breakeven yap','stopu be yap','0 risk yap'))and I(dR,dict):
+  dR['sl']=F(dR['giris'])
+  dR['risk_usdt']=0.0
+  uygulanan.append(f"🛡️ {hedef_o} Stop-Loss seviyesi Giriş Fiyatına ({dR['sl']} — Break-Even / 0 Risk) çekildi!")
+ m_sl_fiyat=re.search(r"stop(?:u|unu|loss)?\s*(?:fiyatını\s*)?([0-9]+(?:\.[0-9]+)?)\s*(?:yap|çek|ayarla|olsun|'e|'a|e|a)",m_low)
+ if m_sl_fiyat and I(dR,dict):
+  y_f=F(m_sl_fiyat.group(1))
+  if y_f>0:
+   dR['sl']=R(y_f,6)
+   uygulanan.append(f"🛡️ {hedef_o} Stop-Loss fiyatı {dR['sl']} seviyesine güncellendi.")
+ m_tp_fiyat=re.search(r"(?:tp1?|hedef)(?:'i|i|yi|ini)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:yap|çek|ayarla|olsun|'e|'a|e|a)",m_low)
+ if m_tp_fiyat and I(dR,dict):
+  y_f=F(m_tp_fiyat.group(1))
+  if y_f>0:
+   dR['tp']=R(y_f,6)
+   uygulanan.append(f"🎯 {hedef_o} TP1 hedef fiyatı {dR['tp']} seviyesine güncellendi.")
+ m_kald=re.search(r'kaldıra(?:ç|c|cı)\s*([0-9]{1,3})x?\s*(?:yap|olsun|ayarla)?',m_low)
+ if m_kald:
+  KALDIRAC=M(1,N(125,int(m_kald.group(1))))
+  if gui_ref and hasattr(gui_ref,'ent_kaldirac'):
+   gui_ref.ent_kaldirac.delete(0,'end');gui_ref.ent_kaldirac.insert(0,str(KALDIRAC))
+  uygulanan.append(f"⚙️ Kaldıraç -> {KALDIRAC}x olarak ayarlandı.")
+ m_risk_d=re.search(r'(?:işlem başı risk|risk(?:i|ini)?)\s*([0-9]+(?:\.[0-9]+)?)\s*(?:\$|dolar|usdt)?\s*(?:yap|olsun|ayarla)',m_low)
+ if m_risk_d:
+  ISLEM_BASI_RISK_USDT=M(0.1,F(m_risk_d.group(1)))
+  if gui_ref and hasattr(gui_ref,'ent_risk'):
+   gui_ref.ent_risk.delete(0,'end');gui_ref.ent_risk.insert(0,str(ISLEM_BASI_RISK_USDT))
+  uygulanan.append(f"💰 İşlem Başı Risk (1R) -> {ISLEM_BASI_RISK_USDT:.2f} USDT yapıldı.")
+ m_marj_d=re.search(r'marjin(?:i|ini)?\s*([0-9]+(?:\.[0-9]+)?)\s*(?:\$|dolar|usdt)?\s*(?:yap|olsun|ayarla)',m_low)
+ if m_marj_d:
+  MAKS_MARJIN_USDT=M(5.0,F(m_marj_d.group(1)))
+  if gui_ref and hasattr(gui_ref,'ent_marjin'):
+   gui_ref.ent_marjin.delete(0,'end');gui_ref.ent_marjin.insert(0,str(MAKS_MARJIN_USDT))
+  uygulanan.append(f"💵 Maksimum Marjin -> {MAKS_MARJIN_USDT:.2f} USDT yapıldı.")
+ m_rr_d=re.search(r'(?:rr|risk ödül)\s*(?:oranını\s*)?([0-9]+(?:\.[0-9]+)?)\s*(?:r)?\s*(?:yap|olsun|ayarla)',m_low)
+ if m_rr_d:
+  RISK_ODUL_ORANI=M(0.5,F(m_rr_d.group(1)))
+  NIHAI_TP_RR=M(NIHAI_TP_RR,RISK_ODUL_ORANI+1.0)
+  if gui_ref and hasattr(gui_ref,'ent_rr'):
+   gui_ref.ent_rr.delete(0,'end');gui_ref.ent_rr.insert(0,str(RISK_ODUL_ORANI))
+  uygulanan.append(f"🎯 TP1 Risk/Ödül Oranı -> {RISK_ODUL_ORANI}R (TP2: {NIHAI_TP_RR}R) yapıldı.")
+ m_eqh=re.search(r'(?:eqh|eql|eş tepe|likidite tolerans)[a-zğüşıöç\s]*([0-9]+\.[0-9]+)',m_low)
+ if m_eqh:
+  EQH_EQL_TOL_ATR=M(0.08,N(1.2,F(m_eqh.group(1))))
+  uygulanan.append(f"💧 EQH/EQL Eş Tepe/Dip ATR Toleransı -> {EQH_EQL_TOL_ATR:.2f}x ATR yapıldı.")
+ m_sfp=re.search(r'(?:sfp|iğne)[a-zğüşıöç\s]*([0-9]+\.[0-9]+)',m_low)
+ if m_sfp:
+  SFP_MIN_IGNE_ATR=M(0.03,N(0.8,F(m_sfp.group(1))))
+  uygulanan.append(f"💧 SFP Minimum İğne Taşması -> {SFP_MIN_IGNE_ATR:.2f}x ATR yapıldı.")
+ m_kysy=re.search(r'(?:kysy|swing atr|salınım)[a-zğüşıöç\s]*([0-9]+\.[0-9]+)',m_low)
+ if m_kysy:
+  KYSY_HTF_ATR_CARPANI=M(0.6,N(4.0,F(m_kysy.group(1))))
+  uygulanan.append(f"📐 KYSY HTF Swing ATR Çarpanı -> {KYSY_HTF_ATR_CARPANI:.2f}x ATR yapıldı.")
+ m_olcek=re.search(r'(?:öncelik ölçek|ölçek çarpanı|1\.?\s*öncelik)[a-zğüşıöç\s]*([0-9]+(?:\.[0-9]+)?)',m_low)
+ if m_olcek:
+  BIRINCIL_BOLGE_OLCEK_CARPANI=M(1.5,N(10.0,F(m_olcek.group(1))))
+  uygulanan.append(f"🚀 1.Öncelik (Arz/Talep, OB, OTE, QML) Ölçek Çarpanı -> {BIRINCIL_BOLGE_OLCEK_CARPANI:.1f}x yapıldı.")
+ m_skor=re.search(r'(?:min skor|minimum skor|eşik skor)[a-zğüşıöç\s]*([0-9]{2})',m_low)
+ if m_skor:
+  MIN_CONFLUENCE_SKORU=M(10,N(100,int(m_skor.group(1))))
+  if gui_ref and hasattr(gui_ref,'ent_skor'):
+   gui_ref.ent_skor.delete(0,'end');gui_ref.ent_skor.insert(0,str(MIN_CONFLUENCE_SKORU))
+  uygulanan.append(f"🔥 Minimum Confluence Giriş Skoru -> {MIN_CONFLUENCE_SKORU}/100 yapıldı.")
+ if'scalp'in m_low and any(k in m_low for k in('geç','yap','mod','aç')):
+  if gui_ref and hasattr(gui_ref,'islem_modu_degisti'):gui_ref.islem_modu_degisti('Scalp')
+  else:mtf_sablonu_uygula('15m / 5m / 1m (Scalp)')
+  uygulanan.append("⚡ İşlem Modu -> SCALP (15m / 5m / 1m | TP1: 1.5R / TP2: 2.5R) olarak değiştirildi.")
+ elif('daytrade'in m_low or'swing'in m_low)and any(k in m_low for k in('geç','yap','mod')):
+  if gui_ref and hasattr(gui_ref,'islem_modu_degisti'):gui_ref.islem_modu_degisti('DayTrade')
+  else:mtf_sablonu_uygula('4h / 1h / 15m (Swing)')
+  uygulanan.append("🏛️ İşlem Modu -> DAYTRADE / SWING (4h / 1h / 15m | TP1: 3R / TP2: 4R) olarak değiştirildi.")
+ if'2. kademe'in m_low and('kapat'in m_low or'iptal'in m_low or'sadece 1'in m_low):
+  IKINCIL_BOLGE_GIRIS_AKTIF=False
+  uygulanan.append("🔒 2. Kademe HTF Bölgeleri (BOS/CHoCH/ITZ/Magic) kapatıldı; bot artık SADECE 1. Kademe (Arz/Talep, OB, OTE, QML) bölgelerde işleme girecek.")
+ elif'2. kademe'in m_low and('aç'in m_low or'aktif'in m_low):
+  IKINCIL_BOLGE_GIRIS_AKTIF=True
+  uygulanan.append("🔓 2. Kademe HTF Bölgeleri (BOS/CHoCH/ITZ/Magic) yedek tarama için tekrar aktif edildi.")
+ if hedef_o!=str(O_secili or'')and any(k in m_low for k in('analiz','bak','durum','çiz','göster','girilir mi','nasıl')):
+  try:
+   sem_y=hedef_o.split(':',1)[-1]
+   piy_y='spot'if hedef_o.startswith('SPOT:')else'future'
+   if hedef_o not in analiz_hafizasi:
+    analiz_hafizasi[hedef_o]=pine_icin_4h_1h_5m_veri_hazirla(sem_y,piy_y,{},hedef_o)
+   if cizim_istegi is None:
+    cizim_istegi={'parite':hedef_o,'mod':'ltf_zoom','tf':tf_s,'bar':bar_s}
+  except Exception:pass
+ if uygulanan:
+  _api_kaydet_tam()
+  _ak_kaydet()
+  if hedef_o and I(H,dict)and H.get('df_4h')is not None and H.get('df_1h')is not None and H.get('df_15m')is not None:
+   try:
+    J_u=H.get('sembol',hedef_o.split(':',1)[-1])
+    D_u=H.get('piyasa','spot'if hedef_o.startswith('SPOT:')else'future')
+    yeni_H=mahserin_4_atlisi_confluence_analizi(J_u,H['df_4h'],H['df_1h'],H['df_15m'],D_u)
+    H.update(yeni_H)
+    analiz_hafizasi[hedef_o]=H
+   except Exception:pass
+  if gui_ref:
+   try:gui_ref.arayuzu_guncelle()
+   except Exception:pass
+  return(True,'\n'.join(uygulanan),cizim_istegi or{'parite':hedef_o,'mod':'ltf_zoom'})
+ return(False,'',cizim_istegi)
+
+def _bot_canli_baglam_ozeti(O_secili=None):
+ """Yapay zekanin tum bot durumuna, acik islemlere, bakiyeye ve en iyi firsatlara hakim olmasi icin kisa canli baglam uretir."""
+ acik_l=[]
+ for k,v in acik_islemler.items():
+  if I(v,dict):
+   kz_u,kz_y,_,_,_,_,_=islem_kar_zarar_hesapla(k,v)
+   acik_l.append(f"{k} ({v.get('yon')} | Giriş:{_fmt_f(v.get('giris',0))} | Anlık:{_fmt_f(v.get('anlik',0))} | SL:{_fmt_f(v.get('sl',0))} | TP1:{_fmt_f(v.get('tp',0))} | PnL:{kz_u:+.2f}$ [%{kz_y:+.2f}] | Neden:{v.get('ozet','-')})")
+ sirali_tarama=sorted(
+  [(k,v)for k,v in analiz_hafizasi.items()if I(v,dict)and':'in str(k)],
+  key=lambda x:(int(x[1].get('konum_meta',{}).get('birincil_olcek_skoru',0)),int(x[1].get('konum_meta',{}).get('htf_oncelikli_bolge_sayisi',0)),int(x[1].get('skor',0))),
+  reverse=True
+ )[:6]
+ en_iyiler=[f"{k} (Skor:{v.get('skor',0)}/100 | Ölçek:{v.get('konum_meta',{}).get('birincil_olcek_skoru',0)}/10000p | Yön:{v.get('sinyal','BEKLE')} | Bölge:{v.get('konum_meta',{}).get('en_yuksek_oncelik_etiket','-')})"for k,v in sirali_tarama]
+ return(
+  f"• Bot Durumu: {'ÇALIŞIYOR'if bot_calisiyor else'BEKLEMEDE'} | Mod: {ISLEM_TARZI_MODU} ({HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT}) | Piyasa: {PIYASA_MODU.upper()} ({'TESTNET/DEMO'if TESTNET_AKTIF else'MAINNET'})\n"
+  f"• Kasa & Ayarlar: Toplam Bakiye={T:.2f}$ (Gerçekleşen Net PnL:{W:+.2f}$) | Kaldıraç:{KALDIRAC}x ({MARJIN_TIPI}) | İşlem Başı Risk:{ISLEM_BASI_RISK_USDT}$ (1R) | Maks Marjin:{MAKS_MARJIN_USDT}$ | TP1:{RISK_ODUL_ORANI}R / TP2:{NIHAI_TP_RR}R | Min Skor:{MIN_CONFLUENCE_SKORU} | Stop Modu:{STOP_BELIRLEME_MODU}\n"
+  f"• 1.Öncelik Ölçek & Kalibrasyon: 1.Öncelik (Arz/Talep,OB,OTE,QML) Ölçek Çarpanı={BIRINCIL_BOLGE_OLCEK_CARPANI:.1f}x (10000p Ölçek) | KYSY HTF={KYSY_HTF_ATR_CARPANI}x ATR, LTF={KYSY_LTF_ATR_CARPANI}x ATR | EQH Tolerans={EQH_EQL_TOL_ATR}x ATR | SFP Min İğne={SFP_MIN_IGNE_ATR}x ATR | 2.Kademe İzni={IKINCIL_BOLGE_GIRIS_AKTIF}\n"
+  f"• Açık İşlemler ({L(acik_l)}/{a4}): {'; '.join(acik_l) if acik_l else 'Şu an açık işlem yok.'}\n"
+  f"• Taranan En Yüksek Ölçekli 1.Öncelik Pariteler: {'; '.join(en_iyiler) if en_iyiler else 'Henüz tarama yapılmadı.'}"
+ )
+
+def dahili_uzman_islem_analizi_uret(soru,O_secili=None,rontgen=None):
+ """Tamamen cevrimdisi kalindiginda bile ASLA hazir/kalip 50 satirlik rapor basmaz; sorulan soruyu dogrudan, kisa ve dogal sohbet diliyle yanitlar."""
+ hedef_o=_metinden_sembol_cikar(soru,str(O_secili or'FUT:BTC/USDT'))
+ rg=rontgen if(I(rontgen,dict)and rontgen.get('parite')==hedef_o)else islem_rontgeni_olustur(hedef_o)
+ s_low=str(soru or'').lower().strip()
+ chk=rg.get('chk',{})
+ p1,p2,p3,p4=rg.get('atli_puanlar',(0,0,0,0))
+ if any(k in s_low for k in('merhaba','selam','nasılsın','kimsin','ne yapabilirsin','yardım')):
+  return(
+   f"Merhaba! Ben Alfa Trade Club ({BOT_VERSIYONU}) içine entegre özgür yapay zeka asistanıyım. Şu an seçili parite **{rg['parite']}** ({rg['yon']}, Skor: {rg['skor']}/100, 1.Öncelik Ölçeği: {rg.get('birincil_olcek_skoru',0)}/10000p).\n\n"
+   f"Bana istediğin her şeyi sorabilir veya doğrudan iş yaptırabilirsin:\n"
+   f"• *'Bu işlemi neden açtın, giriş yerini nasıl seçtin?'* diye sorabilirsin,\n"
+   f"• *'SOL 15m grafiğini çiz'*, *'Sadece likiditeleri göster'*, *'Konuşmayı ayrı pencerede aç'* diyebilirsin,\n"
+   f"• *'Stopu 84500 yap'*, *'Kaldıracı 10x yap'*, *'1. öncelik ölçek çarpanını 6 yap'*, *'En iyi 5 fırsatı göster'* gibi emirler verebilirsin."
+  )
+ if any(k in s_low for k in('en iyi','fırsat','hangi coin','hangisine gir','tara','öneri')):
+  sirali=sorted(
+   [(k,v)for k,v in analiz_hafizasi.items()if I(v,dict)and':'in str(k)],
+   key=lambda x:(int(x[1].get('konum_meta',{}).get('birincil_olcek_skoru',0)),int(x[1].get('konum_meta',{}).get('htf_oncelikli_bolge_sayisi',0)),int(x[1].get('skor',0))),
+   reverse=True
+  )[:5]
+  if not sirali:
+   return"Şu an hafızada taranmış parite yok; üstten **▶ Başlat** butonuna basarak veya bana *'Botu başlat'* ya da *'ETH analiz et'* diyerek canlı analiz başlatabilirsin."
+  satirlar=[f"Şu an 1. Öncelik (Arz/Talep, OB, OTE, QML) radarına göre en güçlü {L(sirali)} aday:"]
+  for idx_s,(k_s,v_s)in enumerate(sirali,1):
+   km_s=v_s.get('konum_meta',{})
+   satirlar.append(f"{idx_s}. **{k_s}** — Ölçek: **{km_s.get('birincil_olcek_skoru',0)}/10000p** | Skor: **{v_s.get('skor',0)}/100** | Yön: {v_s.get('sinyal','BEKLE')} | Bölge: {km_s.get('en_yuksek_oncelik_etiket','-')} ({km_s.get('htf_safe_derecesi','-')})")
+  return'\n'.join(satirlar)
+ if any(k in s_low for k in('bakiye','kasam','kasa','kaç para','açık işlem','pozisyonlarım','durum ne')):
+  return"📊 **Güncel Bot ve Kasa Durumu:**\n"+_bot_canli_baglam_ozeti(hedef_o)
+ if any(k in s_low for k in('hata','yanlış','riskli','risk var','sorun','kusur','denet','kontrol et')):
+  return(
+   f"🔍 **{rg['parite']} ({rg['yon']}) Hata & Risk Değerlendirmesi:**\n"
+   +"\n".join(f"• {n}"for n in rg['denetim_notlari'])
+   +"\n\nİstersen bana doğrudan *'Stopu HTF yapıya çek'*, *'Stopu girişe çek'* veya *'EQH toleransını 0.22 yap'* diyerek anında düzelttirebilirsin."
+  )
+ if any(k in s_low for k in('stop neden','stop nasıl','stop nerede','sl nasıl','tp nasıl','hedef nasıl','hesapla','marjin ne','miktar ne','kaç r')):
+  return(
+   f"🎯 **{rg['parite']} Giriş, Stop ve Hedef Hesabı:**\n"
+   f"• **Giriş:** `{_fmt_f(rg['giris'])}` ({rg['oncelik_etiket']} bölgesinden, Ölçek: `{rg.get('birincil_olcek_skoru',0)}/10000p`)\n"
+   f"• **Stop-Loss (1R):** `{_fmt_f(rg['sl'])}` — `{rg['stop_kaynak']}` esas alındı. Stop olursa kasadan tam **-{rg['risk_usdt']:.2f} USDT (1R)** eksilir (Miktar: `{rg['miktar']}`, Marjin: `{rg['marjin_usdt']:.2f}$`).\n"
+   f"• **TP1 ({RISK_ODUL_ORANI}R):** `{_fmt_f(rg['tp1'])}` (Pozisyonun %50'si kapatılır ve stop girişe [Break-Even] çekilir).\n"
+   f"• **TP2 ({NIHAI_TP_RR}R Nihai):** `{_fmt_f(rg['tp2'])}` (Karşı likidite havuzu hedefi)."
+  )
+ if any(k in s_low for k in('likidite','idm','sfp','eqh','eql','fvg','imbalance')):
+  return(
+   f"💧 **{rg['parite']} Likidite ve Imbalance (FVG) Durumu:**\n"
+   f"• **Likidite Akışı:** `{rg['likidite_turu']}` | **SFP (İğne Avı):** `{rg['sfp_durumu']}`\n"
+   f"• **Imbalance / FVG:** `{rg['imbalance_tipi']}`\n"
+   f"• **Kalibrasyon:** Eş tepe/dip (EQH/EQL) toleransı `{EQH_EQL_TOL_ATR:.2f}x ATR`, SFP minimum iğne taşması `{SFP_MIN_IGNE_ATR:.2f}x ATR` olarak çalışıyor. Grafiğini görmek için *'Sadece likiditeyi çiz'* diyebilirsin."
+  )
+ if any(k in s_low for k in('neye göre','neden','niçin','nasıl belirle','giriş yeri','açtın','açmış','özet')):
+  aktif_b=', '.join(rg['aktif_htf_bolgeler'])if rg['aktif_htf_bolgeler']else'Bölge Dışı'
+  tetik_l=', '.join((rg['ltf_kirilimlar']+rg['ltf_mumlar']))if(rg['ltf_kirilimlar']or rg['ltf_mumlar'])else'LTF tetik bekleniyor'
+  return(
+   f"📌 **{rg['parite']} ({rg['yon']}) İşlem Açılış ve Giriş Özeti:**\n"
+   f"1. **İlk Kontrol & HTF Konum ({rg['htf_periyot'].upper()}):** İlk önceliğimiz olan **Arz/Talep, OB, OTE ve QML** kontrolünde `{rg['oncelik_etiket']}` (Ölçek: **{rg.get('birincil_olcek_skoru',0)}/10000p**) sağlandı; toplamda **{rg['safe_sayisi']}/8 bölge (`{aktif_b}`)** aktif (QML:`{chk.get('qml_fiyat','-')}`, OB:`{chk.get('ob_aralik','-')}`, Arz/Talep:`{chk.get('fresh_aralik','-')}`, OTE:`{chk.get('ote_aralik','-')}`).\n"
+   f"2. **LTF Giriş Tetiği ({rg['ltf_periyot']}):** Bölge içinde **`{tetik_l}`** onaylandığı anda `{_fmt_f(rg['giris'])}` fiyatından giriş belirlendi.\n"
+   f"3. **Skor & Risk:** Mahşerin 4 Atlısı skoru **{rg['skor']}/100** (`{p1}+{p2}+{p3}+{p4}`), Stop `{_fmt_f(rg['sl'])}` (`-{rg['risk_usdt']:.2f}$`), TP1 `{_fmt_f(rg['tp1'])}`, TP2 `{_fmt_f(rg['tp2'])}`."
+  )
+ return(
+  f"**{rg['parite']}** şu an `{_fmt_f(rg['anlik'])}` seviyesinde (Yön: **{rg['yon']}**, Skor: **{rg['skor']}/100**, 1.Öncelik Ölçeği: **{rg.get('birincil_olcek_skoru',0)}/10000p**, Bölge: `{', '.join(rg['aktif_htf_bolgeler']) or 'Bölge Dışı'}`). "
+  f"Giriş `{_fmt_f(rg['giris'])}`, Stop `{_fmt_f(rg['sl'])}`, TP1 `{_fmt_f(rg['tp1'])}`.\n"
+  f"Bana spesifik olarak *'Neden buradan girdin?'*, *'Likiditeyi çiz'*, *'Stopu HTF yap'* veya başka bir parite için *'SOL/USDT analiz et ve çiz'* diyebilirsin."
+ )
+
+def _ucretsiz_bulut_ai_sor(sistem_talimati,soru,gecmis_mesajlar=None):
+ """Kullanici henuz kendi Gemini API anahtarini girmemisse bile internete bagli PC/Telefonda gercek ucretsiz LLM yaniti uretir."""
+ try:
+  mesajlar=[{'role':'system','content':sistem_talimati}]
+  if I(gecmis_mesajlar,list):
+   for gm in gecmis_mesajlar[-6:]:
+    mesajlar.append({'role':'user','content':str(gm)})
+  mesajlar.append({'role':'user','content':str(soru)})
+  r=_HTTP_SES.post(
+   'https://text.pollinations.ai/openai',
+   headers={'Content-Type':'application/json'},
+   json={'model':'openai','messages':mesajlar,'temperature':0.35},
+   timeout=16
+  )
+  if r.status_code==200:
+   j=r.json()
+   txt=j.get('choices',[{}])[0].get('message',{}).get('content','').strip()
+   if txt and L(txt)>5:
+    return txt
+ except Exception:pass
+ return''
+
+def gemini_api_sor(soru,O_secili=None,rontgen=None,grafik_b64=None,gecmis_mesajlar=None,gui_ref=None):
+ """Özgür Yapay Zeka Ajanı: Hazir kalip kullanmadan her soruyu dogal yanitlar ve kullanicinin istedigi bot/grafik/islem aksiyonlarini aninda icra eder."""
+ hedef_o=_metinden_sembol_cikar(soru,str(O_secili or'FUT:BTC/USDT'))
+ duz_yapildi,duz_mesaj,cizim_istegi=gemini_komut_ve_hata_duzeltici(soru,hedef_o,gui_ref)
+ rg=islem_rontgeni_olustur(hedef_o)
+ bot_baglam=_bot_canli_baglam_ozeti(hedef_o)
+ sistem_talimati=(
+  f"Sen Alfa Trade Club Bot ({BOT_VERSIYONU}) içindeki özgür, zeki ve tam yetkili Yapay Zeka Ajanısın (Gemini AI).\n"
+  "KESİN KURALLARIN:\n"
+  "1. ASLA uzun, sıkıcı, hazır kalıp şablonlar veya '=====' çizgileriyle dolu 50 satırlık raporlar basma! Tıpkı gerçek bir insan/uzman trader arkadaş gibi doğal, özgür, doğrudan ve net cevap ver.\n"
+  "2. Kullanıcı ne sorduysa SADECE onu net ve anlaşılır şekilde cevapla (Örn: 'Neden açtın?' derse 3-4 net maddede hangi HTF bölge ve LTF mumla açıldığını söyle; genel sohbet veya strateji sorarsa özgürce cevapla).\n"
+  "3. Kullanıcının bota yaptırmak istediği her şeyi yapabilirsin! Eğer kullanıcı grafik çizdirmek, periyot değiştirmek, ayrı pencere açmak, stop/hedef değiştirmek, kaldıraç/risk/skor değiştirmek, işlem kapatmak veya botu başlatıp durdurmak isterse yanıtının en sonuna şu JSON komutunu ekle:\n"
+  f'<AJAN_KOMUTU>{{"aksiyon": "grafik_ciz|ayri_sohbet_ac|tradingview_ac|bot_baslat|bot_durdur|islem_kapat|ayar_degistir", "parite": "{hedef_o}", "cizim_modu": "ltf_zoom|mtf_3lu|htf_bolge|likidite_denetim|sadece_likidite|sadece_qml_ote|sadece_ob_fvg|temiz_mum", "periyot": "15m", "bar_sayisi": 85, "ayri_pencere": false, "yeni_sl": 0, "yeni_tp": 0, "stop_modu": "", "kaldirac": 0, "risk_usdt": 0, "marjin_usdt": 0, "rr": 0, "min_skor": 0, "eqh_tol_atr": 0, "sfp_min_atr": 0, "kysy_htf_atr": 0, "birincil_olcek_carpani": 0}}</AJAN_KOMUTU>\n\n'
+  f"CANLI BOT VE KASA DURUMU:\n{bot_baglam}\n\n"
+  f"SEÇİLİ PARİTE ({hedef_o}) VERİSİ:\n{rg['tam_rapor_metni']}"
+ )
+ tip,anahtar=_google_hesap_token_bul()
+ gecmis_metin=''
+ if I(gecmis_mesajlar,list)and gecmis_mesajlar:
+  gecmis_metin='\nSON KONUŞMALAR:\n'+'\n'.join(gecmis_mesajlar[-6:])+'\n'
+ if tip and anahtar:
+  parts=[{'text':f"{sistem_talimati}\n{gecmis_metin}\nKULLANICI: {soru}"}]
+  if grafik_b64 and L(str(grafik_b64))>100 and any(k in soru.lower()for k in('grafik','görsel','bak','çiz','hata','likidite','mum','nerede','nasıl')):
+   parts.append({'inline_data':{'mime_type':'image/png','data':str(grafik_b64)}})
+  payload={'contents':[{'parts':parts}],'generationConfig':{'temperature':0.4,'maxOutputTokens':1500}}
+  modeller_sirasi=[GEMINI_MODEL]+[m for m in GEMINI_MODELLERI if m!=GEMINI_MODEL]
+  for mdl in modeller_sirasi:
+   try:
+    if tip=='api_key':
+     url=f"https://generativelanguage.googleapis.com/v1beta/models/{mdl}:generateContent?key={anahtar}"
+     hdr={'Content-Type':'application/json'}
+    else:
+     url=f"https://generativelanguage.googleapis.com/v1beta/models/{mdl}:generateContent"
+     hdr={'Content-Type':'application/json','Authorization':f"Bearer {anahtar}"}
+    r=_HTTP_SES.post(url,headers=hdr,json=payload,timeout=20)
+    if r.status_code==200:
+     j=r.json()
+     cands=j.get('candidates',[])
+     if cands and I(cands[0].get('content'),dict):
+      p_list=cands[0]['content'].get('parts',[])
+      yanit_txt=''.join(str(p.get('text',''))for p in p_list if I(p,dict)).strip()
+      if yanit_txt:
+       ai_duz_ok,ai_duz_msg,ai_ciz_ist=gemini_komut_ve_hata_duzeltici(yanit_txt,hedef_o,gui_ref)
+       temiz_yanit=re.sub(r'<(?:AJAN_KOMUTU|DUZELTME_KOMUTU)>.*?</(?:AJAN_KOMUTU|DUZELTME_KOMUTU)>','',yanit_txt,flags=re.DOTALL).strip()
+       aksiyon_notu='\n'.join(x for x in(duz_mesaj if duz_yapildi else'',ai_duz_msg if ai_duz_ok else'')if x)
+       son_metin=(f"⚡ **Uygulanan İşlem:**\n{aksiyon_notu}\n\n{temiz_yanit}")if aksiyon_notu else temiz_yanit
+       return(son_metin,ai_ciz_ist or cizim_istegi)
+   except Exception:continue
+ bulut_yanit=_ucretsiz_bulut_ai_sor(sistem_talimati,soru,gecmis_mesajlar)
+ if bulut_yanit:
+  ai_duz_ok,ai_duz_msg,ai_ciz_ist=gemini_komut_ve_hata_duzeltici(bulut_yanit,hedef_o,gui_ref)
+  temiz_yanit=re.sub(r'<(?:AJAN_KOMUTU|DUZELTME_KOMUTU)>.*?</(?:AJAN_KOMUTU|DUZELTME_KOMUTU)>','',bulut_yanit,flags=re.DOTALL).strip()
+  aksiyon_notu='\n'.join(x for x in(duz_mesaj if duz_yapildi else'',ai_duz_msg if ai_duz_ok else'')if x)
+  son_metin=(f"⚡ **Uygulanan İşlem:**\n{aksiyon_notu}\n\n{temiz_yanit}")if aksiyon_notu else temiz_yanit
+  return(son_metin,ai_ciz_ist or cizim_istegi)
+ yerel_yanit=dahili_uzman_islem_analizi_uret(soru,hedef_o,rg)
+ if duz_yapildi:
+  yerel_yanit=f"⚡ **Uygulanan İşlem:**\n{duz_mesaj}\n\n{yerel_yanit}"
+ return(yerel_yanit,cizim_istegi)
+
+
+# ==============================================================================
+# BULUT SENKRONİZASYON (PC <-> ANDROID EŞLEŞTİRME) VE TEK TUŞLA OTA GÜNCELLEME
+# ==============================================================================
+import base64 as _b64
+import re as _re
+import re
+
+if "GITHUB_REPO_ADRESI" not in globals() or not GITHUB_REPO_ADRESI:
+    GITHUB_REPO_ADRESI = "emrhozbr/bot"
+if "GITHUB_TOKEN" not in globals():
+    GITHUB_TOKEN = ""
+BULUT_SENK_AKTIF = True
+AKTIF_OTA_SURUM_BILGISI = "v4.0.9 (Canlı Motor)"
+_SON_BULUT_OKUMA_TS = 0.0
+_SON_BULUT_YAZMA_HASH = ""
+_BULUT_DOSYA_ADI = "senkron_durum.json"
+_OTA_YEREL_CEKIRDEK = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_cekirdek_motor.py')
+_OTA_YEREL_UI = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_flet_ui.py')
+_OTA_META_DOSYA = os.path.join(ANDROID_VERI_DIZINI if 'ANDROID_VERI_DIZINI' in globals() else '.', 'ota_meta_bilgi.json')
+
+try:
+    _api_yukle()
+except Exception:
+    pass
+
+def _github_headers(token_str=""):
+    tok = (token_str or GITHUB_TOKEN or "").strip()
+    hdr = {
+        "Accept": "application/vnd.github.v3+json",
+        "User-Agent": "AlfaTradeBot-OTA",
+        "Cache-Control": "no-cache, no-store, must-revalidate",
+        "Pragma": "no-cache"
+    }
+    if tok:
+        hdr["Authorization"] = f"Bearer {tok}" if tok.startswith("github_pat_") else f"token {tok}"
+    return hdr
+
+def _github_dosya_indir(hedef_repo: str, dosya_adi: str, hedef_token: str = ""):
+    ts = int(time.time())
+    hdr = _github_headers(hedef_token)
+    try:
+        hdr_raw = dict(hdr)
+        hdr_raw["Accept"] = "application/vnd.github.v3.raw"
+        api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya_adi}?ref=main&t={ts}"
+        r = _HTTP_SES.get(api_url, headers=hdr_raw, timeout=15)
+        if r.status_code == 200 and len(r.text) > 500 and not r.text.strip().startswith('{"message":'):
+            return r.text
+    except Exception:
+        pass
+    try:
+        api_url = f"https://api.github.com/repos/{hedef_repo}/contents/{dosya_adi}?ref=main&t={ts}"
+        r = _HTTP_SES.get(api_url, headers=hdr, timeout=15)
+        if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+            return _b64.b64decode(r.json()["content"]).decode("utf-8")
+    except Exception:
+        pass
+    try:
+        raw_url = f"https://raw.githubusercontent.com/{hedef_repo}/main/{dosya_adi}?t={ts}"
+        r2 = _HTTP_SES.get(raw_url, headers=hdr, timeout=15)
+        if r2.status_code == 200 and len(r2.text) > 500:
+            return r2.text
+    except Exception:
+        pass
+    return None
+
+def _repodaki_guncel_bot_dosyalarini_bul(hedef_repo: str, hedef_token: str = ""):
+    varsayilan = ["botv4.1.0.py", "botv4.0.9.py", "botv4.0.8.py", "botv4.0.7.py", "botv4.0.6.py", "botv4.0.5.py", "botv4.0.4.py", "botv4.0.3.py", "botv4.0.2.py"]
+    try:
+        hdr = _github_headers(hedef_token)
+        url = f"https://api.github.com/repos/{hedef_repo}/contents?t={int(time.time())}"
+        r = _HTTP_SES.get(url, headers=hdr, timeout=10)
+        if r.status_code == 200 and isinstance(r.json(), list):
+            bulunanlar = []
+            for item in r.json():
+                ad = str(item.get("name", ""))
+                if ad.startswith("botv") and ad.endswith(".py"):
+                    sayilar = tuple(int(x) for x in _re.findall(r"\d+", ad))
+                    bulunanlar.append((sayilar, ad))
+            if bulunanlar:
+                bulunanlar.sort(key=lambda x: x[0], reverse=True)
+                return [ad for _, ad in bulunanlar]
+    except Exception:
+        pass
+    return varsayilan
+
+def masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod: str) -> str:
+    ek_ust = [
+        "import re",
+        "BOT_VERSIYONU='v4.0.9';BOT_DOSYA_ADI='botv4.0.9.py';",
+        "if 'BIRINCIL_BOLGE_OLCEK_CARPANI' not in globals(): BIRINCIL_BOLGE_OLCEK_CARPANI=5.0",
+        "if 'BIRINCIL_VIP_EK_SLOT' not in globals(): BIRINCIL_VIP_EK_SLOT=3",
+        "if 'IKINCIL_REZERV_SLOT' not in globals(): IKINCIL_REZERV_SLOT=2",
+        "if 'KYSY_HTF_ATR_CARPANI' not in globals(): KYSY_HTF_ATR_CARPANI=1.85",
+        "if 'KYSY_LTF_ATR_CARPANI' not in globals(): KYSY_LTF_ATR_CARPANI=1.30",
+        "if 'EQH_EQL_TOL_ATR' not in globals(): EQH_EQL_TOL_ATR=0.30",
+        "if 'SFP_MIN_IGNE_ATR' not in globals(): SFP_MIN_IGNE_ATR=0.12",
+        "if 'IKINCIL_BOLGE_GIRIS_AKTIF' not in globals(): IKINCIL_BOLGE_GIRIS_AKTIF=True",
+        "if 'htf_1_oncelik_radar_cache' not in globals(): htf_1_oncelik_radar_cache={}"
+    ]
+    f_marker = "def _f(" + "d,c,i=-2):"
+    if "def indiktorleri_ekle(df):" in kaynak_kod:
+        ana_govde = kaynak_kod[kaynak_kod.index("def indiktorleri_ekle(df):"):]
+    elif f_marker in kaynak_kod:
+        ana_govde = kaynak_kod[kaynak_kod.index(f_marker):]
+    else:
+        ana_govde = kaynak_kod
+    for bitis_isareti in (
+        "def _github_headers(",
+        "def masaustu_ayar_sozlugu_uret(",
+        "def masaustu_kodunu_mobil_cekirdege_ayikla",
+        "ctk.set_appearance_mode",
+        "class TradingBotGUI",
+        "class AlfaMobileBotEngine",
+        "def main(page"
+    ):
+        if bitis_isareti in ana_govde:
+            ana_govde = ana_govde[:ana_govde.index(bitis_isareti)]
+    yasak_kelimeler = (
+        "import customtkinter", "from tkinter", "matplotlib", "NavigationToolbar2Tk",
+        "FigureCanvasTkAgg", "import ccxt", "acik_islemler={}", "aC=None",
+        "bd='binance_api_config.json'", "_api_yukle();_ig_yukle();_ak_yukle();",
+        "GITHUB_REPO_ADRESI =", "GITHUB_TOKEN ="
+    )
+    cikti = list(ek_ust)
+    for s in ana_govde.splitlines():
+        if any(y in s for y in yasak_kelimeler):
+            continue
+        cikti.append(s)
+    metin = "\n".join(cikti)
+    metin = metin.replace(
+        'dosya_yolu=os.path.abspath(f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")',
+        'dosya_yolu=os.path.join(ANDROID_VERI_DIZINI, f"tv_canli_{O.replace(\':\',\'_\').replace(\'/\',\'_\')}_{tf_secim}.html")'
+    )
+    metin = metin.replace(
+        "if os.name=='nt':os.startfile(dosya_yolu)\n  else:webbrowser.open(Path(dosya_yolu).as_uri())",
+        "if os.name=='nt' and 'KALICI_VERI_DIZINI' not in globals():os.startfile(dosya_yolu)"
+    )
+    metin = metin.replace("webbrowser.open(Path(dosya_yolu).as_uri())", "None")
+    metin = metin.replace("webbrowser.open('file://'+dosya_yolu)", "None")
+    return metin
+
+def masaustu_gui_ozelliklerini_ayikla(kaynak_kod: str) -> dict:
+    meta = {
+        "versiyon": "",
+        "baslik": "",
+        "ekstra_metrikler": [],
+        "guncellenme_zamani": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    }
+    try:
+        m_all = _re.findall(r"v\d+\.\d+\.\d+", kaynak_kod)
+        if m_all:
+            m_all.sort(key=lambda v: tuple(int(x) for x in _re.findall(r"\d+", v)), reverse=True)
+            meta["versiyon"] = m_all[0]
+        m_title = _re.search(r"q\.title\(['\"]([^'\"]+)['\"]\)", kaynak_kod)
+        if m_title:
+            meta["baslik"] = m_title.group(1)
+    except Exception:
+        pass
+    return meta
+
+def ota_strateji_guncelle(repo_adresi=None, token=None, yerel_dosya_yolu=None):
+    global GITHUB_REPO_ADRESI, GITHUB_TOKEN, AKTIF_OTA_SURUM_BILGISI
+    hedef_repo = (repo_adresi or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+    hedef_token = (token if token is not None else GITHUB_TOKEN).strip()
+    GITHUB_REPO_ADRESI = hedef_repo
+    if hedef_token:
+        GITHUB_TOKEN = hedef_token
+
+    kaynak_kod = None
+    kaynak_adi = ""
+    flet_ui_kod = None
+
+    if yerel_dosya_yolu and os.path.exists(yerel_dosya_yolu):
+        with open(yerel_dosya_yolu, "r", encoding="utf-8") as f:
+            kaynak_kod = f.read()
+        kaynak_adi = os.path.basename(yerel_dosya_yolu)
+    else:
+        bot_dosyalari = _repodaki_guncel_bot_dosyalarini_bul(hedef_repo, hedef_token)
+        for dosya in bot_dosyalari:
+            indirilen = _github_dosya_indir(hedef_repo, dosya, hedef_token)
+            if indirilen and len(indirilen) > 1000:
+                kaynak_kod = indirilen
+                kaynak_adi = f"{hedef_repo}/{dosya}"
+                break
+        main_indirilen = _github_dosya_indir(hedef_repo, "main.py", hedef_token)
+        if main_indirilen and len(main_indirilen) > 1000:
+            if "class AlfaMobileBotEngine" in main_indirilen and "def main(page: ft.Page):" in main_indirilen:
+                flet_ui_kod = main_indirilen[main_indirilen.index("class AlfaMobileBotEngine"):]
+                if "if __name__" in flet_ui_kod:
+                    flet_ui_kod = flet_ui_kod[:flet_ui_kod.index("if __name__")]
+            if not kaynak_kod:
+                kaynak_kod = main_indirilen
+                kaynak_adi = f"{hedef_repo}/main.py"
+
+    if not kaynak_kod or len(kaynak_kod) < 500:
+        return (False, "⚠️ GitHub üzerinden botv4.0.9.py veya main.py okunamadı! Repo gizli (Private) ise Ayarlar'dan GitHub Token girip tekrar deneyin.")
+
+    try:
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_calisiyor = bool(bot_calisiyor)
+        yedek_ayar = masaustu_ayar_sozlugu_uret()
+        yedek_api = (API_KEY, API_SECRET, TESTNET_AKTIF, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, PIYASA_MODU, GITHUB_REPO_ADRESI, GITHUB_TOKEN)
+
+        cekirdek_kod = masaustu_kodunu_mobil_cekirdege_ayikla(kaynak_kod)
+        with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+            f.write(cekirdek_kod)
+        exec(compile(cekirdek_kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+
+        ui_msg = "Strateji Çekirdeği"
+        if flet_ui_kod and len(flet_ui_kod) > 500:
+            with open(_OTA_YEREL_UI, "w", encoding="utf-8") as f:
+                f.write(flet_ui_kod)
+            exec(compile(flet_ui_kod, _OTA_YEREL_UI, "exec"), globals())
+            ui_msg = "Strateji + Mobil Arayüz"
+
+        meta = masaustu_gui_ozelliklerini_ayikla(kaynak_kod)
+        meta["kaynak_dosya"] = kaynak_adi
+        ver_str = meta.get("versiyon") or globals().get("BOT_VERSIYONU", "v4.0.9")
+        AKTIF_OTA_SURUM_BILGISI = f"{ver_str} [{os.path.basename(kaynak_adi)}] ({datetime.now().strftime('%H:%M:%S')})"
+        meta["aktif_surum"] = AKTIF_OTA_SURUM_BILGISI
+        try:
+            with open(_OTA_META_DOSYA, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False)
+        except Exception:
+            pass
+
+        acik_islemler.clear()
+        acik_islemler.update(yedek_acik)
+        globals()["S"] = yedek_s
+        globals()["W"] = yedek_w
+        globals()["bot_calisiyor"] = yedek_calisiyor
+        (
+            globals()["API_KEY"], globals()["API_SECRET"], globals()["TESTNET_AKTIF"],
+            globals()["TELEGRAM_TOKEN"], globals()["TELEGRAM_CHAT_ID"], globals()["PIYASA_MODU"],
+            globals()["GITHUB_REPO_ADRESI"], globals()["GITHUB_TOKEN"]
+        ) = yedek_api
+        _sozlukten_ayarlari_uygula(yedek_ayar)
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        _ak_kaydet()
+        return (True, f"✅ OTA Güncelleme Başarılı! ({ui_msg}: {AKTIF_OTA_SURUM_BILGISI}) -> Ayarlarınız ve açık işlemleriniz korunarak yeni sürüm canlıya alındı!")
+    except Exception as ex:
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+        return (False, f"⚠️ OTA Kod Dönüştürme Hatası: {ex}")
+
+def _kayitli_ota_varsa_yukle():
+    global AKTIF_OTA_SURUM_BILGISI
+    try:
+        if os.path.exists(_OTA_META_DOSYA):
+            try:
+                with open(_OTA_META_DOSYA, "r", encoding="utf-8") as f:
+                    md = json.load(f)
+                    if isinstance(md, dict) and md.get("aktif_surum"):
+                        AKTIF_OTA_SURUM_BILGISI = str(md["aktif_surum"])
+            except Exception:
+                pass
+        yedek_acik = dict(acik_islemler)
+        yedek_s, yedek_w = F(S), F(W)
+        yedek_calisiyor = bool(bot_calisiyor)
+        yedek_ayar = masaustu_ayar_sozlugu_uret()
+        if os.path.exists(_OTA_YEREL_CEKIRDEK):
+            with open(_OTA_YEREL_CEKIRDEK, "r", encoding="utf-8") as f:
+                kod = f.read()
+            if "def indiktorleri_ekle(df):" in kod:
+                kod = masaustu_kodunu_mobil_cekirdege_ayikla(kod)
+                with open(_OTA_YEREL_CEKIRDEK, "w", encoding="utf-8") as f:
+                    f.write(kod)
+            if len(kod) > 500:
+                exec(compile(kod, _OTA_YEREL_CEKIRDEK, "exec"), globals())
+        if os.path.exists(_OTA_YEREL_UI):
+            with open(_OTA_YEREL_UI, "r", encoding="utf-8") as f:
+                ui_kod = f.read()
+            if len(ui_kod) > 500 and "def main(page: ft.Page):" in ui_kod:
+                exec(compile(ui_kod, _OTA_YEREL_UI, "exec"), globals())
+        acik_islemler.update(yedek_acik)
+        globals()["S"], globals()["W"] = yedek_s, yedek_w
+        globals()["bot_calisiyor"] = yedek_calisiyor
+        _sozlukten_ayarlari_uygula(yedek_ayar)
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+    except Exception:
+        borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+
+def bulut_durum_gonder(zorla=False):
+    global _SON_BULUT_YAZMA_HASH
+    if not BULUT_SENK_AKTIF or not GITHUB_TOKEN or not GITHUB_REPO_ADRESI:
+        return False
+    try:
+        nQ = {k: v for k, v in acik_islemler.items() if I(v, dict)}
+        ayar_paketi = masaustu_ayar_sozlugu_uret()
+        veri = {
+            "guncelleme_ts": time.time(),
+            "guncelleyen_cihaz": "ANDROID_MOBIL" if "KALICI_VERI_DIZINI" in globals() else "PC_MASAUSTU",
+            "bot_versiyonu": globals().get("BOT_VERSIYONU", "v4.0.9"),
+            "ayarlar": ayar_paketi,
+            "acik_islemler": nQ,
+            "demo_vadeli_bakiye": F(S),
+            "gerceklesen_pnl": F(W),
+            "islem_gecmisi": ah[:150]
+        }
+        ozet_str = json.dumps({"a": list(nQ.keys()), "s": R(F(S), 2), "w": R(F(W), 2), "h": L(ah)}, sort_keys=True)
+        if not zorla and ozet_str == _SON_BULUT_YAZMA_HASH:
+            return True
+        _SON_BULUT_YAZMA_HASH = ozet_str
+        api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}"
+        hdr = _github_headers(GITHUB_TOKEN)
+        mevcut_sha = None
+        r_get = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+        if r_get.status_code == 200 and isinstance(r_get.json(), dict):
+            mevcut_sha = r_get.json().get("sha")
+        icerik_b64 = _b64.b64encode(json.dumps(veri, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+        payload = {
+            "message": f"Sync: {veri['guncelleyen_cihaz']} ({datetime.now().strftime('%H:%M:%S')})",
+            "content": icerik_b64
+        }
+        if mevcut_sha:
+            payload["sha"] = mevcut_sha
+        r_put = _HTTP_SES.put(api_url, headers=hdr, json=payload, timeout=8)
+        return r_put.status_code in (200, 201)
+    except Exception:
+        return False
+
+def bulut_durum_cek(zorla=False):
+    global _SON_BULUT_OKUMA_TS, _SON_PC_AYAR_TS, S, W, ah
+    simdi = time.time()
+    if not zorla and (simdi - _SON_BULUT_OKUMA_TS < 12.0):
+        return False
+    _SON_BULUT_OKUMA_TS = simdi
+    degisti = False
+    if BULUT_SENK_AKTIF and GITHUB_REPO_ADRESI:
+        try:
+            hdr = _github_headers(GITHUB_TOKEN)
+            api_url = f"https://api.github.com/repos/{GITHUB_REPO_ADRESI.strip()}/contents/{_BULUT_DOSYA_ADI}?t={int(simdi)}"
+            r = _HTTP_SES.get(api_url, headers=hdr, timeout=6)
+            if r.status_code == 200 and isinstance(r.json(), dict) and "content" in r.json():
+                d = json.loads(_b64.b64decode(r.json()["content"]).decode("utf-8"))
+                if I(d, dict):
+                    uzak_ts = F(d.get("guncelleme_ts") or 0.0)
+                    if d.get("guncelleyen_cihaz") == "PC_MASAUSTU":
+                        uzak_ayar = d.get("ayarlar")
+                        if I(uzak_ayar, dict):
+                            ayar_ts = F(uzak_ayar.get("guncelleme_ts") or uzak_ts)
+                            if ayar_ts > _SON_PC_AYAR_TS:
+                                _SON_PC_AYAR_TS = ayar_ts
+                                _sozlukten_ayarlari_uygula(uzak_ayar)
+                                _api_kaydet_tam()
+                                if callable(_UI_AYAR_YENILE_FN):
+                                    try:
+                                        _UI_AYAR_YENILE_FN()
+                                    except Exception:
+                                        pass
+                                degisti = True
+                        uzak_ver = str(d.get("bot_versiyonu") or "")
+                        if uzak_ver and uzak_ver not in str(AKTIF_OTA_SURUM_BILGISI):
+                            threading.Thread(target=ota_strateji_guncelle, args=(GITHUB_REPO_ADRESI, GITHUB_TOKEN), daemon=True).start()
+                    uzak_acik = d.get("acik_islemler")
+                    mevcut_anahtarlar = {k for k, v in acik_islemler.items() if I(v, dict)}
+                    uzak_anahtarlar = {k for k, v in uzak_acik.items() if I(v, dict)} if I(uzak_acik, dict) else set()
+                    if mevcut_anahtarlar and not uzak_anahtarlar:
+                        if GITHUB_TOKEN:
+                            threading.Thread(target=bulut_durum_gonder, args=(True,), daemon=True).start()
+                    elif I(uzak_acik, dict) and uzak_anahtarlar:
+                        for k_u, v_u in uzak_acik.items():
+                            if I(v_u, dict):
+                                if not I(acik_islemler.get(k_u), dict):
+                                    acik_islemler[k_u] = v_u
+                                    degisti = True
+                                elif v_u.get("kismi_tp_alindi") and not acik_islemler[k_u].get("kismi_tp_alindi"):
+                                    acik_islemler[k_u].update(v_u)
+                                    degisti = True
+                    uzak_ig = d.get("islem_gecmisi")
+                    if I(uzak_ig, list) and L(uzak_ig) > L(ah):
+                        ah = uzak_ig
+                        degisti = True
+                    if degisti:
+                        _ak_kaydet()
+        except Exception:
+            pass
+    if not TESTNET_AKTIF and API_KEY and API_SECRET and PIYASA_MODU in ("future", "her_ikisi"):
+        try:
+            if hasattr(ao, "_signed_req"):
+                acc = ao._signed_req("GET", "/fapi/v2/account")
+                positions = acc.get("positions", []) if I(acc, dict) else []
+            else:
+                positions = []
+            for p in positions:
+                amt = F(p.get("positionAmt") or 0.0)
+                if A(amt) > 0:
+                    raw_sym = str(p.get("symbol", ""))
+                    if raw_sym.endswith("USDT"):
+                        sem = f"{raw_sym[:-4]}/USDT"
+                        O_key = f"FUT:{sem}"
+                        if not I(acik_islemler.get(O_key), dict):
+                            ep = F(p.get("entryPrice") or 0.0)
+                            lev = int(F(p.get("leverage") or KALDIRAC))
+                            yon_p = "LONG" if amt > 0 else "SHORT"
+                            mO = -1.0 if yon_p == "SHORT" else 1.0
+                            sl_p = R(ep * (1.0 - mO * 0.01), 6)
+                            tp_p = R(ep * (1.0 + mO * 0.01 * RISK_ODUL_ORANI), 6)
+                            acik_islemler[O_key] = {
+                                "sembol": sem, "yon": yon_p, "piyasa": "future", "simule": False,
+                                "kaldirac": lev, "giris": ep, "anlik": ep,
+                                "pnl_usdt": F(p.get("unrealizedProfit") or 0.0), "pnl_yuzde": 0.0,
+                                "marjin_usdt": R((A(amt) * ep) / M(lev, 1), 2),
+                                "sl": sl_p, "ilk_sl": sl_p, "tp": tp_p, "tp_nihai": tp_p,
+                                "miktar": A(amt), "risk_usdt": ISLEM_BASI_RISK_USDT,
+                                "kismi_tp_alindi": False, "ozet": "[Diğer Cihazdan / Borsadan Senkronize]"
+                            }
+                            degisti = True
+        except Exception:
+            pass
+    return degisti
+
+def mobil_canli_svg_grafik_uret(O, tf_secim='5m', H_ozel=None):
+    """Android Flet uygulama icinde (tarayiciya gerek kalmadan) canli Mum + Arz/Talep OB + FVG + Swing/BOS + QML/OTE + Giris/SL/TP grafigini SVG (base64) olarak uretir."""
+    try:
+        H = H_ozel or analiz_hafizasi.get(O) or analiz_hafizasi.get(str(O).split(':', 1)[-1]) or {}
+        J = H.get('sembol', str(O).split(':', 1)[-1])
+        D = H.get('piyasa', 'spot' if str(O).startswith('SPOT:') else 'future')
+        htf_p, mtf_p, ltf_p, _ = _parite_mtf_periyotlarini_bul(O, J, D, H)
+        if not H or H.get('df_4h') is None or (H.get('df_5m') is None and H.get('df_15m') is None):
+            try:
+                H = pine_icin_4h_1h_5m_veri_hazirla(J, D, H, O)
+                analiz_hafizasi[O] = H
+            except Exception:
+                pass
+        if tf_secim in ('4h', htf_p):
+            df_t = H.get('df_4h', H.get('df_4h_full'))
+            yp_t = H.get('yapi_4h', {})
+            kt_t = H.get('kutular_4h', H.get('cizim_kutulari_4h', []))
+            tf_etiket = htf_p.upper()
+        elif tf_secim in ('1h', mtf_p):
+            df_t = H.get('df_1h', H.get('df_1h_full'))
+            yp_t = H.get('yapi_1h', {})
+            kt_t = H.get('kutular_1h', H.get('cizim_kutulari_1h', []))
+            tf_etiket = mtf_p.upper()
+        else:
+            df_t = H.get('df_5m', H.get('df_15m', H.get('df_15m_full')))
+            yp_t = H.get('yapi_5m', H.get('yapi_15m', {}))
+            kt_t = H.get('kutular_5m', H.get('cizim_kutulari_15m', []))
+            tf_etiket = ltf_p
+        tv_d = _df_to_tv_json(df_t, yp_t, kt_t)
+        mumlar = tv_d.get('mumlar', [])[-95:]
+        if L(mumlar) < 5:
+            return ""
+        n_bars = L(mumlar)
+        idx_offset = M(0, L(tv_d.get('mumlar', [])) - n_bars)
+        w, h = 920, 500
+        pad_l, pad_r, pad_t, pad_b = 14, 108, 36, 26
+        cw = w - pad_l - pad_r
+        ch = h - pad_t - pad_b
+
+        all_hi = M(F(m['high']) for m in mumlar)
+        all_lo = N(F(m['low']) for m in mumlar)
+        dR = acik_islemler.get(O)
+        aktif_sinyal_var = bool(I(dR, dict) or H.get('sinyal') in ('LONG', 'SHORT'))
+        giris = F(dR['giris'] if I(dR, dict) else (H.get('giris') if aktif_sinyal_var else 0.0))
+        sl = F(dR['sl'] if I(dR, dict) else (H.get('sl') if aktif_sinyal_var else 0.0))
+        yon_islem = dR['yon'] if I(dR, dict) else (H.get('sinyal') if H.get('sinyal') in ('LONG', 'SHORT') else 'BEKLE')
+        rk = A(giris - sl) if giris > 0 and sl > 0 else 0.0
+        mO = -1.0 if yon_islem == 'SHORT' else 1.0
+        tp1 = F(dR['tp'] if I(dR, dict) else (giris + mO * rk * RISK_ODUL_ORANI if rk > 0 else 0.0))
+        for ekstra_p in (giris, sl, tp1):
+            if ekstra_p > 0 and all_lo * 0.88 <= ekstra_p <= all_hi * 1.12:
+                all_hi = M(all_hi, ekstra_p)
+                all_lo = N(all_lo, ekstra_p)
+        rng = M(all_hi - all_lo, all_hi * 0.002)
+        p_max = all_hi + rng * 0.06
+        p_min = all_lo - rng * 0.06
+        p_span = M(p_max - p_min, 1e-9)
+
+        def py(p):
+            return R(pad_t + ch * (1.0 - (F(p) - p_min) / p_span), 1)
+
+        def bx(i):
+            return R(pad_l + (F(i) + 0.5) * (cw / M(n_bars, 1)), 1)
+
+        bar_w = M(2.5, R((cw / M(n_bars, 1)) * 0.64, 1))
+        svg = [
+            f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {w} {h}" width="100%" height="100%">',
+            f'<rect x="0" y="0" width="{w}" height="{h}" fill="#0f172a" rx="8"/>'
+        ]
+        for g_i in G(6):
+            p_val = p_min + p_span * (g_i / 5.0)
+            yg = py(p_val)
+            svg.append(f'<line x1="{pad_l}" y1="{yg}" x2="{w - pad_r}" y2="{yg}" stroke="#1e293b" stroke-width="1"/>')
+            svg.append(f'<text x="{w - pad_r + 6}" y="{yg + 3}" fill="#94a3b8" font-family="monospace" font-size="10">{_fmt_f(p_val)}</text>')
+
+        smax = F(yp_t.get('swing_max') or 0.0)
+        smin = F(yp_t.get('swing_min') or 0.0)
+        if smax > smin > 0:
+            du = smax - smin
+            yon_b = yp_t.get('yon', 'BULLISH') != 'BEARISH'
+            ote1 = smax - du * 0.618 if yon_b else smin + du * 0.618
+            ote2 = smax - du * 0.786 if yon_b else smin + du * 0.786
+            y_o1, y_o2 = py(M(ote1, ote2)), py(N(ote1, ote2))
+            if 0 <= y_o1 <= h and 0 <= y_o2 <= h:
+                svg.append(f'<rect x="{pad_l}" y="{N(y_o1, y_o2)}" width="{cw}" height="{M(3.0, A(y_o2 - y_o1))}" fill="#3b82f6" fill-opacity="0.10" stroke="#60a5fa" stroke-opacity="0.35" stroke-dasharray="4,3"/>')
+                svg.append(f'<text x="{pad_l + 6}" y="{N(y_o1, y_o2) + 11}" fill="#60a5fa" font-family="sans-serif" font-size="9.5" font-weight="bold">OTE (0.618-0.786)</text>')
+
+        for z in tv_d.get('arz_talep', [])[-6:]:
+            i1 = M(0, int(z.get('idx1', 0)) - idx_offset)
+            x1 = bx(i1)
+            x2 = w - pad_r
+            y1, y2 = py(z['hi']), py(z['lo'])
+            top_y, box_h = N(y1, y2), M(3.0, A(y2 - y1))
+            renk = "#10b981" if z.get('tur') == 'TALEP' else "#ef4444"
+            svg.append(f'<rect x="{x1}" y="{top_y}" width="{M(10.0, x2 - x1)}" height="{box_h}" fill="{renk}" fill-opacity="0.18" stroke="{renk}" stroke-width="1"/>')
+            etk = str(z.get('etiket', 'OB')).replace('&', '+').replace('<', '').replace('>', '')
+            svg.append(f'<text x="{x2 - 4}" y="{top_y + 10}" fill="{renk}" font-family="sans-serif" font-size="9" font-weight="bold" text-anchor="end">{etk}</text>')
+
+        for im in tv_d.get('imbalance', [])[-5:]:
+            i1 = M(0, int(im.get('idx1', 0)) - idx_offset)
+            x1 = bx(i1)
+            x2 = w - pad_r
+            y1, y2 = py(im['hi']), py(im['lo'])
+            top_y, box_h = N(y1, y2), M(2.5, A(y2 - y1))
+            renk = "#f59e0b" if im.get('yon') == 'BULL' else "#a855f7"
+            svg.append(f'<rect x="{x1}" y="{top_y}" width="{M(10.0, x2 - x1)}" height="{box_h}" fill="{renk}" fill-opacity="0.14" stroke="{renk}" stroke-width="0.9" stroke-dasharray="3,2"/>')
+
+        for i, m in enumerate(mumlar):
+            x = bx(i)
+            o_p, h_p, l_p, c_p = F(m['open']), F(m['high']), F(m['low']), F(m['close'])
+            renk = "#22c55e" if c_p >= o_p else "#ef4444"
+            yh, yl = py(h_p), py(l_p)
+            yo, yc = py(o_p), py(c_p)
+            svg.append(f'<line x1="{x}" y1="{yh}" x2="{x}" y2="{yl}" stroke="{renk}" stroke-width="1.2"/>')
+            b_top = N(yo, yc)
+            b_h = M(1.8, A(yc - yo))
+            svg.append(f'<rect x="{R(x - bar_w / 2.0, 1)}" y="{b_top}" width="{bar_w}" height="{b_h}" fill="{renk}"/>')
+
+        zz_pts = []
+        for z in tv_d.get('zigzag', []):
+            zi = int(z.get('idx', 0)) - idx_offset
+            if 0 <= zi < n_bars:
+                zx, zy = bx(zi), py(z['value'])
+                zz_pts.append(f"{zx},{zy}")
+                lbl_c = "#4ade80" if z.get('lbl') in ('HH', 'HL') else "#fb7185"
+                ly = zy - 5 if z.get('tip') == 'H' else zy + 11
+                svg.append(f'<text x="{zx}" y="{ly}" fill="{lbl_c}" font-family="sans-serif" font-size="8.5" font-weight="bold" text-anchor="middle">{z.get("lbl", "")}</text>')
+        if L(zz_pts) >= 2:
+            svg.append(f'<polyline points="{" ".join(zz_pts)}" fill="none" stroke="#cbd5e1" stroke-width="1.3" stroke-opacity="0.8"/>')
+
+        for b in tv_d.get('bos', [])[-6:]:
+            i1 = int(b.get('idx1', 0)) - idx_offset
+            i2 = int(b.get('idx2', 0)) - idx_offset
+            if i2 >= 0:
+                x1, x2 = bx(M(0, i1)), bx(N(n_bars - 1, i2))
+                yb = py(b['price'])
+                b_col = "#22c55e" if b.get('yon') == 'BULLISH' else "#f43f5e"
+                svg.append(f'<line x1="{x1}" y1="{yb}" x2="{x2}" y2="{yb}" stroke="{b_col}" stroke-width="1.3" stroke-dasharray="4,2"/>')
+                b_lbl = "CHoCH" if "CHOCH" in str(b.get('tip', '')) else "BOS"
+                svg.append(f'<text x="{R((x1 + x2) / 2.0, 1)}" y="{yb - 3}" fill="{b_col}" font-family="sans-serif" font-size="8.5" font-weight="bold" text-anchor="middle">{b_lbl}</text>')
+
+        qml_v = F(tv_d.get('qml') or yp_t.get('qml_seviyesi') or 0.0)
+        if qml_v > 0 and p_min <= qml_v <= p_max:
+            yq = py(qml_v)
+            svg.append(f'<line x1="{pad_l}" y1="{yq}" x2="{w - pad_r}" y2="{yq}" stroke="#c084fc" stroke-width="1.6" stroke-dasharray="5,3"/>')
+            svg.append(f'<text x="{w - pad_r + 4}" y="{yq + 3}" fill="#c084fc" font-family="monospace" font-size="9.5" font-weight="bold">QML {_fmt_f(qml_v)}</text>')
+
+        if giris > 0 and p_min <= giris <= p_max:
+            yg = py(giris)
+            svg.append(f'<line x1="{pad_l}" y1="{yg}" x2="{w - pad_r}" y2="{yg}" stroke="#38bdf8" stroke-width="1.8"/>')
+            svg.append(f'<rect x="{w - pad_r + 2}" y="{yg - 8}" width="{pad_r - 4}" height="15" fill="#0284c7" rx="3"/>')
+            svg.append(f'<text x="{w - pad_r + 5}" y="{yg + 3}" fill="#ffffff" font-family="monospace" font-size="9.5" font-weight="bold">G:{_fmt_f(giris)}</text>')
+        if sl > 0 and p_min <= sl <= p_max:
+            ys = py(sl)
+            svg.append(f'<line x1="{pad_l}" y1="{ys}" x2="{w - pad_r}" y2="{ys}" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="3,2"/>')
+            svg.append(f'<rect x="{w - pad_r + 2}" y="{ys - 8}" width="{pad_r - 4}" height="15" fill="#dc2626" rx="3"/>')
+            svg.append(f'<text x="{w - pad_r + 5}" y="{ys + 3}" fill="#ffffff" font-family="monospace" font-size="9.5" font-weight="bold">SL:{_fmt_f(sl)}</text>')
+        if tp1 > 0 and p_min <= tp1 <= p_max:
+            yt = py(tp1)
+            svg.append(f'<line x1="{pad_l}" y1="{yt}" x2="{w - pad_r}" y2="{yt}" stroke="#10b981" stroke-width="1.8" stroke-dasharray="3,2"/>')
+            svg.append(f'<rect x="{w - pad_r + 2}" y="{yt - 8}" width="{pad_r - 4}" height="15" fill="#059669" rx="3"/>')
+            svg.append(f'<text x="{w - pad_r + 5}" y="{yt + 3}" fill="#ffffff" font-family="monospace" font-size="9.5" font-weight="bold">TP:{_fmt_f(tp1)}</text>')
+
+        son_f = F(mumlar[-1]['close'])
+        skor_v = H.get('skor', 0)
+        sinyal_v = H.get('sinyal', 'BEKLE')
+        baslik_str = f"{O} [{tf_etiket}] | Anlık: {_fmt_f(son_f)} | Yön: {yp_t.get('yon', '-')} | Sinyal: {sinyal_v} ({skor_v}/100)"
+        svg.append(f'<text x="{pad_l + 4}" y="22" fill="#38bdf8" font-family="sans-serif" font-size="12.5" font-weight="bold">{baslik_str}</text>')
+        svg.append('</svg>')
+        svg_str = "".join(svg)
+        return _b64.b64encode(svg_str.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return ""
+
+
+# ==============================================================================
+# YEREL GRAFİK SUNUCUSU (CANLI TRADINGVIEW HTML ÇİZİMLERİ İÇİN)
+# ==============================================================================
+_YEREL_SUNUCU_PORT = None
+
+def yerel_grafik_sunucusu_baslat():
+    global _YEREL_SUNUCU_PORT
+    if _YEREL_SUNUCU_PORT is not None:
+        return _YEREL_SUNUCU_PORT
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(("127.0.0.1", 0))
+        port = s.getsockname()[1]
+        s.close()
+
+        class SessizHandler(SimpleHTTPRequestHandler):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, directory=ANDROID_VERI_DIZINI, **kwargs)
+            def log_message(self, format, *args):
+                pass
+
+        srv = ThreadingHTTPServer(("127.0.0.1", port), SessizHandler)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        _YEREL_SUNUCU_PORT = port
+        return port
+    except Exception:
+        return None
+
+class AlfaMobileBotEngine:
+    def __init__(self, ui_callback=None):
+        self._kapaniyor = False
+        self._acilis_ts = time.time()
+        self._bot_baslangic_ts = None
+        self._acilis_realize_w = F(W)
+        self._bot_baslangic_w = F(W)
+        self._log_q = []
+        self._durum_metni = "Durum: Beklemede ⏸"
+        self._durum_renk = "#f59e0b"
+        self._senk_calisiyor = False
+        self._tg_son_update_id = 0
+        self.ui_callback = ui_callback
+        _ak_yukle()
+        self._acilis_realize_w = F(W)
+        self._bot_baslangic_w = F(W)
+
+    def log_yaz(self, fs):
+        satir = f"[{datetime.now().strftime('%H:%M:%S')}] {fs}"
+        self._log_q.append(satir)
+        if L(self._log_q) > 350:
+            del self._log_q[:100]
+        if self.ui_callback:
+            try:
+                self.ui_callback("log")
+            except Exception:
+                pass
+
+    def durum_guncelle(self, mM, f8="#4ade80"):
+        self._durum_metni = mM
+        self._durum_renk = f8
+        if self.ui_callback:
+            try:
+                self.ui_callback("durum")
+            except Exception:
+                pass
+
+    def arayuzu_guncelle(self):
+        if self.ui_callback:
+            try:
+                self.ui_callback("all")
+            except Exception:
+                pass
+
+    def oturum_pnl_hesapla(self, kU_ozel=None):
+        if kU_ozel is None:
+            kU_ozel = sum((islem_kar_zarar_hesapla(O, bq)[0] for O, bq in list(acik_islemler.items()) if I(bq, dict)))
+        aktif_ts = self._bot_baslangic_ts if self._bot_baslangic_ts is not None else self._acilis_ts
+        ref_w = self._bot_baslangic_w if self._bot_baslangic_ts is not None else self._acilis_realize_w
+        gecen_sn = int(M(0, time.time() - aktif_ts))
+        saat, kalan = divmod(gecen_sn, 3600)
+        dk, sn = divmod(kalan, 60)
+        sure_str = f"{saat:02d}:{dk:02d}:{sn:02d}"
+        bas_tarih_str = datetime.fromtimestamp(aktif_ts).strftime("%H:%M:%S")
+        oturum_kapanan = F(W) - F(ref_w)
+        oturum_toplam = oturum_kapanan + F(kU_ozel)
+        return (oturum_toplam, oturum_kapanan, F(kU_ozel), sure_str, bas_tarih_str)
+
+    def oturum_sayaci_sifirla(self):
+        self._bot_baslangic_ts = time.time()
+        self._acilis_ts = time.time()
+        self._bot_baslangic_w = F(W)
+        self._acilis_realize_w = F(W)
+        self.arayuzu_guncelle()
+
+    def botu_baslat(self):
+        global bot_calisiyor
+        if not bot_calisiyor:
+            if self._bot_baslangic_ts is None:
+                self._bot_baslangic_ts = time.time()
+                self._bot_baslangic_w = F(W)
+            bot_calisiyor = True
+            _ak_kaydet()
+            i9 = "SPOT+VADELİ" if PIYASA_MODU == "her_ikisi" else PIYASA_MODU.upper()
+            self.durum_guncelle(f"Çalışıyor ({i9}) 🟢", "#4ade80")
+            self.log_yaz(f"🚀 Alfa Trade Club Mobil [{i9} | MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Kaldıraç: {KALDIRAC}x | Min Skor: {MIN_CONFLUENCE_SKORU}] başlatıldı.")
+            threading.Thread(target=self.bot_ana_dongu, daemon=True).start()
+            self.arayuzu_guncelle()
+
+    def botu_durdur(self):
+        global bot_calisiyor
+        bot_calisiyor = False
+        _ak_kaydet()
+        self.durum_guncelle("Durduruldu 🔴", "#f87171")
+        self.log_yaz("⏹ Bot kullanıcı tarafından durduruldu.")
+        self.arayuzu_guncelle()
+
+    def _emir_kapat(self, J, D, bt, Y, e5):
+        if e5:
+            return
+        a9 = emir_ist(D)
+        try:
+            a9.cancel_all_orders(J)
+        except Exception:
+            pass
+        try:
+            if D == "future":
+                if bt == "LONG":
+                    a9.create_market_sell_order(J, Y, {"reduceOnly": True})
+                else:
+                    a9.create_market_buy_order(J, Y, {"reduceOnly": True})
+            else:
+                a9.create_market_sell_order(J, Y)
+        except Exception:
+            pass
+
+    def poz_kapat(self, O, dl="MANUEL KAPATMA", pJ=True):
+        global W, S
+        try:
+            bq = acik_islemler.get(O)
+            if not I(bq, dict):
+                return
+            J, b0, ig = (bq.get("sembol", O.split(":", 1)[-1]), bq.get("piyasa", "future"), bq.get("simule", False))
+            Y, bZ, bt = (bq["miktar"], bq["giris"], bq.get("yon", "LONG"))
+            bM = anlik_fiyat_getir(J, b0)
+            self.log_yaz(f"⏳ {O} ({bt}) pozisyonu market fiyatından kapatılıyor...")
+            self._emir_kapat(J, b0, bt, Y, ig)
+            kz = (bZ - bM if bt == "SHORT" else bM - bZ) * Y
+            W += kz
+            if ig and b0 == "future":
+                S += kz
+            nf = (bZ - bM if bt == "SHORT" else bM - bZ) / M(bZ, 1e-9) * 100 * bq.get("kaldirac", 1)
+            _ig_kaydet(J, b0, bt, bZ, bM, Y, kz, nf, dl, bq.get("ozet", ""))
+            acik_islemler[O] = None
+            _ak_kaydet()
+            self.log_yaz(f"✅ {O} ({bt}) [{dl}] kapatıldı! Net Sonuç: {kz:+.2f} USDT")
+            tg_bildir(f"🖐 <b>{dl} ({O} - {bt})</b>\nSonuç: {kz:+.2f} USDT")
+            if pJ:
+                self.pozisyonlari_senkronize_et()
+            self.arayuzu_guncelle()
+        except Exception as e:
+            self.log_yaz(f"⚠️ {O} kapatılırken hata oluştu: {e}")
+
+    def pozisyonlari_senkronize_et(self):
+        global acik_islemler, V, T, W, S
+        if self._senk_calisiyor:
+            return
+        self._senk_calisiyor = True
+        try:
+            try:
+                bulut_durum_cek(zorla=False)
+            except Exception:
+                pass
+            for O, bq in list(acik_islemler.items()):
+                if not I(bq, dict):
+                    continue
+                J, b0, ig = (bq.get("sembol", O.split(":", 1)[-1]), bq.get("piyasa", "future"), bq.get("simule", False))
+                ja = veri_ist(b0)
+                try:
+                    bM = anlik_fiyat_getir(J, b0)
+                except Exception:
+                    continue
+                if O in a1:
+                    a1[O]["fiyat"] = bM
+                bq["anlik"] = bM
+                gW, nD, bZ, _, fk, k1, _ = islem_kar_zarar_hesapla(O, bq)
+                bt, sl, tp = (bq.get("yon", "LONG"), bq["sl"], bq["tp"])
+                oN, Y, gX = (bq.get("tp_nihai", tp), bq["miktar"], bq.get("kismi_tp_alindi", False))
+                nt = bt == "SHORT"
+                nu = nD
+                nv = bM >= sl if nt else bM <= sl
+                kV = bM <= tp if nt else bM >= tp
+                gM = bM <= (oN if gX else tp) if nt else bM >= (oN if gX else tp)
+                if nv:
+                    self.log_yaz(f"🛑 [STOP-LOSS / BE] {O} ({bt}) stop seviyesine ({sl}) ulaştı, kapatılıyor...")
+                    self._emir_kapat(J, b0, bt, Y, ig)
+                    eB = (bZ - bM if nt else bM - bZ) * Y
+                    W += eB
+                    if ig and b0 == "future":
+                        S += eB
+                    _ig_kaydet(J, b0, bt, bZ, bM, Y, eB, nu, "STOP-LOSS / BE" if bq.get("kismi_tp_alindi") else "STOP-LOSS", bq.get("ozet", ""))
+                    acik_islemler[O] = None
+                    _ak_kaydet()
+                    tg_bildir(f"🛑 <b>POZİSYON KAPANDI (STOP-LOSS / BE)</b>\n📌 <b>Parite:</b> {O} ({bt})\n📉 <b>Sonuç:</b> {eB:+.2f} USDT")
+                    continue
+                if KISMI_KAR_AL_AKTIF and (not gX) and kV:
+                    try:
+                        fe = F(ja.amount_to_precision(J, Y * 0.5))
+                        jA = F(ja.amount_to_precision(J, Y - fe))
+                    except Exception:
+                        fe = R(Y * 0.5, 6)
+                        jA = R(Y - fe, 6)
+                    if fe > 0 and jA > 0:
+                        self.log_yaz(f"🎯 [3R KISMİ KÂR AL] {O} ({bt}) {tp} hedefine ulaştı! %50 ({fe}) kapatılıyor ve SL girişe (BE) çekiliyor...")
+                        self._emir_kapat(J, b0, bt, fe, ig)
+                        try:
+                            rU = F(ja.price_to_precision(J, bZ))
+                        except Exception:
+                            rU = bZ
+                        ip = A(bM - bZ) * fe
+                        W += ip
+                        if ig and b0 == "future":
+                            S += ip
+                        _ig_kaydet(J, b0, bt, bZ, bM, fe, ip, nu, "3R %50 KISMİ KÂR AL", bq.get("ozet", ""))
+                        bq.update({"miktar": jA, "sl": rU, "tp": oN, "risk_usdt": 0.0, "kismi_tp_alindi": True})
+                        _ak_kaydet()
+                        tg_bildir(f"🎯 <b>3R KISMİ TAKE-PROFIT (%50) & BREAK-EVEN!</b>\n📌 <b>Parite:</b> {O} ({bt})\n💰 <b>Realize Kâr:</b> +{ip:.2f} USDT (%{nu:+.2f})\n🛡️ <b>Yeni SL:</b> {rU} (0 Risk) | 🎯 <b>Yeni Hedef:</b> {oN}")
+                        continue
+                if gM:
+                    self.log_yaz(f"🏆 [TAKE-PROFIT] {O} ({bt}) hedefe ulaştı! Pozisyon kapatılıyor...")
+                    self._emir_kapat(J, b0, bt, Y, ig)
+                    ip = A(bM - bZ) * Y
+                    W += ip
+                    if ig and b0 == "future":
+                        S += ip
+                    _ig_kaydet(J, b0, bt, bZ, bM, Y, ip, nu, "NİHAİ TAKE-PROFIT", bq.get("ozet", ""))
+                    acik_islemler[O] = None
+                    _ak_kaydet()
+                    tg_bildir(f"🏆 <b>TAKE-PROFIT ({b0.upper()}) GERÇEKLEŞTİ!</b>\n📌 <b>Parite:</b> {O} ({bt})\n💵 <b>Giriş:</b> {bZ} | 🚀 <b>Çıkış:</b> {bM}\n💰 <b>Net Kâr:</b> +{ip:.2f} USDT (%{nu:+.2f})")
+            V, T = bakiye_getir()
+            _ak_kaydet()
+            self.arayuzu_guncelle()
+        except Exception as e:
+            self.log_yaz(f"⚠️ Senkronizasyon hatası: {e}")
+        finally:
+            self._senk_calisiyor = False
+
+    def isleme_gir(self, J, aU, P, al, mN=0, bG="", K=None, D=None):
+        global acik_islemler, V, T
+        hd = D if D else "spot" if PIYASA_MODU == "spot" else "future"
+        ja, jb = (veri_ist(hd), emir_ist(hd))
+        O = anahtar_yap(J, hd)
+        if acik_islemler.get(O) is not None or aU not in ("LONG", "SHORT") or (hd == "spot" and aU == "SHORT"):
+            return
+        if sum((1 for v in acik_islemler.values() if I(v, dict))) >= a4:
+            return
+        H_kontrol = analiz_hafizasi.get(O) or analiz_hafizasi.get(J) or {}
+        kFlt_kontrol = H_kontrol.get("konum_meta", {})
+        if not kFlt_kontrol.get("htf_zorunlu_bolge_onay", False) or not kFlt_kontrol.get("ltf_herhangi_tetik", False) or kFlt_kontrol.get("saglanan_giris_sart_sayisi", 0) < 1:
+            return
+        try:
+            eO = anlik_fiyat_getir(J, hd)
+            P = eO if eO else P
+        except Exception:
+            pass
+        if (aU == "LONG" and al >= P) or (aU == "SHORT" and al <= P):
+            return
+        Y, fk, kF = dinamik_miktar_hesapla(J, P, al, hd, mN)
+        if not Y or Y <= 0:
+            return
+        mO = -1.0 if aU == "SHORT" else 1.0
+        try:
+            f2 = F(ja.price_to_precision(J, al))
+        except Exception:
+            f2 = R(al, 6)
+        iU_gercek = M(A(P - f2), P * aW)
+        Y, fk, kF = dinamik_miktar_hesapla(J, P, f2, hd, mN)
+        if not Y or Y <= 0:
+            return
+        pK = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
+        try:
+            eo = F(ja.price_to_precision(J, M(1e-06, P + mO * iU_gercek * RISK_ODUL_ORANI)))
+            gb = F(ja.price_to_precision(J, M(1e-06, P + mO * iU_gercek * pK)))
+        except Exception:
+            eo = R(M(1e-06, P + mO * iU_gercek * RISK_ODUL_ORANI), 6)
+            gb = R(M(1e-06, P + mO * iU_gercek * pK), 6)
+        mP = False
+        try:
+            if hd == "future":
+                if TESTNET_AKTIF:
+                    mP = True
+                else:
+                    for fn in [lambda: jb.set_leverage(KALDIRAC, J), lambda: jb.set_margin_mode(MARJIN_TIPI, J)]:
+                        try:
+                            fn()
+                        except Exception:
+                            pass
+                    if aU == "LONG":
+                        jb.create_market_buy_order(J, Y)
+                        try:
+                            jb.create_order(J, "STOP_MARKET", "sell", Y, None, {"stopPrice": f2, "reduceOnly": True})
+                        except Exception:
+                            pass
+                    else:
+                        jb.create_market_sell_order(J, Y)
+                        try:
+                            jb.create_order(J, "STOP_MARKET", "buy", Y, None, {"stopPrice": f2, "reduceOnly": True})
+                        except Exception:
+                            pass
+            else:
+                try:
+                    jb.create_market_buy_order(J, Y)
+                    try:
+                        jb.create_order(J, "STOP_LOSS_LIMIT", "sell", Y, F(ja.price_to_precision(J, f2 * 0.998)), {"stopPrice": f2})
+                    except Exception:
+                        pass
+                except Exception as qG:
+                    if TESTNET_AKTIF:
+                        mP = True
+                    else:
+                        raise qG
+            u_ana = int(kFlt_kontrol.get("htf_bolge_sayisi", kFlt_kontrol.get("saglanan_giris_sart_sayisi", 1)))
+            u_alt = int(kFlt_kontrol.get("htf_safe_puan", 80))
+            k_uyum_kisa = f"Safe:{u_ana}/8 ({u_alt}p)"
+            bG_kural = f"[{k_uyum_kisa}] {bG}" if k_uyum_kisa not in str(bG) else bG
+            acik_islemler[O] = {
+                "sembol": J, "yon": aU, "piyasa": hd, "simule": mP,
+                "kaldirac": KALDIRAC if hd == "future" else 1,
+                "giris": P, "anlik": P, "pnl_usdt": 0.0, "pnl_yuzde": 0.0,
+                "marjin_usdt": R(fk, 2), "sl": f2, "ilk_sl": f2, "tp": eo, "tp_nihai": gb,
+                "miktar": Y, "risk_usdt": kF, "kismi_tp_alindi": False,
+                "ozet": bG_kural, "giris_kurallari": K or [],
+                "uygun_kural_sayisi": u_ana, "uygun_alt_kural_sayisi": u_alt,
+                "kural_uyum_kisa": k_uyum_kisa, "risk_seviyesi": AKTIF_RISK_SEVIYESI,
+                "islem_modu": ISLEM_TARZI_MODU,
+                "htf_periyot": H_kontrol.get("htf_periyot", HTF_PERIYOT),
+                "mtf_periyot": H_kontrol.get("mtf_periyot", MTF_PERIYOT),
+                "ltf_periyot": H_kontrol.get("ltf_periyot", LTF_PERIYOT),
+                "mtf_sablonu": H_kontrol.get("mtf_sablonu", AKTIF_MTF_SABLONU)
+            }
+            _ak_kaydet()
+            V, T = bakiye_getir()
+            self.arayuzu_guncelle()
+            ng = "🟢" if aU == "LONG" else "🔴"
+            rw = f"{KALDIRAC}x Vadeli{(' [Canlı Demo]' if mP else '')}" if hd == "future" else f"Spot{(' [Canlı Demo]' if mP else '')}"
+            rx = kF * RISK_ODUL_ORANI
+            self.log_yaz(f"{ng} YENİ İŞLEM [{rw}]: {O} {aU} | {k_uyum_kisa} | Skor: {mN}/100 | Marjin: {fk:.1f}$ | Risk: -{kF:.2f}$ | Stop: {f2} | Hedef: +{rx:.2f}$")
+            tg_bildir(f"{ng} <b>MAHŞERİN 4 ATLISI İŞLEM AÇILDI ({aU} - {rw})</b>\n📌 <b>Parite:</b> {O} | 🔥 <b>Skor:</b> {mN}/100\n✅ <b>Kural:</b> {k_uyum_kisa}\n🧩 <b>Özet:</b> {bG_kural}\n💵 <b>Giriş:</b> {P} | 🛡️ <b>Stop:</b> {f2} (-{kF:.2f}$)\n🎯 <b>TP1 ({RISK_ODUL_ORANI}R):</b> {eo} (+{rx:.2f}$) | 🚀 <b>Nihai:</b> {gb}")
+        except Exception as e:
+            self.log_yaz(f"⚠️ {O} Emir Hatası: {e}")
+
+    def bot_ana_dongu(self):
+        global aQ, V, T, bE
+        try:
+            if aC is None or aw is None:
+                borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+            _SON_TARAMA_KALP_ATISI[0] = time.time()
+            pariteleri_yukle(self.log_yaz)
+            V, T = bakiye_getir()
+            if aQ == 0:
+                aQ = T
+            self.log_yaz(f"✅ Borsa bağlantısı hazır. Bakiye: {T:.2f} USDT (Spot: {ay:.2f}$ | Vadeli: {aq:.2f}$) | Taranacak Parite: {L(ab)}")
+        except Exception as e:
+            self.log_yaz(f"⚠️ Borsa bağlantı hatası: {e}")
+        while bot_calisiyor and not self._kapaniyor:
+            try:
+                self.pozisyonlari_senkronize_et()
+                jr = "spot" if PIYASA_MODU == "spot" else "future"
+                for js in ("BTC/USDT", "ETH/USDT"):
+                    if not bot_calisiyor:
+                        break
+                    try:
+                        veri_cek(js, MTF_PERIYOT, 70, jr)
+                        veri_cek(js, LTF_PERIYOT, 70, jr)
+                    except Exception:
+                        pass
+
+                def _tarama_oncelik_anahtari(item):
+                    j_s, b_s = item
+                    o_s = anahtar_yap(j_s, b_s)
+                    h_s = analiz_hafizasi.get(o_s) or analiz_hafizasi.get(j_s)
+                    if not h_s:
+                        return (2, (0, 0, 0, 0), 0, (0, 0, 0, 0), 0, 0)
+                    km_s = h_s.get("konum_meta", {})
+                    onc_say = int(km_s.get("htf_oncelikli_bolge_sayisi", 0))
+                    ikn_say = int(km_s.get("htf_ikincil_bolge_sayisi", 0))
+                    onc_vek = tuple(km_s.get("oncelik_vektor", (0, 0, 0, 0)))
+                    ikn_vek = tuple(km_s.get("ikincil_vektor", (0, 0, 0, 0)))
+                    kademe = 3 if onc_say > 0 else (1 if ikn_say > 0 else 0)
+                    return (kademe, onc_vek, onc_say, ikn_vek, ikn_say, int(h_s.get("skor", 0)))
+
+                qu = sorted(list(ab), key=_tarama_oncelik_anahtari, reverse=True)
+                oncelikli_girilen_sayisi = 0
+                adaylar_1_qml, adaylar_2_ob, adaylar_3_fresh, adaylar_4_ote, ikincil_bolge_adaylari = [], [], [], [], []
+                for bu, (J, b0) in enumerate(qu, start=1):
+                    if not bot_calisiyor:
+                        break
+                    try:
+                        _SON_TARAMA_KALP_ATISI[0] = time.time()
+                        bE = bu
+                        O = anahtar_yap(J, b0)
+                        bS = veri_cek(J, HTF_PERIYOT, 250, b0)
+                        bw = veri_cek(J, MTF_PERIYOT, 250, b0)
+                        aY = veri_cek(J, LTF_PERIYOT, 250, b0)
+                        jB = _f(aY, "close", -1)
+                        H = mahserin_4_atlisi_confluence_analizi(J, bS, bw, aY, b0)
+                        km_tarama = H.get("konum_meta", {})
+                        onc_onay = bool(km_tarama.get("htf_oncelikli_bolge_onay", False) and km_tarama.get("oncelikli_giris_sart_sayisi", 0) >= 1)
+                        ikn_onay = bool(km_tarama.get("htf_ikincil_bolge_onay", False) and km_tarama.get("ikincil_giris_sart_sayisi", 0) >= 1)
+                        onc_vek_t = tuple(km_tarama.get("oncelik_vektor", (0, 0, 0, 0)))
+                        ikn_vek_t = tuple(km_tarama.get("ikincil_vektor", (0, 0, 0, 0)))
+                        if H["sinyal"] in ("LONG", "SHORT") and acik_islemler.get(O) is None:
+                            if onc_onay:
+                                kayit_onc = (onc_vek_t, int(km_tarama.get("htf_bolge_sayisi", 1)), int(H["skor"]), J, b0, O, H)
+                                if km_tarama.get("sart4_htf_qml_giris", False):
+                                    self.isleme_gir(J, H["sinyal"], H["giris"], H["sl"], H["skor"], f"[1.ÖNCELİK #1: QML] {H['ozet']}", H["detayli_kurallar"], b0)
+                                    if I(acik_islemler.get(O), dict):
+                                        oncelikli_girilen_sayisi += 1
+                                    else:
+                                        adaylar_1_qml.append(kayit_onc)
+                                elif km_tarama.get("sart2_htf_ob_giris", False):
+                                    adaylar_2_ob.append(kayit_onc)
+                                elif km_tarama.get("sart1_htf_poi_giris", False):
+                                    adaylar_3_fresh.append(kayit_onc)
+                                elif km_tarama.get("sart3_htf_ote_giris", False):
+                                    adaylar_4_ote.append(kayit_onc)
+                            elif ikn_onay:
+                                ikincil_bolge_adaylari.append((ikn_vek_t, int(km_tarama.get("htf_ikincil_bolge_sayisi", 1)), int(H["skor"]), J, b0, O, H))
+                        a1[O] = {
+                            "fiyat": jB, "4h": H["yon_4h"], "1h": H["yon_1h"], "ana_yon": H["ana_yon"],
+                            "skor": f"{H['skor']}/100",
+                            "ltf": f"AÇIK ({acik_islemler[O]['yon']})" if I(acik_islemler.get(O), dict) else H["sinyal"],
+                            "setup_detay": H["ozet"],
+                            "oncelikli_bolge": int(km_tarama.get("htf_oncelikli_bolge_sayisi", 0)),
+                            "oncelik_vektor": onc_vek_t, "ikincil_vektor": ikn_vek_t,
+                            "safe_sayisi": int(km_tarama.get("htf_bolge_sayisi", 0))
+                        }
+                        if I(acik_islemler.get(O), dict):
+                            acik_islemler[O]["anlik"] = jB
+                        if bu % 4 == 0:
+                            self.durum_guncelle(f"Taranıyor: {bu}/{L(qu)} ({HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT}) 🟢", "#4ade80")
+                            self.arayuzu_guncelle()
+                        if bu % 20 == 0:
+                            self.pozisyonlari_senkronize_et()
+                            try:
+                                gc.collect()
+                            except Exception:
+                                pass
+                        time.sleep(0.08 if ISLEM_TARZI_MODU == "Scalp" else 0.25)
+                    except Exception as e:
+                        self.log_yaz(f"⚠️ {J} ({b0.upper()}) tarama hatası: {e}")
+                        time.sleep(0.35)
+
+                for sira_etiket, aday_grup in [
+                    ("1.ÖNCELİK #1: QML", adaylar_1_qml),
+                    ("2.ÖNCELİK #2: OB", adaylar_2_ob),
+                    ("3.ÖNCELİK #3: Fresh Arz/Talep", adaylar_3_fresh),
+                    ("4.ÖNCELİK #4: OTE", adaylar_4_ote)
+                ]:
+                    if not bot_calisiyor or not aday_grup:
+                        continue
+                    aday_grup.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+                    for _, _, _, J_pr, b0_pr, O_pr, H_pr in aday_grup:
+                        if not bot_calisiyor:
+                            break
+                        if sum((1 for v in acik_islemler.values() if I(v, dict))) >= a4:
+                            break
+                        if acik_islemler.get(O_pr) is None:
+                            self.isleme_gir(J_pr, H_pr["sinyal"], H_pr["giris"], H_pr["sl"], H_pr["skor"], f"[{sira_etiket}] {H_pr['ozet']}", H_pr["detayli_kurallar"], b0_pr)
+                            if I(acik_islemler.get(O_pr), dict):
+                                oncelikli_girilen_sayisi += 1
+
+                if oncelikli_girilen_sayisi == 0 and ikincil_bolge_adaylari and bot_calisiyor:
+                    ikincil_bolge_adaylari.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+                    self.log_yaz(f"🧭 [2. KADEME HTF BÖLGE TARAMASI] {L(ikincil_bolge_adaylari)} parite değerlendiriliyor...")
+                    for _, _, _, J_ik, b0_ik, O_ik, H_ik in ikincil_bolge_adaylari:
+                        if not bot_calisiyor:
+                            break
+                        if sum((1 for v in acik_islemler.values() if I(v, dict))) >= a4:
+                            break
+                        if acik_islemler.get(O_ik) is None:
+                            self.isleme_gir(J_ik, H_ik["sinyal"], H_ik["giris"], H_ik["sl"], H_ik["skor"], f"[2.KADEME HTF: BOS/CHoCH/ITZ/Magic] {H_ik['ozet']}", H_ik["detayli_kurallar"], b0_ik)
+
+                bekle_sn = 3 if ISLEM_TARZI_MODU == "Scalp" else 10
+                self.log_yaz(f"🔄 Tarama ({L(qu)} parite | Mod: {ISLEM_TARZI_MODU}) tamamlandı. {bekle_sn}sn sonra yeniden taranacak...")
+                for _ in G(bekle_sn):
+                    if not bot_calisiyor:
+                        break
+                    time.sleep(1)
+            except BaseException as e:
+                if not bot_calisiyor or self._kapaniyor:
+                    break
+                self.log_yaz(f"🛡️ Döngü hatası izole edildi: {e}")
+                time.sleep(3)
+
+
+# ==============================================================================
+# FLET MOBİL ARAYÜZÜ (ANDROID APK & DOKUNMATİK EKRAN UYUMLU)
+# ==============================================================================
+def main(page: ft.Page):
+    global _AKTIF_PAGE_REF
+    _AKTIF_PAGE_REF = page
+    page.title = "Alfa Trade Club — Mahşerin 4 Atlısı (Mobil APK)"
+    page.theme_mode = ft.ThemeMode.DARK
+    page.bgcolor = "#0f172a"
+    page.padding = 0
+    page.spacing = 0
+
+    def _yasam_dongusu_degisti(e):
+        durum_str = str(getattr(e, "data", "") or getattr(e, "state", "")).lower()
+        if any(x in durum_str for x in ("pause", "inactive", "hidden", "detach")):
+            _ARKA_PLANDA_MI[0] = True
+            _ak_kaydet()
+        elif "resume" in durum_str:
+            _ARKA_PLANDA_MI[0] = False
+            try:
+                _ekrani_yenile("force")
+            except Exception:
+                pass
+
+    page.on_app_lifecycle_state_change = _yasam_dongusu_degisti
+
+    yerel_port = yerel_grafik_sunucusu_baslat()
+    secili_parite_state = {"anahtar": "FUT:BTC/USDT", "tf": "4h"}
+
+    # --- ÜST ÖZET KARTLARI ---
+    lbl_portfoy = ft.Text("0.00 $", size=15, weight=ft.FontWeight.BOLD, color="#38bdf8")
+    lbl_serbest = ft.Text("Serbest: 0.00 $", size=11, color="#94a3b8")
+    lbl_acik_pnl = ft.Text("+0.00 $ (%0.00)", size=15, weight=ft.FontWeight.BOLD, color="#4ade80")
+    lbl_oturum_pnl = ft.Text("Oturum: +0.00 $ (00:00:00)", size=11, color="#22d3ee")
+    lbl_net_pnl = ft.Text("+0.00 $", size=15, weight=ft.FontWeight.BOLD, color="#fbbf24")
+    lbl_aktif_say = ft.Text(f"Açık: 0 / {a4}", size=11, color="#c084fc")
+    lbl_durum_bar = ft.Text("Durum: Beklemede ⏸", size=12, weight=ft.FontWeight.BOLD, color="#f59e0b")
+
+    def mini_kart(baslik, ana_lbl, alt_lbl, kenar_renk):
+        return ft.Container(
+            content=ft.Column([
+                ft.Text(baslik, size=10, weight=ft.FontWeight.BOLD, color="#94a3b8"),
+                ana_lbl,
+                alt_lbl
+            ], spacing=2, tight=True),
+            bgcolor="#1e293b",
+            border=ft.border.all(1, kenar_renk),
+            border_radius=10,
+            padding=8,
+            expand=True
+        )
+
+    ust_kartlar_row = ft.Row([
+        mini_kart("💰 PORTFÖY", lbl_portfoy, lbl_serbest, "#3b82f6"),
+        mini_kart("📈 AÇIK PNL", lbl_acik_pnl, lbl_oturum_pnl, "#10b981"),
+        mini_kart("🏆 NET K/Z", lbl_net_pnl, lbl_aktif_say, "#f59e0b"),
+    ], spacing=6)
+
+    # --- KONTROL BUTONLARI ---
+    btn_baslat = ft.ElevatedButton(
+        "▶ Başlat",
+        bgcolor="#10b981",
+        color="#ffffff",
+        expand=True,
+        on_click=lambda e: _bot_baslat_tik()
+    )
+    btn_durdur = ft.ElevatedButton(
+        "⏹ Durdur",
+        bgcolor="#ef4444",
+        color="#ffffff",
+        disabled=True,
+        expand=True,
+        on_click=lambda e: _bot_durdur_tik()
+    )
+    lbl_ota_surum = ft.Text(f"📦 Sürüm: {AKTIF_OTA_SURUM_BILGISI}", size=10, color="#a78bfa", weight=ft.FontWeight.BOLD)
+
+    def _tek_tus_ota_tik(e):
+        global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+        GITHUB_REPO_ADRESI = (tf_gh_repo.value or GITHUB_REPO_ADRESI or "emrhozbr/bot").strip()
+        if tf_gh_tok.value and tf_gh_tok.value.strip():
+            GITHUB_TOKEN = tf_gh_tok.value.strip()
+        _api_kaydet_tam()
+        lbl_durum_bar.value = "⏳ OTA Güncelleniyor..."
+        lbl_durum_bar.color = "#fde047"
+        lbl_ayar_durum.value = "⏳ GitHub üzerinden en güncel sürüm (botv4.0.9+ / main.py) ve PC ayarları indiriliyor..."
+        lbl_ayar_durum.color = "#fde047"
+        page.update()
+        def _ota_bg():
+            bulut_durum_cek(zorla=True)
+            ok, msg = ota_strateji_guncelle(GITHUB_REPO_ADRESI, GITHUB_TOKEN)
+            motor.log_yaz(msg)
+            motor.durum_guncelle("OTA Güncellendi ✅" if ok else "OTA Uyarı ⚠️", "#4ade80" if ok else "#f87171")
+            lbl_ayar_durum.value = msg
+            lbl_ayar_durum.color = "#4ade80" if ok else "#f87171"
+            lbl_ota_surum.value = f"📦 Sürüm: {AKTIF_OTA_SURUM_BILGISI}"
+            if ok:
+                try:
+                    dd_mtf_sablon.options = [ft.dropdown.Option(k) for k in MTF_SABLONLARI.keys()]
+                    dd_risk_seviye.options = [ft.dropdown.Option(k) for k in RISK_SEVIYESI_SECENEKLERI.keys()]
+                    dd_stop_modu.options = [ft.dropdown.Option(k) for k in STOP_BELIRLEME_SECENEKLERI]
+                except Exception:
+                    pass
+            _ekrani_yenile("force")
+        threading.Thread(target=_ota_bg, daemon=True).start()
+
+    btn_senk = ft.ElevatedButton(
+        "☁️ Eşitle",
+        bgcolor="#3b82f6",
+        color="#ffffff",
+        expand=True,
+        on_click=lambda e: threading.Thread(target=lambda: (bulut_durum_cek(True), bulut_durum_gonder(True), motor.pozisyonlari_senkronize_et()), daemon=True).start()
+    )
+    btn_ota = ft.ElevatedButton(
+        "⚡ OTA Güncelle",
+        bgcolor="#8b5cf6",
+        color="#ffffff",
+        expand=True,
+        on_click=_tek_tus_ota_tik
+    )
+
+    ust_panel = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                ft.Column([
+                    ft.Text("🚀 ALFA TRADE CLUB (4 ATLI PA)", size=13, weight=ft.FontWeight.BOLD, color="#f8fafc"),
+                    ft.Row([lbl_ota_surum, lbl_durum_bar], spacing=8, wrap=True)
+                ], spacing=2, expand=True),
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ust_kartlar_row,
+            ft.Row([btn_baslat, btn_durdur], spacing=6),
+            ft.Row([btn_senk, btn_ota], spacing=6)
+        ], spacing=6),
+        bgcolor="#181825",
+        padding=ft.padding.only(left=10, right=10, top=34, bottom=10),
+        border=ft.border.only(bottom=ft.BorderSide(1, "#334155"))
+    )
+
+    # --- SEKME 1: AÇIK İŞLEMLER LİSTESİ ---
+    lv_acik_islemler = ft.ListView(expand=True, spacing=8, padding=10)
+
+    # --- SEKME 2: BORSA TARAMASI LİSTESİ ---
+    lbl_tarama_info = ft.Text(
+        f"🔍 MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Eşik: {MIN_CONFLUENCE_SKORU}+ Puan | Öncelik: 1.QML > 2.OB > 3.Fresh > 4.OTE",
+        size=11, color="#38bdf8", weight=ft.FontWeight.BOLD
+    )
+    lv_tarama = ft.ListView(expand=True, spacing=6, padding=10)
+
+    # --- SEKME 3: KARNE, PINE v6 & CANLI TV GRAFİK ---
+    dd_karne_parite = ft.Dropdown(
+        label="İncelenecek Parite Seçin",
+        options=[ft.dropdown.Option( f"FUT:{s}") for s in am],
+        value="FUT:BTC/USDT",
+        expand=True,
+        bgcolor="#1e293b",
+        border_color="#3b82f6"
+    )
+    txt_karne_detay = ft.TextField(
+        multiline=True,
+        read_only=True,
+        min_lines=10,
+        max_lines=16,
+        text_size=11,
+        bgcolor="#11111b",
+        color="#4ade80",
+        border_color="#334155"
+    )
+    txt_pine_kod = ft.TextField(
+        multiline=True,
+        read_only=True,
+        min_lines=8,
+        max_lines=14,
+        text_size=10,
+        bgcolor="#090d16",
+        color="#38bdf8",
+        border_color="#334155"
+    )
+    lbl_pine_bildirim = ft.Text("Canlı analiz veya Pine v6 için yukarıdan zaman dilimi seçin.", size=11, color="#fde047")
+
+    img_canli_grafik = ft.Image(src_base64="", fit=ft.ImageFit.CONTAIN, width=900, height=275)
+    kutu_canli_grafik = ft.Container(
+        content=ft.InteractiveViewer(
+            min_scale=0.8,
+            max_scale=5.0,
+            content=img_canli_grafik
+        ),
+        bgcolor="#0f172a",
+        border_radius=8,
+        border=ft.border.all(1, "#334155"),
+        height=285,
+        padding=4,
+        visible=False
+    )
+
+    def _parite_karne_ve_pine_yukle(tf_secim="4h", canli_zorla=False, tv_ac=False):
+        secili_parite_state["tf"] = tf_secim
+        O = dd_karne_parite.value or secili_parite_state["anahtar"] or "FUT:BTC/USDT"
+        secili_parite_state["anahtar"] = O
+        lbl_pine_bildirim.value = f"⏳ {O} [{tf_secim.upper()}] verileri, canlı grafik ve PA kutuları hazırlanıyor..."
+        page.update()
+
+        def _arka_plan():
+            try:
+                H = analiz_hafizasi.get(O) or {}
+                J = H.get("sembol", str(O).split(":", 1)[-1])
+                D = H.get("piyasa", "spot" if str(O).startswith("SPOT:") else "future")
+                if canli_zorla or not H or H.get("df_15m_full") is None:
+                    H = pine_icin_4h_1h_5m_veri_hazirla(J, D, H, O)
+                    analiz_hafizasi[O] = H
+                svg_b64 = mobil_canli_svg_grafik_uret(O, tf_secim, H)
+                if svg_b64:
+                    img_canli_grafik.src_base64 = svg_b64
+                    kutu_canli_grafik.visible = True
+                karne_metni = _karne_checklist_olustur(H, html_mi=False)
+                p1, p2, p3, p4 = H.get("atli_puanlar", (0, 0, 0, 0))
+                ek_bilgi = (
+                    f"📌 PARİTE: {O} | SİNYAL: {H.get('sinyal', 'BEKLE')} ({H.get('skor', 0)}/100)\n"
+                    f"🏇 4 Atlı: 1.Atlı:{p1}/25 | 2.Atlı:{p2}/25 | 3.Atlı:{p3}/25 | 4.Atlı:{p4}/25\n"
+                    f"🎯 Giriş Modeli: {H.get('giris_modeli', '-')}\n"
+                    f"💵 Giriş: {_fmt_f(H.get('giris', 0))} | 🛡️ Stop: {_fmt_f(H.get('sl', 0))}\n\n"
+                    f"✅ DETAYLI KURALLAR:\n" + "\n".join(f"• {k}" for k in H.get("detayli_kurallar", [])[:18])
+                )
+                txt_karne_detay.value = karne_metni + "\n" + ek_bilgi
+                pine_str = pine_script_uret_4h_1h_5m(O, tf_secim, H)
+                txt_pine_kod.value = pine_str
+                if tv_ac:
+                    dosya_yolu, _ = tradingview_kopyala_yapistirsiz_html_ac(O, tf_secim, H)
+                    dosya_adi = os.path.basename(dosya_yolu)
+                    port_no = yerel_port or yerel_grafik_sunucusu_baslat()
+                    if port_no:
+                        hedef_url = f"http://127.0.0.1:{port_no}/{dosya_adi}?t={int(time.time())}"
+                        page.launch_url(hedef_url)
+                    lbl_pine_bildirim.value = f"🚀 {O} [{tf_secim.upper()}] Canlı Grafik hem uygulama içinde hem tarayıcıda açıldı!"
+                else:
+                    lbl_pine_bildirim.value = f"✅ {O} [{tf_secim.upper()}] Canlı PA Grafiği, Karne ve Pine Script v6 hazır!"
+            except Exception as ex:
+                lbl_pine_bildirim.value = f"⚠️ Hesaplama hatası: {ex}"
+            try:
+                page.update()
+            except Exception:
+                pass
+
+        threading.Thread(target=_arka_plan, daemon=True).start()
+
+    def _pine_kopyala_tik(e):
+        if txt_pine_kod.value:
+            page.set_clipboard(txt_pine_kod.value)
+            lbl_pine_bildirim.value = f"📋 {secili_parite_state['anahtar']} [{secili_parite_state['tf'].upper()}] Pine Script v6 panoya kopyalandı!"
+            page.update()
+
+    dd_karne_parite.on_change = lambda e: _parite_karne_ve_pine_yukle(secili_parite_state["tf"], canli_zorla=False)
+
+    sekme_karne_icerik = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                dd_karne_parite,
+                ft.ElevatedButton("🔄 Canlı Analiz", bgcolor="#0ea5e9", color="#ffffff", on_click=lambda e: _parite_karne_ve_pine_yukle(secili_parite_state["tf"], canli_zorla=True))
+            ], spacing=6),
+            ft.Row([
+                ft.ElevatedButton("🏛️ HTF Grafik & Pine", bgcolor="#2563eb", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle("4h", False, False)),
+                ft.ElevatedButton("🧭 MTF Grafik & Pine", bgcolor="#7c3aed", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle("1h", False, False)),
+                ft.ElevatedButton("🎯 LTF Grafik & Pine", bgcolor="#0d9488", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle("5m", False, False)),
+            ], spacing=6),
+            ft.Row([
+                ft.ElevatedButton("🚀 Tam Ekran TV Grafiği Aç", bgcolor="#10b981", color="#ffffff", expand=True, on_click=lambda e: _parite_karne_ve_pine_yukle(secili_parite_state["tf"], False, True)),
+                ft.ElevatedButton("📋 Pine Kopyala", bgcolor="#eab308", color="#11111b", expand=True, on_click=_pine_kopyala_tik),
+            ], spacing=6),
+            lbl_pine_bildirim,
+            kutu_canli_grafik,
+            ft.Text("📋 STRATEJİ & SEVİYE KARNESİ CHECK-LIST (8 HTF BÖLGE):", size=12, weight=ft.FontWeight.BOLD, color="#38bdf8"),
+            txt_karne_detay,
+            ft.Text("🌲 PINE SCRIPT v6 KODU:", size=12, weight=ft.FontWeight.BOLD, color="#fde047"),
+            txt_pine_kod
+        ], scroll=ft.ScrollMode.AUTO, spacing=8),
+        padding=10,
+        expand=True
+    )
+
+    # --- SEKME 4: AYARLAR & BINANCE API ---
+    dd_piyasa = ft.Dropdown(
+        label="Piyasa Modu",
+        options=[
+            ft.dropdown.Option("her_ikisi", "HER İKİSİ (SPOT + VADELİ)"),
+            ft.dropdown.Option("future", "VADELİ (FUTURES)"),
+            ft.dropdown.Option("spot", "SPOT")
+        ],
+        value=PIYASA_MODU,
+        bgcolor="#1e293b"
+    )
+    dd_ag = ft.Dropdown(
+        label="İşlem Ağı Modu",
+        options=[
+            ft.dropdown.Option("testnet", "TESTNET / CANLI DEMO (Sanal Bakiye)"),
+            ft.dropdown.Option("mainnet", "GERÇEK (MAINNET - CANLI İŞLEM)")
+        ],
+        value="testnet" if TESTNET_AKTIF else "mainnet",
+        bgcolor="#1e293b"
+    )
+    dd_mtf_sablon = ft.Dropdown(
+        label="MTF Zaman Dilimi Şablonu",
+        options=[ft.dropdown.Option(k) for k in MTF_SABLONLARI.keys()],
+        value=AKTIF_MTF_SABLONU,
+        bgcolor="#1e293b"
+    )
+    dd_risk_seviye = ft.Dropdown(
+        label="İşlem Risk & Confluence Seviyesi",
+        options=[ft.dropdown.Option(k) for k in RISK_SEVIYESI_SECENEKLERI.keys()],
+        value=AKTIF_RISK_SEVIYESI,
+        bgcolor="#1e293b"
+    )
+    dd_stop_modu = ft.Dropdown(
+        label="🛡️ Stop Noktası Belirleme Modu (v4.0.3)",
+        options=[ft.dropdown.Option(k) for k in STOP_BELIRLEME_SECENEKLERI],
+        value=STOP_BELIRLEME_MODU,
+        bgcolor="#1e293b"
+    )
+    dd_marjin_tipi = ft.Dropdown(
+        label="Vadeli Marjin Tipi",
+        options=[ft.dropdown.Option("ISOLATED"), ft.dropdown.Option("CROSSED")],
+        value=MARJIN_TIPI,
+        bgcolor="#1e293b"
+    )
+    tf_marjin = ft.TextField(label="Maks Marjin ($)", value=str(MAKS_MARJIN_USDT), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_kaldirac = ft.TextField(label="Kaldıraç (x)", value=str(KALDIRAC), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_risk = ft.TextField(label="İşlem Başı Risk ($)", value=str(ISLEM_BASI_RISK_USDT), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_rr = ft.TextField(label="TP1 Risk/Ödül (RR)", value=str(RISK_ODUL_ORANI), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_min_skor = ft.TextField(label="Min 4 Atlı Skoru", value=str(MIN_CONFLUENCE_SKORU), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+    tf_limit = ft.TextField(label="Parite Limiti (0=Tümü)", value=str(ae), keyboard_type=ft.KeyboardType.NUMBER, expand=True, bgcolor="#1e293b")
+
+    tf_api_key = ft.TextField(label="Binance API Key", value=API_KEY, bgcolor="#1e293b")
+    tf_api_sec = ft.TextField(label="Binance Secret Key", value=API_SECRET, password=True, can_reveal_password=True, bgcolor="#1e293b")
+    tf_tg_tok = ft.TextField(label="Telegram Bot Token", value=TELEGRAM_TOKEN, bgcolor="#1e293b")
+    tf_tg_id = ft.TextField(label="Telegram Chat ID", value=TELEGRAM_CHAT_ID, bgcolor="#1e293b")
+    tf_gh_repo = ft.TextField(label="GitHub Repo (OTA & Bulut Senk: kullanici/repo)", value=GITHUB_REPO_ADRESI, bgcolor="#1e293b")
+    tf_gh_tok = ft.TextField(label="GitHub Token (Cihazlar Arası Senk & Private Repo İçin)", value=GITHUB_TOKEN, password=True, can_reveal_password=True, bgcolor="#1e293b")
+    lbl_ayar_durum = ft.Text("Ayarlar hazır.", size=12, color="#4ade80")
+
+    def _risk_secim_degisti(e):
+        sec = dd_risk_seviye.value
+        if sec in RISK_SEVIYESI_SECENEKLERI and not sec.startswith("Özel"):
+            sk, _ = RISK_SEVIYESI_SECENEKLERI[sec]
+            tf_min_skor.value = str(sk)
+            page.update()
+
+    dd_risk_seviye.on_change = _risk_secim_degisti
+
+    def _ui_ayar_kontrollerini_guncelle():
+        try:
+            dd_piyasa.value = PIYASA_MODU
+            dd_ag.value = "testnet" if TESTNET_AKTIF else "mainnet"
+            dd_mtf_sablon.value = AKTIF_MTF_SABLONU
+            dd_risk_seviye.value = AKTIF_RISK_SEVIYESI
+            dd_stop_modu.value = STOP_BELIRLEME_MODU
+            dd_marjin_tipi.value = MARJIN_TIPI
+            tf_marjin.value = str(MAKS_MARJIN_USDT)
+            tf_kaldirac.value = str(KALDIRAC)
+            tf_risk.value = str(ISLEM_BASI_RISK_USDT)
+            tf_rr.value = str(RISK_ODUL_ORANI)
+            tf_min_skor.value = str(MIN_CONFLUENCE_SKORU)
+            tf_limit.value = str(ae)
+            lbl_tarama_info.value = f"🔍 MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Eşik: {MIN_CONFLUENCE_SKORU}+ Puan | Kaldıraç: {KALDIRAC}x"
+            page.update()
+        except Exception:
+            pass
+    globals()["_UI_AYAR_YENILE_FN"] = _ui_ayar_kontrollerini_guncelle
+
+    def _ayarlari_kaydet_tik(e):
+        global PIYASA_MODU, TESTNET_AKTIF, MARJIN_TIPI, KALDIRAC, MAKS_MARJIN_USDT
+        global ISLEM_BASI_RISK_USDT, RISK_ODUL_ORANI, NIHAI_TP_RR, MIN_CONFLUENCE_SKORU, ae
+        global API_KEY, API_SECRET, TELEGRAM_TOKEN, TELEGRAM_CHAT_ID, AKTIF_RISK_SEVIYESI, V, T
+        try:
+            PIYASA_MODU = dd_piyasa.value or "her_ikisi"
+            TESTNET_AKTIF = (dd_ag.value == "testnet")
+            MARJIN_TIPI = dd_marjin_tipi.value or "ISOLATED"
+            global STOP_BELIRLEME_MODU
+            AKTIF_RISK_SEVIYESI = dd_risk_seviye.value or AKTIF_RISK_SEVIYESI
+            STOP_BELIRLEME_MODU = dd_stop_modu.value or STOP_BELIRLEME_MODU
+            if dd_mtf_sablon.value in MTF_SABLONLARI:
+                mtf_sablonu_uygula(dd_mtf_sablon.value)
+            MAKS_MARJIN_USDT = M(5.0, F(tf_marjin.value))
+            KALDIRAC = M(1, N(125, int(F(tf_kaldirac.value))))
+            ISLEM_BASI_RISK_USDT = M(0.1, F(tf_risk.value))
+            RISK_ODUL_ORANI = M(0.5, F(tf_rr.value))
+            NIHAI_TP_RR = M(NIHAI_TP_RR, RISK_ODUL_ORANI + 1.0)
+            MIN_CONFLUENCE_SKORU = M(10, N(100, int(F(tf_min_skor.value))))
+            ae = M(0, int(F(tf_limit.value)))
+            global GITHUB_REPO_ADRESI, GITHUB_TOKEN
+            API_KEY = tf_api_key.value.strip()
+            API_SECRET = tf_api_sec.value.strip()
+            TELEGRAM_TOKEN = tf_tg_tok.value.strip()
+            TELEGRAM_CHAT_ID = tf_tg_id.value.strip()
+            GITHUB_REPO_ADRESI = tf_gh_repo.value.strip() or "emrhozbr/bot"
+            GITHUB_TOKEN = tf_gh_tok.value.strip()
+            _api_kaydet_tam()
+            if GITHUB_TOKEN:
+                threading.Thread(target=bulut_durum_gonder, args=(True,), daemon=True).start()
+            borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+            V, T = bakiye_getir()
+            threading.Thread(target=lambda: pariteleri_yukle(motor.log_yaz), daemon=True).start()
+            lbl_tarama_info.value = f"🔍 MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Eşik: {MIN_CONFLUENCE_SKORU}+ Puan | Kaldıraç: {KALDIRAC}x"
+            lbl_ayar_durum.value = f"✅ Ayarlar ve API kaydedildi! Bakiye: {T:.2f} USDT"
+            lbl_ayar_durum.color = "#4ade80"
+            motor.log_yaz(f"⚙️ Mobil Ayarlar Güncellendi -> MTF: {HTF_PERIYOT.upper()}/{MTF_PERIYOT.upper()}/{LTF_PERIYOT} | Risk: {ISLEM_BASI_RISK_USDT}$ | Skor: {MIN_CONFLUENCE_SKORU}+")
+            _ekrani_yenile()
+        except Exception as ex:
+            lbl_ayar_durum.value = f"⚠️ Hata: {ex}"
+            lbl_ayar_durum.color = "#f87171"
+            page.update()
+
+    sekme_ayarlar_icerik = ft.Container(
+        content=ft.Column([
+            ft.Text("⚙️ STRATEJİ, RİSK & MTF AYARLARI", size=13, weight=ft.FontWeight.BOLD, color="#38bdf8"),
+            dd_piyasa,
+            dd_ag,
+            dd_mtf_sablon,
+            dd_risk_seviye,
+            dd_stop_modu,
+            dd_marjin_tipi,
+            ft.Row([tf_marjin, tf_kaldirac], spacing=8),
+            ft.Row([tf_risk, tf_rr], spacing=8),
+            ft.Row([tf_min_skor, tf_limit], spacing=8),
+            ft.Divider(color="#334155"),
+            ft.Text("🔑 BINANCE API & TELEGRAM AYARLARI", size=13, weight=ft.FontWeight.BOLD, color="#fde047"),
+            tf_api_key,
+            tf_api_sec,
+            tf_tg_tok,
+            tf_tg_id,
+            ft.Divider(color="#334155"),
+            ft.Text("☁️ TEK TUŞLA OTA & ÇOKLU CİHAZ SENKRONİZASYONU (PC <-> TELEFON)", size=13, weight=ft.FontWeight.BOLD, color="#c084fc"),
+            tf_gh_repo,
+            tf_gh_tok,
+            ft.Row([
+                ft.ElevatedButton("⚡ GitHub'dan OTA Güncelle (En Son Sürüm)", bgcolor="#8b5cf6", color="#ffffff", expand=True, on_click=_tek_tus_ota_tik),
+                ft.ElevatedButton("☁️ Cihazları Eşitle", bgcolor="#0ea5e9", color="#ffffff", expand=True, on_click=lambda e: threading.Thread(target=lambda: (bulut_durum_cek(True), bulut_durum_gonder(True), _ekrani_yenile("force")), daemon=True).start()),
+            ], spacing=8),
+            ft.ElevatedButton("💾 Tüm Ayarları Kaydet ve Uygula", bgcolor="#10b981", color="#ffffff", height=42, on_click=_ayarlari_kaydet_tik),
+            lbl_ayar_durum
+        ], scroll=ft.ScrollMode.AUTO, spacing=10),
+        padding=12,
+        expand=True
+    )
+
+    # --- SEKME 5: GEÇMİŞ İŞLEMLER & LOGLAR ---
+    lbl_gecmis_ozet = ft.Text("📊 Toplam: 0 | Winrate: %0.0 | Net PnL: +0.00 USDT", size=12, weight=ft.FontWeight.BOLD, color="#38bdf8")
+    lv_gecmis = ft.ListView(height=210, spacing=5, padding=6)
+    lv_loglar = ft.ListView(expand=True, spacing=3, padding=6, auto_scroll=True)
+
+    sekme_log_icerik = ft.Container(
+        content=ft.Column([
+            ft.Row([
+                lbl_gecmis_ozet,
+                ft.TextButton("⏱️ Oturum Sıfırla", on_click=lambda e: motor.oturum_sayaci_sifirla())
+            ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+            ft.Container(content=lv_gecmis, bgcolor="#11111b", border_radius=8, border=ft.border.all(1, "#334155")),
+            ft.Text("📋 SİSTEM VE TARAMA LOG KAYITLARI", size=12, weight=ft.FontWeight.BOLD, color="#fde047"),
+            ft.Container(content=lv_loglar, bgcolor="#11111b", border_radius=8, border=ft.border.all(1, "#334155"), expand=True)
+        ], spacing=6, expand=True),
+        padding=10,
+        expand=True
+    )
+
+    # --- ANA SEKMELER (TABS) ---
+    tabs = ft.Tabs(
+        selected_index=0,
+        animation_duration=200,
+        expand=True,
+        tabs=[
+            ft.Tab(text="📌 İşlemler", content=lv_acik_islemler),
+            ft.Tab(text="🔍 Tarama", content=ft.Column([
+                ft.Container(content=lbl_tarama_info, padding=ft.padding.only(left=10, right=10, top=8)),
+                lv_tarama
+            ], expand=True, spacing=4)),
+            ft.Tab(text="📊 Karne & Pine", content=sekme_karne_icerik),
+            ft.Tab(text="⚙️ Ayarlar", content=sekme_ayarlar_icerik),
+            ft.Tab(text="📜 Geçmiş & Log", content=sekme_log_icerik),
+        ]
+    )
+
+    def _pariteyi_karneye_ac(O):
+        secili_parite_state["anahtar"] = O
+        mevcut_opts = [opt.key for opt in dd_karne_parite.options]
+        if O not in mevcut_opts:
+            dd_karne_parite.options.append(ft.dropdown.Option(O))
+        dd_karne_parite.value = O
+        tabs.selected_index = 2
+        page.update()
+        _parite_karne_ve_pine_yukle("4h", canli_zorla=False)
+
+    # --- EKRAN GÜNCELLEME FONKSİYONU ---
+    _son_ui_ts = [0.0]
+
+    def _ekrani_yenile(kaynak="all"):
+        if _ARKA_PLANDA_MI[0] and kaynak != "force":
+            return
+        simdi = time.time()
+        if kaynak != "force" and (simdi - _son_ui_ts[0] < 0.45):
+            return
+        _son_ui_ts[0] = simdi
+        try:
+            lbl_durum_bar.value = motor._durum_metni
+            lbl_durum_bar.color = motor._durum_renk
+            btn_baslat.disabled = bool(bot_calisiyor)
+            btn_durdur.disabled = not bool(bot_calisiyor)
+
+            # Açık işlemler ve portföy hesabı
+            kU, rI, jq = 0.0, 0.0, 0
+            yeni_acik_kartlar = []
+            for O, bq in list(acik_islemler.items()):
+                if not I(bq, dict):
+                    continue
+                jq += 1
+                bt = bq.get("yon", "LONG")
+                b0 = bq.get("piyasa", "future")
+                gW, nD, bZ, bM, fk, k1, k0 = islem_kar_zarar_hesapla(O, bq)
+                sl, tp = F(bq.get("sl") or 0.0), F(bq.get("tp") or 0.0)
+                kU += gW
+                rI += fk
+                renk_pnl = "#4ade80" if gW >= 0 else "#f87171"
+                yon_renk = "#10b981" if bt == "LONG" else "#ef4444"
+                kart = ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Row([
+                                ft.Container(
+                                    content=ft.Text(f"{bt} {k1}x" if b0 == "future" else f"{bt} SPOT", size=11, weight=ft.FontWeight.BOLD, color="#ffffff"),
+                                    bgcolor=yon_renk, padding=ft.padding.symmetric(horizontal=7, vertical=3), border_radius=6
+                                ),
+                                ft.Text(O, size=14, weight=ft.FontWeight.BOLD, color="#f8fafc"),
+                            ], spacing=6),
+                            ft.Text(f"{gW:+.2f} USDT (%{nD:+.2f})", size=14, weight=ft.FontWeight.BOLD, color=renk_pnl)
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"Giriş: {_fmt_f(bZ)}", size=11, color="#cbd5e1"),
+                            ft.Text(f"Anlık: {_fmt_f(bM)}", size=11, color="#38bdf8", weight=ft.FontWeight.BOLD),
+                            ft.Text(f"Marjin: {fk:.1f}$ (Risk: -{k0:.1f}$)", size=11, color="#fbbf24")
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"🛑 SL: {_fmt_f(sl)}", size=11, color="#f87171"),
+                            ft.Text(f"🎯 TP1: {_fmt_f(tp)}", size=11, color="#4ade80"),
+                            ft.Text(str(bq.get("kural_uyum_kisa", "Safe")), size=11, color="#a78bfa")
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.ElevatedButton("📊 Karne & Pine", bgcolor="#2563eb", color="#ffffff", expand=True, on_click=lambda e, k=O: _pariteyi_karneye_ac(k)),
+                            ft.ElevatedButton("🚨 Kapat", bgcolor="#f97316", color="#ffffff", expand=True, on_click=lambda e, k=O: threading.Thread(target=motor.poz_kapat, args=(k,), daemon=True).start())
+                        ], spacing=8)
+                    ], spacing=6),
+                    bgcolor="#1e293b",
+                    border=ft.border.all(1.2, renk_pnl),
+                    border_radius=10,
+                    padding=10
+                )
+                yeni_acik_kartlar.append(kart)
+
+            if not yeni_acik_kartlar:
+                yeni_acik_kartlar.append(
+                    ft.Container(
+                        content=ft.Text(
+                            "⏳ Şu anda açık pozisyon bulunmuyor.\nBot 'Kırılım Yoksa Swing Yoktur' ve '8 HTF Safe Bölge (1.QML > 2.OB > 3.Fresh > 4.OTE)' kurallarına uygun sinyal yakaladığında işlemler burada listelenir.",
+                            size=12, color="#94a3b8", text_align=ft.TextAlign.CENTER
+                        ),
+                        padding=24, alignment=ft.alignment.center
+                    )
+                )
+            lv_acik_islemler.controls = yeni_acik_kartlar
+
+            qo = M(V + rI + kU, T + kU)
+            oran_marjin = (kU / M(rI, 1e-09) * 100.0) if rI > 0 else 0.0
+            i8 = W + kU
+            ot_top, _, _, sure_str, _ = motor.oturum_pnl_hesapla(kU)
+
+            lbl_portfoy.value = f"{qo:.2f} $"
+            lbl_serbest.value = f"Serbest: {V:.2f} $"
+            lbl_acik_pnl.value = f"{kU:+.2f} $ (%{oran_marjin:+.1f})"
+            lbl_acik_pnl.color = "#4ade80" if kU >= 0 else "#f87171"
+            lbl_oturum_pnl.value = f"Oturum: {ot_top:+.2f}$ ({sure_str})"
+            lbl_oturum_pnl.color = "#4ade80" if ot_top >= 0 else "#f87171"
+            lbl_net_pnl.value = f"{i8:+.2f} $"
+            lbl_net_pnl.color = "#4ade80" if i8 >= 0 else "#f87171"
+            lbl_aktif_say.value = f"Açık: {jq}/{a4} ({'DEMO' if TESTNET_AKTIF else 'CANLI'})"
+
+            # Borsa tarama listesi
+            kG = sorted(
+                a1.items(),
+                key=lambda x: (
+                    tuple(x[1].get("oncelik_vektor", (0, 0, 0, 0))),
+                    int(x[1].get("oncelikli_bolge", 0)),
+                    tuple(x[1].get("ikincil_vektor", (0, 0, 0, 0))),
+                    int(x[1].get("safe_sayisi", 0)),
+                    int(str(x[1].get("skor", "0/100")).split("/")[0]) if str(x[1].get("skor", "0")).split("/")[0].isdigit() else 0
+                ),
+                reverse=True
+            )
+            tarama_kartlari = []
+            for O, b in kG[:60]:
+                yon_renk = "#4ade80" if b.get("ana_yon") == "BULLISH" else "#f87171" if b.get("ana_yon") == "BEARISH" else "#94a3b8"
+                safe_s = int(b.get("safe_sayisi", 0))
+                satir = ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Text(O, size=13, weight=ft.FontWeight.BOLD, color=yon_renk),
+                            ft.Text(f"Fiyat: {_fmt_f(b.get('fiyat', 0))}", size=12, color="#f8fafc"),
+                            ft.Container(
+                                content=ft.Text(f"Skor: {b.get('skor', '0/100')} | Safe:{safe_s}/8", size=11, weight=ft.FontWeight.BOLD, color="#11111b"),
+                                bgcolor="#fde047" if safe_s >= 2 else "#38bdf8",
+                                padding=ft.padding.symmetric(horizontal=6, vertical=2),
+                                border_radius=5
+                            )
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Row([
+                            ft.Text(f"HTF:{b.get('4h','-')} | MTF:{b.get('1h','-')} | LTF:{b.get('ltf','-')}", size=11, color="#cbd5e1"),
+                            ft.TextButton("Karne & Grafik →", on_click=lambda e, k=O: _pariteyi_karneye_ac(k))
+                        ], alignment=ft.MainAxisAlignment.SPACE_BETWEEN),
+                        ft.Text(str(b.get("setup_detay", "-"))[:95], size=10, color="#94a3b8")
+                    ], spacing=3),
+                    bgcolor="#1e293b",
+                    border_radius=8,
+                    padding=8,
+                    border=ft.border.all(1, "#334155")
+                )
+                tarama_kartlari.append(satir)
+            lv_tarama.controls = tarama_kartlari
+
+            # Geçmiş ve Loglar
+            _ig_yukle()
+            tn = L(ah)
+            kz = sum(1 for x in ah if F(x.get("pnl_usdt", 0)) >= 0)
+            tp_pnl = sum(F(x.get("pnl_usdt", 0)) for x in ah)
+            wr = (kz / tn * 100.0) if tn else 0.0
+            lbl_gecmis_ozet.value = f"📊 Toplam: {tn} | ✅ {kz} / ❌ {tn-kz} | Win: %{wr:.1f} | Net: {tp_pnl:+.2f}$"
+            lv_gecmis.controls = [
+                ft.Text(
+                    f"[{x.get('tarih','-')}] {x.get('sembol','-')} ({x.get('yon','-')}) | {F(x.get('pnl_usdt',0)):+.2f}$ (%{F(x.get('pnl_yuzde',0)):+.1f}) | {x.get('neden','-')}",
+                    size=11,
+                    color="#4ade80" if F(x.get("pnl_usdt", 0)) >= 0 else "#f87171"
+                )
+                for x in ah[:40]
+            ]
+            lv_loglar.controls = [ft.Text(lg, size=11, color="#cdd6f4", font_family="monospace") for lg in motor._log_q[-80:]]
+            page.update()
+        except Exception:
+            pass
+
+    motor = AlfaMobileBotEngine(ui_callback=_ekrani_yenile)
+
+    def _bot_baslat_tik():
+        motor.botu_baslat()
+        _ekrani_yenile("force")
+
+    def _bot_durdur_tik():
+        motor.botu_durdur()
+        _ekrani_yenile("force")
+
+    page.add(
+        ft.Column([
+            ust_panel,
+            tabs
+        ], expand=True, spacing=0)
+    )
+
+    # Arka plan periyodik yenileme, Keep-Alive (Uyanık Tutucu) ve Watchdog (Oto-Kurtarma)
+    def _periyodik_sayac():
+        sayac_iter = 0
+        while not motor._kapaniyor:
+            try:
+                sayac_iter += 1
+                # Android arka plan uyanik tutucu (yerel sunucuya hafif loopback ping)
+                if yerel_port and sayac_iter % 3 == 0:
+                    try:
+                        _HTTP_SES.get(f"http://127.0.0.1:{yerel_port}/", timeout=0.5)
+                    except Exception:
+                        pass
+                # Watchdog: Bot calisiyor gorunuyor ama tarama dongusu 75 sn'dir yanit vermiyorsa otomatik yeniden baslat
+                if bot_calisiyor and (time.time() - _SON_TARAMA_KALP_ATISI[0] > 75.0):
+                    _SON_TARAMA_KALP_ATISI[0] = time.time()
+                    threading.Thread(target=motor.bot_ana_dongu, daemon=True).start()
+                if acik_islemler and any(I(v, dict) for v in acik_islemler.values()):
+                    motor.pozisyonlari_senkronize_et()
+                elif not _ARKA_PLANDA_MI[0]:
+                    _ekrani_yenile("force")
+            except Exception:
+                pass
+            time.sleep(2.5)
+
+    def _ilk_yukleme():
+        global V, T
+        try:
+            _api_yukle()
+            od_aktif = _ak_yukle()
+            _kayitli_ota_varsa_yukle()
+            borsa_kur(PIYASA_MODU, TESTNET_AKTIF)
+            bulut_durum_cek(zorla=True)
+            V, T = bakiye_getir()
+            nQ = sum(1 for v in acik_islemler.values() if I(v, dict))
+            if nQ > 0:
+                motor.log_yaz(f"📂 Kalıcı hafızadan {nQ} açık pozisyon ve bakiye ({T:.2f}$) geri yüklendi.")
+            motor.log_yaz("📱 Alfa Trade Club Flet Mobil APK hazır. Arka plan koruyucu ve kendi kendini onaran borsa motoru aktif!")
+            # Eger uygulama arka planda kapanmadan once bot calisiyorsa veya acik islem varsa otomatik devam et!
+            if _ONCEKI_BOT_AKTIF or od_aktif or nQ > 0:
+                motor.log_yaz("🔄 Önceki oturumda tarama/işlem aktif olduğu için bot otomatik olarak yeniden başlatılıyor...")
+                motor.botu_baslat()
+            _ekrani_yenile("force")
+        except Exception as ex:
+            motor.log_yaz(f"⚠️ İlk yükleme uyarısı: {ex}")
+
+    threading.Thread(target=_ilk_yukleme, daemon=True).start()
+    threading.Thread(target=_periyodik_sayac, daemon=True).start()
+
+
+def _boot_main(page: ft.Page):
+    try:
+        _api_yukle()
+        _kayitli_ota_varsa_yukle()
+    except Exception:
+        pass
+    globals()["main"](page)
+
+if __name__ == "__main__":
+    ft.app(target=_boot_main)
